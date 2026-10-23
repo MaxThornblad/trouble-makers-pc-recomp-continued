@@ -22,6 +22,11 @@ constexpr uint32_t kMarina = 0x800EF510u;
 constexpr uint16_t kGroundJetState = 0x020Bu;
 constexpr uint16_t kAirJetState = 0x0110u;
 constexpr int32_t kHardLanding = 0x40000;        // 4 px/frame downward (16.16)
+// Screen shake: the renderer offsets the view by these Q16.16 words while the
+// game shakes the screen (the Sea of Lava eruption cycles 0,3,2,1 px across
+// and 0,2,-1,1 px down every frame); both are zero otherwise.
+constexpr uint32_t kShakeX = 0x800BE590u;
+constexpr uint32_t kShakeY = 0x800BE594u;
 
 gpr addr(uint32_t vaddr) {
     return static_cast<gpr>(static_cast<int32_t>(vaddr));
@@ -38,8 +43,14 @@ bool gold_gem(uint8_t* rdram, int row) {
     return ((word >> (row & 31)) & 1u) != 0;
 }
 
+long g_frame = 0;
+long g_pulse_until = 0;          // frame the last event pulse ends
+float g_pulse_strength = 0.0f;
+
 // strength 0..1 for each motor, scaled by the user's setting.
 void pulse(float low, float high, uint32_t ms) {
+    g_pulse_until = g_frame + static_cast<long>(ms) * 60 / 1000;
+    g_pulse_strength = std::max(low, high);
     static const float kScale[] = {0.0f, 0.35f, 0.65f, 1.0f};
     const int level = std::clamp(mm::cheats::rumble_level(), 0, 3);
     const float scale = kScale[level];
@@ -59,12 +70,15 @@ struct Watch {
     int32_t fall_speed = 0;      // fastest downward speed this time in the air
     uint32_t load_generation = 0;
     int since_hit = 1000;        // frames since the last damage pulse
+    int shake_frames = 0;        // frames left in the current shake window
+    int shake_peak = 0;          // largest offset seen in it, Q16.16
 };
 Watch g_watch;
 
 } // namespace
 
 void tick(uint8_t* rdram) {
+    ++g_frame;
     const uint16_t game_state = MEM_HU(0, addr(kGameState));
     const bool gameplay = (game_state == 6 || game_state == 10) &&
                           MEM_HU(0, addr(kGamePaused)) == 0;
@@ -116,6 +130,25 @@ void tick(uint8_t* rdram) {
     g_watch.fall_speed = airborne(state)
         ? std::max(airborne(g_watch.state) ? g_watch.fall_speed : 0, -vy)
         : 0;
+    // Screen shake: a steady low rumble while it lasts, stronger for bigger
+    // shakes. Re-issued in short overlapping pulses so it stops promptly when
+    // the shake ends, and never over a stronger event pulse still running.
+    const int shake = std::max(std::abs(static_cast<int>(MEM_W(0, addr(kShakeX)))),
+                               std::abs(static_cast<int>(MEM_W(0, addr(kShakeY)))));
+    if (shake != 0) {
+        g_watch.shake_peak = std::max(g_watch.shake_peak, shake);
+        g_watch.shake_frames = 8;
+    }
+    if (g_watch.shake_frames > 0) {
+        --g_watch.shake_frames;
+        const float amount = std::clamp(static_cast<float>(g_watch.shake_peak) / 65536.0f / 4.0f, 0.3f, 1.0f);
+        if ((g_frame % 6) == 0 && (g_frame >= g_pulse_until || g_pulse_strength < amount)) {
+            pulse(amount, amount * 0.4f, 160);
+            g_pulse_until = g_frame;                // shake pulses never block events
+        }
+        if (g_watch.shake_frames == 0) g_watch.shake_peak = 0;
+    }
+
     g_watch.since_hit = std::min(g_watch.since_hit + 1, 1000);
     g_watch.valid = true;
     g_watch.hp = hp;
