@@ -20,8 +20,10 @@ struct Hint {
     const char* text;     // nullptr: the wiki page could not be read
 };
 
-// Condensed from each level's "Golden Gem" section on the Mischief Makers Wiki
-// (https://mischiefmakers.fandom.com, CC BY-SA 3.0). 1-1 is quoted verbatim.
+// From each level's "Golden Gem" section on the Mischief Makers Wiki
+// (https://mischiefmakers.fandom.com, CC BY-SA 3.0). 1-1, 1-7, 2-1, 2-2,
+// 2-5..2-10, 3-3, 3-4, 3-9, 4-5, 4-8, 4-9 and 5-3 are the wiki text as supplied
+// by the user; the rest are condensed.
 constexpr Hint kHints[] = {
     { 2, "1-1", "Meet Marina!!",
       "Under the first house there is a bronze clancer statue. Standing nearby is a "
@@ -50,7 +52,8 @@ constexpr Hint kHints[] = {
     { 7, "1-6", "Blockman Rises",
       "The last of the three bomb-throwing Clancers, the wealthy one, has it. Get off "
       "Blockman, dodge the bombs and shake him." },
-    { 8, "1-7", "Wormin' Up!!", nullptr },
+    { 8, "1-7", "Wormin' Up!!",
+      "Shake the Worm." },
     { 9, "1-8", "Crisis: Nepton",
       "Beat every wave of enemies without letting Teran or your other Clancer ally take "
       "so much damage that they break down crying. Four gems trapped under the "
@@ -64,8 +67,12 @@ constexpr Hint kHints[] = {
       "Keep going until you reach a big triangle made of red and blue gems, then follow "
       "the path up and to the left to the gem." },
 
-    { 12, "2-1", "Sea of Lava", nullptr },
-    { 13, "2-2", "Vertigo!!", nullptr },
+    { 12, "2-1", "Sea of Lava",
+      "When you find the golden gem, collect it by sliding from the platforms beside "
+      "it. At the end of the level." },
+    { 13, "2-2", "Vertigo!!",
+      "When you get to the end of the level, destroy the blocks then as they are "
+      "falling apart climb on top of them and get on the elevator to the golden gem." },
     { 14, "2-3", "Sink or Float!",
       "At the end of the level, follow the arrow made of gems: slide-jump, then "
       "air-dash the whole distance to a sinking block with another gem arrow. Quickly "
@@ -77,13 +84,36 @@ constexpr Hint kHints[] = {
       "clanball, pulling down on it before the ground breaks. Go back through the "
       "tunnel and over the wall, keep rushing, teleport through the second star, then "
       "dash to that white clanball and pull it down for the gem." },
-    { 16, "2-5", "Searin' Swing!", nullptr },
-    { 17, "2-6", "Flambee!!", nullptr },
-    { 18, "2-7", "Tightrope Ride", nullptr },
-    { 19, "2-8", "Freefall!!", nullptr },
-    { 20, "2-9", "Magma Rafts", nullptr },
+    { 16, "2-5", "Searin' Swing!",
+      "When you get to the end of the level, keep going right on the clanswings and "
+      "you will come to the golden gem sitting on an island surrounded by red and "
+      "blue gems." },
+    { 17, "2-6", "Flambee!!",
+      "After grabbing his head, shake him till you fall off. Repeat until well "
+      "shaken. When he drops his loot, jump off and rush over to your hard earned "
+      "golden gem before it disappears." },
+    { 18, "2-7", "Tightrope Ride",
+      "Go through the level till you come to the clanball elevator. When you see the "
+      "end star gate, keep going up until you see a platform on the left. Collect "
+      "your golden gem and leave." },
+    { 19, "2-8", "Freefall!!",
+      "When Marina first begins to fall, go straight down the middle, then take a "
+      "right on the fork. There will be a break in the chain of spikeballs, and if "
+      "she passes through this, and then moves immediately to the left, the golden "
+      "gem will be against the wall of blue blocks. If the gem is missed while "
+      "falling she can jump back up the wall along the ledges, expending health along "
+      "the spikeballs, or reach the very bottom and start the level again from the "
+      "top." },
+    { 20, "2-9", "Magma Rafts",
+      "The golden gem in this stage is fairly straightforward. When Marina comes to a "
+      "clanball with a spring, there will be a platform below its path where a "
+      "clancer stands with a flower on its head. If she drops to this platform and "
+      "shakes him, he will drop the gem." },
     { 21, "2-10", "Seasick Climb",
-      "The wiki's page for this level has no Golden Gem section yet." },
+      "Follow the level until you reach the ending star gate. Keep going up after "
+      "that, shaking clanballs as you go, until there is a break in the left wall "
+      "that you can fit through. Drop down and collect your prize to add to your "
+      "golden gem collection, then make your way back to the star gate." },
     { 22, "2-11", "Migen Brawl!!",
       "Defeat both Migens without taking any damage." },
 
@@ -95,8 +125,14 @@ constexpr Hint kHints[] = {
     { 25, "3-2", "Clance War",
       "Near the start, grab and shake the Clancer wearing a Santa hat. Be quick and "
       "careful: the Super Clancers throw a bomb that kills him if you take too long." },
-    { 26, "3-3", "Missile Surf!!", nullptr },
-    { 27, "3-4", "Clanball Lift!", nullptr },
+    { 26, "3-3", "Missile Surf!!",
+      "Stay on the missile after the end star and keep going up until you reach the "
+      "gold gem." },
+    { 27, "3-4", "Clanball Lift!",
+      "Near the end, at the big Clancer Swing (made of Clancers) the gold gem is in "
+      "the centre just above the rope. You could either use the swing to reach it "
+      "(which is what is most likely intended), or from the post just before, slide "
+      "jump and boost to get it." },
     { 28, "3-5", "Go Marzen 64",
       "In the second area, above the open abyss, shake the white clanball so a Clanbomb "
       "drops further right; catch it before it lands and carry it to the Clanpot caged "
@@ -112,7 +148,10 @@ constexpr Hint kHints[] = {
       "the highest corner, where the gem is." },
     { 31, "3-8", "LUNAR!!",
       "In this first battle with Lunar, hit him with energy balls." },
-    { 32, "3-9", "The Day Before", nullptr },
+    { 32, "3-9", "The Day Before",
+      "To get the golden gem, you must make several successful jumps over the jump "
+      "rope that some clancers are practising out. Every successful jump gives you a "
+      "red gem." },
     { 33, "3-10", "The Day Of",
       "Finish the 100m Dash in under eleven seconds. Mash the D-pad (not the C buttons) "
       "and start the instant \"Go\" appears - anticipate it rather than react. You get "
@@ -145,7 +184,9 @@ constexpr Hint kHints[] = {
       "right to a warp star, time it to the bottom and enter. Cross the MARINA platforms "
       "to the last A, where the gem sits by a warp star and three lights: take the middle "
       "light and watch the fast last one." },
-    { 41, "4-5", "Rescue! Act 2", nullptr },
+    { 41, "4-5", "Rescue! Act 2",
+      "Make Calina destroy the most right blue block (in the bottom row) and then "
+      "triple jump back up after getting it." },
     { 42, "4-6", "TARUS!!",
       "Wait for Tarus's wind-up punch, grab his fist and throw him behind you. If he "
       "crashes into the cave wall he drops the gem - but you must not take any damage." },
@@ -153,8 +194,16 @@ constexpr Hint kHints[] = {
       "At the end of the level, inside a trio of statues below the two fire-casting "
       "ghosts. Grab a bomb from the cylinder near the start, hurry to the statues "
       "before it explodes and blow them up." },
-    { 44, "4-8", "Aster's Tryke!", nullptr },
-    { 45, "4-9", "Moley Cow!!", nullptr },
+    { 44, "4-8", "Aster's Tryke!",
+      "The golden gem can be found at the very end of the stage, right before Marina "
+      "meets King Aster awaiting his tricycle. It is possible to hit it while taking "
+      "the final jump with the tryke, but if the gem is overshot for some reason, it "
+      "is simple enough to stop using Marina's jets, dismount from the tricycle, and "
+      "walk backwards to where the gem floats in plain sight. She would have to grab "
+      "it quickly before the wave of water destroys it and she must start over." },
+    { 45, "4-9", "Moley Cow!!",
+      "When Moley is knocked out, jump on his belly. Each jump has a 1-in-64 chance "
+      "of making it spit a gold gem." },
     { 46, "4-10", "Aster's Maze",
       "In the green section, right beside warp number 4: shake the nearby hint-giving "
       "Clancer and he drops it." },
@@ -168,7 +217,10 @@ constexpr Hint kHints[] = {
       "Wait until the Marzen 64 has released five orange clanballs and charged its "
       "laser. Stand slightly left of halfway between the mech and the right edge of the "
       "screen and catch the laser; the gem appears and is collected automatically." },
-    { 51, "5-3", "Bee's the one!", nullptr },
+    { 51, "5-3", "Bee's the one!",
+      "The 3rd missile you shake will have the golden gem in it. Note: Do not shake "
+      "the Missile too close on the left, as this stage auto scrolls and the gold gem "
+      "will become unreachable." },
     { 52, "5-4", "MERCO!!",
       "Grab Merco's lance and shake it just before he pulls back to slash, and finish "
       "the fight without taking any damage." },

@@ -262,8 +262,8 @@ using the same rule as the game's own grading; it pauses with the stage timer
 and also works with the debug menu turned off. **Gem hints when paused** (on by default) shows, under the
 pause menu, how to find the current stage's golden gem and whether you already
 have it. The hints are condensed from the community
-[Mischief Makers Wiki](https://mischiefmakers.fandom.com) (text CC BY-SA 3.0);
-a few levels whose wiki pages could not be read show no hint yet. The first debug warp
+[Mischief Makers Wiki](https://mischiefmakers.fandom.com) (text CC BY-SA 3.0)
+and cover all 52 campaign levels. The first debug warp
 disables all save-buffer mutations
 until the process exits, while reads continue to use the save loaded at
 startup, so debug progression cannot overwrite the player's save file.

@@ -2,9 +2,8 @@
 //
 // While a campaign stage is paused, a panel shows how to find that stage's
 // golden gem and whether it has already been collected. The hints are
-// condensed from the community Mischief Makers Wiki
-// (https://mischiefmakers.fandom.com, text under CC BY-SA 3.0); the 1-1 hint
-// is quoted from it. Collected state comes from the game's own gold gem mask
+// taken or condensed from the community Mischief Makers Wiki
+// (https://mischiefmakers.fandom.com, text under CC BY-SA 3.0). Collected state comes from the game's own gold gem mask
 // (YellowGem_GetFlag: 64 bits at 0x80171B10, one per progression row).
 #pragma once
 
