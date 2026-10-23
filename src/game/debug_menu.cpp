@@ -1,4 +1,5 @@
 #include "debug_menu.h"
+#include "cheats.h"
 
 #include <algorithm>
 #include <array>
@@ -106,6 +107,11 @@ std::atomic_bool g_save_protected{false};
 std::atomic_bool g_waiting_for_release{false};
 std::atomic<int> g_page{0};
 std::atomic<int> g_selected_warp{0};
+std::atomic<int> g_selected_cheat{0};
+// Pages: 0 Level Warp, 1 Cheats, 2 Session.
+constexpr int kPageWarp = 0;
+constexpr int kPageCheats = 1;
+constexpr int kPageCount = 3;
 std::atomic<int> g_pending_warp{-1};
 std::atomic<int> g_current_stage{-1};
 std::atomic<int> g_current_scene{-1};
@@ -167,12 +173,20 @@ void toggle_overlay() {
 
 void change_page(int delta) {
     int page = g_page.load(std::memory_order_relaxed);
-    page = (page + delta + 2) % 2;
+    page = (page + delta + kPageCount) % kPageCount;
     g_page.store(page, std::memory_order_relaxed);
 }
 
 void move_selection(int delta) {
-    if (g_page.load(std::memory_order_relaxed) != 0) {
+    const int page = g_page.load(std::memory_order_relaxed);
+    if (page == kPageCheats) {
+        const int count = mm::cheats::kCheatCount;
+        int selected = g_selected_cheat.load(std::memory_order_relaxed);
+        selected = (selected + delta + count) % count;
+        g_selected_cheat.store(selected, std::memory_order_relaxed);
+        return;
+    }
+    if (page != kPageWarp) {
         return;
     }
     const int count = static_cast<int>(kWarps.size());
@@ -182,7 +196,13 @@ void move_selection(int delta) {
 }
 
 void activate_selection() {
-    if (g_page.load(std::memory_order_relaxed) != 0) {
+    const int page = g_page.load(std::memory_order_relaxed);
+    if (page == kPageCheats) {
+        mm::cheats::toggle(static_cast<mm::cheats::Cheat>(
+            g_selected_cheat.load(std::memory_order_relaxed)));
+        return;
+    }
+    if (page != kPageWarp) {
         return;
     }
     g_pending_warp.store(
@@ -298,6 +318,7 @@ extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
     if (!g_enabled.load(std::memory_order_acquire)) {
         return;
     }
+    mm::cheats::apply(rdram);
 
     g_current_game_state.store(game_state, std::memory_order_relaxed);
     g_current_stage.store(current_stage, std::memory_order_relaxed);
@@ -362,8 +383,12 @@ void draw_overlay() {
     }
 
     const int page = g_page.load(std::memory_order_relaxed);
-    ImGui::TextUnformatted(page == 0 ? "[ Level Warp ]   Session"
-                                    : "  Level Warp   [ Session ]");
+    static const char* const kPageTitles[kPageCount] = {
+        "[ Level Warp ]   Cheats     Session  ",
+        "  Level Warp   [ Cheats ]   Session  ",
+        "  Level Warp     Cheats   [ Session ]",
+    };
+    ImGui::TextUnformatted(kPageTitles[page]);
     ImGui::SameLine();
     ImGui::TextDisabled("  PageUp/PageDown or L/R");
     ImGui::Separator();
@@ -387,6 +412,37 @@ void draw_overlay() {
         }
         ImGui::EndChild();
         ImGui::TextDisabled("Up/Down: select   Enter/A: warp   Esc/B: close");
+    }
+    else if (page == kPageCheats) {
+        ImGui::TextWrapped(
+            "Cheats stay on between sessions until you turn them off. "
+            "They only work while the debug menu is enabled in the launcher.");
+        ImGui::Spacing();
+        const int selected = g_selected_cheat.load(std::memory_order_relaxed);
+        ImGui::BeginChild("##cheats", ImVec2(0.0f, -34.0f), true);
+        for (int i = 0; i < mm::cheats::kCheatCount; ++i) {
+            const auto cheat = static_cast<mm::cheats::Cheat>(i);
+            const bool on = mm::cheats::enabled(cheat);
+            char row[96];
+            std::snprintf(row, sizeof row, "%-5s %s", on ? "[ON]" : "[  ]",
+                          mm::cheats::name(cheat));
+            if (on) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.95f, 0.55f, 1.0f));
+            }
+            ImGui::Selectable(row, i == selected);
+            if (on) {
+                ImGui::PopStyleColor();
+            }
+            if (i == selected) {
+                ImGui::Indent();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::TextWrapped("%s", mm::cheats::description(cheat));
+                ImGui::PopStyleColor();
+                ImGui::Unindent();
+            }
+        }
+        ImGui::EndChild();
+        ImGui::TextDisabled("Up/Down: select   Enter/A: on/off   Esc/B: close");
     }
     else {
         ImGui::TextUnformatted("Debug session status");

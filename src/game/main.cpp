@@ -46,6 +46,7 @@
 #include "app_dirs.h"
 #include "debug_menu.h"
 #include "savestate.h"
+#include "cheats.h"
 #include "session_log.h"
 #include "steam_deck.h"
 #include "telemetry.h"
@@ -817,6 +818,7 @@ int main(int argc, char** argv) {
 
     mm::debug_menu::configure(g_debug_menu);
     mm::savestate::configure(config_dir / "savestates");
+    mm::cheats::configure(config_dir);
 #ifdef MM_HAS_GRAPHICS
     mm::graphics::set_overlay_draw_callback(
         g_debug_menu ? draw_overlays_with_debug_menu : draw_overlays);

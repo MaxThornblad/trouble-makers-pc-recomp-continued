@@ -23,6 +23,7 @@ add_executable(troublemakers
     steam_deck.cpp
     register_overlays.cpp
     os_stubs.cpp
+    cheats.cpp
     debug_menu.cpp
     savestate.cpp
     widescreen.cpp

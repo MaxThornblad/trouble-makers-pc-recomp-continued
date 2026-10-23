@@ -246,7 +246,11 @@ The launcher's **Enable debug menu** option enables an in-game overlay. Press
 **F1** or controller **L+R+Start** to open it; use Up/Down and Enter (or
 the D-pad and A) to select one of the 52 campaign stages. Left/Right switches
 pages and Esc/B closes it. Gameplay input is held while the overlay is open.
-The first debug warp disables all save-buffer mutations
+The overlay's **Cheats** page (Left/Right to reach it) toggles cheats with
+Enter or A; choices persist in `cheats.cfg` and only apply while the debug menu
+is enabled. **Endless jet** keeps Marina's jet at full speed while a direction
+is held; jump and double-tap in the air to fly, holding Up to climb and Down to
+descend. The first debug warp disables all save-buffer mutations
 until the process exits, while reads continue to use the save loaded at
 startup, so debug progression cannot overwrite the player's save file.
 
