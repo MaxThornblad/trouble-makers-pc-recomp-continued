@@ -99,6 +99,16 @@ if(NOT WIN32)
         $<$<COMPILE_LANGUAGE:C>:-Wno-incompatible-pointer-types>
         $<$<COMPILE_LANGUAGE:C>:-Wno-int-conversion>
     )
+elseif(MINGW)
+    target_compile_options(mm_recompiled PRIVATE
+        -fno-strict-aliasing
+        -Wno-unused-variable
+        -Wno-unused-but-set-variable
+        -Wno-builtin-declaration-mismatch
+        $<$<COMPILE_LANGUAGE:C>:-Wno-implicit-function-declaration>
+        $<$<COMPILE_LANGUAGE:C>:-Wno-incompatible-pointer-types>
+        $<$<COMPILE_LANGUAGE:C>:-Wno-int-conversion>
+    )
 else()
     # Windows builds require clang-cl (VS "C++ Clang Compiler" component, like
     # the reference project) — MSVC's cl is not supported for the generated C.
@@ -166,7 +176,7 @@ if(MM_BUILD_PROBE OR MM_ANY_COMPONENT)
     # The runtime platform layer (ultramodern/src/audio.cpp) pulls in SDL2.
     # The runtime's own CMakeLists doesn't find_package it — the host app is
     # expected to. Provide SDL2 on the include path before adding the runtime.
-    if(WIN32)
+    if(WIN32 AND NOT MINGW)
         # No system SDL2 on Windows: fetch the prebuilt VC devel package, as
         # the reference does, and expose it under the same names find_package
         # would (variables + imported targets; mm_graphics links SDL2::SDL2).
@@ -202,6 +212,12 @@ if(MM_BUILD_PROBE OR MM_ANY_COMPONENT)
         list(APPEND SDL2_INCLUDE_DIRS ${CMAKE_BINARY_DIR}/sdl2-compat-include)
     else()
         find_package(SDL2 REQUIRED)
+        if(MINGW)
+            # main.cpp defines SDL_MAIN_HANDLED; don't pull in SDL2main's WinMain.
+            set(SDL2_LIBRARIES SDL2::SDL2)
+            # Headers are included as <SDL2/SDL.h>.
+            list(APPEND SDL2_INCLUDE_DIRS ${SDL2_INCLUDE_DIR}/..)
+        endif()
     endif()
     include_directories(${SDL2_INCLUDE_DIRS})
 

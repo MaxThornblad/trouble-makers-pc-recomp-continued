@@ -122,11 +122,19 @@ if(WIN32)
             $<TARGET_FILE_DIR:troublemakers>)
     # GUI subsystem for release so no console window flashes; keep the
     # console in Debug for logs. mainCRTStartup keeps our plain main().
+    if(MINGW)
+        # GNU-ld spelling of the GUI subsystem; link the GCC runtime
+        # statically so the exe needs no MinGW DLLs.
+        target_link_options(troublemakers PRIVATE
+            $<$<NOT:$<CONFIG:Debug>>:-mwindows>
+            -static -static-libgcc -static-libstdc++)
+    else()
     set_target_properties(troublemakers PROPERTIES
         LINK_FLAGS_DEBUG "/SUBSYSTEM:CONSOLE"
         LINK_FLAGS_RELEASE "/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup"
         LINK_FLAGS_RELWITHDEBINFO "/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup"
         LINK_FLAGS_MINSIZEREL "/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup")
+    endif()
 endif()
 
 if(BUILD_TESTING)

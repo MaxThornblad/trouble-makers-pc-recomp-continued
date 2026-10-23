@@ -95,6 +95,14 @@ set(RT64_INCLUDE_DIRS
     ${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib/mupen64plus-core/src/api
     ${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib/nativefiledialog-extended/src/include
 )
+if(MINGW)
+    # MSVC finds dxcapi.h in the Windows SDK; MinGW uses RT64's bundled copy,
+    # and DirectX-Headers for a d3d12.h new enough for RT64's D3D12 backend.
+    list(APPEND RT64_INCLUDE_DIRS ${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib/dxc/inc)
+    if(RT64_DIRECTX_HEADERS)
+        list(PREPEND RT64_INCLUDE_DIRS ${RT64_DIRECTX_HEADERS}/include/directx ${RT64_DIRECTX_HEADERS}/include)
+    endif()
+endif()
 
 # ---------------------------------------------------------------------------
 # mm_graphics — the glue. RT64 headers require HLSL_CPU at compile time; the
