@@ -253,7 +253,10 @@ is held; jump and double-tap in the air to fly, holding Up to climb and Down to
 descend. **Moon jump** makes a held jump rise about 2.5 times higher and
 fall under weak gravity. **No clip** lets Marina pass through floors and walls,
 steered freely with the D-pad (Up/Down to rise and sink); while it is on, it
-takes over movement, so Endless jet and Moon jump pause. The last row on the page, **Fast-forward speed**, sets how fast the
+takes over movement, so Endless jet and Moon jump pause. **Gem magnet** pulls
+gems within about 96 pixels of Marina to her so they are collected: red, blue,
+green and golden gems placed in the stage, and gems knocked out of enemies.
+The last row on the page, **Fast-forward speed**, sets how fast the
 hold-to-fast-forward hotkey runs the game (2x, 3x, 4x, 5x, 6x or 8x; default
 3x). It is saved and applies even with the debug menu turned off. **Rank timer**, on the same page, shows a top-right countdown to the best
 clear-time rank still reachable (S under the stage's par time, A within 30 s

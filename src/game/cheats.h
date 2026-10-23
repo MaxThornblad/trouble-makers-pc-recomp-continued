@@ -12,6 +12,7 @@ enum class Cheat : int {
     EndlessJet,
     MoonJump,
     NoClip,
+    GemMagnet,
     Count,
 };
 
@@ -43,5 +44,9 @@ void configure(const std::filesystem::path& folder);
 
 // Game thread only.
 void apply(uint8_t* rdram);
+
+// Whether cheats are in effect (the debug menu is enabled). Cheats that act
+// from game-code hooks (no clip, gem magnet) check this.
+void set_active(bool active);
 
 } // namespace mm::cheats

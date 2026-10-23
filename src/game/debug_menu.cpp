@@ -327,6 +327,7 @@ extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
     mm::telemetry::record_scene(game_state, current_stage, current_scene);
     mm::rank_timer::publish(rdram);
     mm::gem_hints::publish(rdram);
+    mm::cheats::set_active(g_enabled.load(std::memory_order_acquire));
 
     if (!g_enabled.load(std::memory_order_acquire)) {
         return;

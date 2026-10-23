@@ -1,5 +1,6 @@
 #include "cheats.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdio>
@@ -31,12 +32,17 @@ constexpr std::array<CheatInfo, kCheatCount> kCheats{{
       "Marina ignores floors and walls. Steer freely with the D-pad or stick "
       "(hold Up/Down to rise/sink). Careful: falling out of the bottom of a "
       "stage can still cost a life." },
+    { "gem_magnet", "Gem magnet",
+      "Gems near Marina fly to her and are collected: red, blue, green and "
+      "golden gems placed in the stage as well as gems knocked out of "
+      "enemies." },
 }};
 
 std::array<std::atomic<bool>, kCheatCount> g_enabled{};
 std::atomic<int> g_fast_forward_speed{3};
 std::atomic<bool> g_rank_timer{false};
 std::atomic<bool> g_gem_hints{true};
+std::atomic<bool> g_active{false};
 std::filesystem::path g_path;
 std::mutex g_file_mutex;
 
@@ -179,10 +185,101 @@ void apply_no_clip(uint8_t* rdram) {
     MEM_W(kGravityStep, marina) = 0;
 }
 
+// --- Gem magnet ------------------------------------------------------------
+//
+// Stage gems are not actors. Each frame func_800451E4 walks the stage's item
+// list: 6-byte records {u16 kind, u16 x, u16 y} in world pixels, ending at a
+// zero kind. Bits 0xC000 of kind mark a record as gone (collected), bits
+// 0xFFF0 >> 4 pick a handler from the table at 0x800D37BC, the low nibble is
+// the gem colour. The handler for gems (func_800446F0) copies the record to
+// a draw slot at world - camera and tests that box (+/-6 px) against
+// Marina's hitbox (actor +0xAA..+0xB0, relative to her +0x88/+0x8C).
+// The generated hook at func_800451E4's entry calls mm_cheat_gem_magnet with
+// the list, which moves gem records near Marina toward the centre of her
+// hitbox; the game then collects them itself.
+//
+// Gems knocked out of enemies are actors of type 8 (SpawnGemActor); the
+// magnet pulls those too, in camera-relative 16.16 coordinates.
+constexpr uint32_t kCameraX = 0x800BE558u;
+constexpr uint32_t kCameraY = 0x800BE55Cu;
+constexpr uint32_t kItemHandlers = 0x800D37BCu;
+constexpr uint32_t kGemHandler = 0x800446F0u;
+constexpr uint32_t kActorCount = 208;
+constexpr uint32_t kActorStride = 0x198;
+constexpr uint16_t kGemActorType = 8;
+constexpr int kMagnetRadius = 96;              // px
+constexpr int kMaxItems = 512;                 // safety bound on the list walk
+
+bool magnet_live(uint8_t* rdram) {
+    return g_active.load(std::memory_order_relaxed) && enabled(Cheat::GemMagnet) && MEM_HU(0, addr(kGameState)) == 6 &&
+           MEM_W(0x80, addr(kMarina)) != 0;
+}
+
+// Centre of Marina's hitbox, camera-relative pixels.
+void marina_centre(uint8_t* rdram, int& x, int& y) {
+    const gpr m = addr(kMarina);
+    x = MEM_H(0x88, m) + (MEM_H(0xAA, m) + MEM_H(0xAC, m)) / 2;
+    y = MEM_H(0x8C, m) + (MEM_H(0xAE, m) + MEM_H(0xB0, m)) / 2;
+}
+
+// One step of the pull: fast enough to feel like suction, accelerating as the
+// gem closes in. Returns false when (dx, dy) is outside the radius.
+bool pull_step(int dx, int dy, int& sx, int& sy) {
+    const int dist2 = dx * dx + dy * dy;
+    if (dist2 > kMagnetRadius * kMagnetRadius) return false;
+    int dist = 0;
+    while ((dist + 1) * (dist + 1) <= dist2) ++dist;
+    if (dist == 0) { sx = sy = 0; return true; }
+    const int speed = std::min(dist, std::max(3, (kMagnetRadius - dist) / 6 + 3));
+    sx = dx * speed / dist;
+    sy = dy * speed / dist;
+    return true;
+}
+
+void pull_gem_actors(uint8_t* rdram) {
+    int tx, ty;
+    marina_centre(rdram, tx, ty);
+    for (uint32_t slot = 1; slot < kActorCount; ++slot) {
+        const gpr a = addr(kMarina + slot * kActorStride);
+        if (MEM_W(0x80, a) == 0 || MEM_HU(0xD2, a) != kGemActorType) continue;
+        int sx, sy;
+        if (!pull_step(tx - MEM_H(0x88, a), ty - MEM_H(0x8C, a), sx, sy)) continue;
+        MEM_W(0x88, a) = MEM_W(0x88, a) + (sx << 16);
+        MEM_W(0x8C, a) = MEM_W(0x8C, a) + (sy << 16);
+        MEM_W(0xEC, a) = 0;
+        MEM_W(0xF0, a) = 0;
+    }
+}
+
 } // namespace
 
+extern "C" void mm_cheat_gem_magnet(uint8_t* rdram, uint32_t list) {
+    if (!magnet_live(rdram)) return;
+    int tx, ty;
+    marina_centre(rdram, tx, ty);
+    const int cam_x = MEM_H(0, addr(kCameraX));
+    const int cam_y = MEM_H(0, addr(kCameraY));
+    tx += cam_x;                                   // to world pixels
+    ty += cam_y;
+    for (int i = 0; i < kMaxItems; ++i, list += 6) {
+        const gpr rec = addr(list);
+        const uint16_t kind = MEM_HU(0, rec);
+        if (kind == 0) break;
+        if (kind & 0xC000u) continue;
+        const uint32_t handler = static_cast<uint32_t>(
+            MEM_W(((kind & 0xFFF0u) >> 4) * 4, addr(kItemHandlers)));
+        if (handler != kGemHandler) continue;
+        const int x = MEM_HU(2, rec), y = MEM_HU(4, rec);
+        int sx, sy;
+        if (!pull_step(tx - x, ty - y, sx, sy)) continue;
+        MEM_H(2, rec) = static_cast<uint16_t>(x + sx);
+        MEM_H(4, rec) = static_cast<uint16_t>(y + sy);
+    }
+}
+
 extern "C" int mm_cheat_skip_terrain(uint8_t* rdram, uint32_t actor_index) {
-    return (actor_index & 0xFFFF) == 0 && enabled(Cheat::NoClip) &&
+    return (actor_index & 0xFFFF) == 0 && g_active.load(std::memory_order_relaxed) &&
+           enabled(Cheat::NoClip) &&
            MEM_HU(0, addr(kGameState)) == 6;
 }
 
@@ -272,11 +369,17 @@ void toggle_gem_hints() {
     save();
 }
 
+void set_active(bool active) {
+    g_active.store(active, std::memory_order_relaxed);
+}
+
 void apply(uint8_t* rdram) {
     if (enabled(Cheat::NoClip)) {
         apply_no_clip(rdram);
+        if (magnet_live(rdram)) pull_gem_actors(rdram);
         return;  // no clip owns Marina's movement
     }
+    if (magnet_live(rdram)) pull_gem_actors(rdram);
     if (enabled(Cheat::EndlessJet)) apply_endless_jet(rdram);
     if (enabled(Cheat::MoonJump)) apply_moon_jump(rdram);
 }

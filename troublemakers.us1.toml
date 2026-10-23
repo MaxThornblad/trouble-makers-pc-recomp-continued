@@ -295,7 +295,9 @@ hook = [
     # overlap the wider viewport continuously; simulation/collision stay on
     # the original actor.
     { func = "func_80009BE8", before_vram = 0x80009D60, text = '{ extern void mm_ws_repeat_wrapped_terrain(uint8_t*, recomp_context*); mm_ws_repeat_wrapped_terrain(rdram, ctx); }' },
-    { func = "func_800451E4", text = '{ extern void mm_test_trace_streaming(uint8_t*, recomp_context*); mm_test_trace_streaming(rdram, ctx); }' },
+    # Also the gem magnet cheat (src/game/cheats.cpp): pull stage gem records
+    # ($a0 = item list) toward Marina before the item pass collects them.
+    { func = "func_800451E4", text = '{ extern void mm_test_trace_streaming(uint8_t*, recomp_context*); extern void mm_cheat_gem_magnet(uint8_t*, uint32_t); mm_cheat_gem_magnet(rdram, (uint32_t)ctx->r4); mm_test_trace_streaming(rdram, ctx); }' },
     { func = "func_80082820", text = '{ extern void mm_ws_band_repack(uint8_t*, recomp_context*); mm_ws_band_repack(rdram, ctx); }' },
     { func = "func_80082380", text = '{ extern void mm_ws_static_repack(uint8_t*, recomp_context*); mm_ws_static_repack(rdram, ctx); }' },
     # Snow-stage panorama: transform each completed rectangle and its UV step.
