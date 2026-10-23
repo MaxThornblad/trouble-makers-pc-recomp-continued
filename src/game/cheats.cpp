@@ -36,6 +36,7 @@ constexpr std::array<CheatInfo, kCheatCount> kCheats{{
 std::array<std::atomic<bool>, kCheatCount> g_enabled{};
 std::atomic<int> g_fast_forward_speed{3};
 std::atomic<bool> g_rank_timer{false};
+std::atomic<bool> g_gem_hints{true};
 std::filesystem::path g_path;
 std::mutex g_file_mutex;
 
@@ -56,6 +57,7 @@ void save() {
     }
     f << "fast_forward_speed=" << g_fast_forward_speed.load() << '\n';
     f << "rank_timer=" << (g_rank_timer.load() ? 1 : 0) << '\n';
+    f << "gem_hints=" << (g_gem_hints.load() ? 1 : 0) << '\n';
 }
 
 // --- Endless jet -----------------------------------------------------------
@@ -208,6 +210,10 @@ void configure(const std::filesystem::path& folder) {
         if (eq == std::string::npos) continue;
         const std::string key = line.substr(0, eq);
         const bool on = line.substr(eq + 1) == "1";
+        if (key == "gem_hints") {
+            g_gem_hints.store(on);
+            continue;
+        }
         if (key == "rank_timer") {
             g_rank_timer.store(on);
             continue;
@@ -252,6 +258,17 @@ void toggle_rank_timer() {
     const bool now = !g_rank_timer.load();
     g_rank_timer.store(now, std::memory_order_release);
     std::fprintf(stderr, "[cheats] rank timer %s\n", now ? "on" : "off");
+    save();
+}
+
+bool gem_hints_enabled() {
+    return g_gem_hints.load(std::memory_order_acquire);
+}
+
+void toggle_gem_hints() {
+    const bool now = !g_gem_hints.load();
+    g_gem_hints.store(now, std::memory_order_release);
+    std::fprintf(stderr, "[cheats] gem hints %s\n", now ? "on" : "off");
     save();
 }
 

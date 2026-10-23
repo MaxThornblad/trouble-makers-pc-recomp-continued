@@ -25,6 +25,7 @@ add_executable(troublemakers
     os_stubs.cpp
     cheats.cpp
     debug_menu.cpp
+    gem_hints.cpp
     rank_timer.cpp
     savestate.cpp
     widescreen.cpp

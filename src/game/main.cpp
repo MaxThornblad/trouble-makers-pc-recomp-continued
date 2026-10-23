@@ -48,6 +48,7 @@
 #include "savestate.h"
 #include "cheats.h"
 #include "rank_timer.h"
+#include "gem_hints.h"
 #include "session_log.h"
 #include "steam_deck.h"
 #include "telemetry.h"
@@ -551,11 +552,13 @@ static std::vector<recomp::GameEntry> supported_games() {
 #ifdef MM_HAS_GRAPHICS
 static void draw_overlays() {
     mm::rank_timer::draw_overlay();
+    mm::gem_hints::draw_overlay();
     mm::savestate::draw_overlay();
 }
 
 static void draw_overlays_with_debug_menu() {
     mm::rank_timer::draw_overlay();
+    mm::gem_hints::draw_overlay();
     mm::debug_menu::draw_overlay();
     mm::savestate::draw_overlay();
 }

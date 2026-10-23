@@ -33,6 +33,11 @@ void cycle_fast_forward_speed();   // next value, wrapping; saved
 bool rank_timer_enabled();
 void toggle_rank_timer();
 
+// Golden gem hints in the pause menu (src/game/gem_hints.cpp). On by default;
+// works without the debug menu.
+bool gem_hints_enabled();
+void toggle_gem_hints();
+
 // Reads <folder>/cheats.cfg; toggles are written back on every change.
 void configure(const std::filesystem::path& folder);
 

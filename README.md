@@ -259,7 +259,11 @@ hold-to-fast-forward hotkey runs the game (2x, 3x, 4x, 5x, 6x or 8x; default
 clear-time rank still reachable (S under the stage's par time, A within 30 s
 of it, B within 2 min, C within 5 min and under 10 min total, otherwise D),
 using the same rule as the game's own grading; it pauses with the stage timer
-and also works with the debug menu turned off. The first debug warp
+and also works with the debug menu turned off. **Gem hints when paused** (on by default) shows, under the
+pause menu, how to find the current stage's golden gem and whether you already
+have it. The hints are condensed from the community
+[Mischief Makers Wiki](https://mischiefmakers.fandom.com) (text CC BY-SA 3.0);
+a few levels whose wiki pages could not be read show no hint yet. The first debug warp
 disables all save-buffer mutations
 until the process exits, while reads continue to use the save loaded at
 startup, so debug progression cannot overwrite the player's save file.
