@@ -10,6 +10,8 @@ namespace mm::cheats {
 
 enum class Cheat : int {
     EndlessJet,
+    MoonJump,
+    NoClip,
     Count,
 };
 
