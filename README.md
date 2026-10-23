@@ -255,7 +255,11 @@ fall under weak gravity. **No clip** lets Marina pass through floors and walls,
 steered freely with the D-pad (Up/Down to rise and sink); while it is on, it
 takes over movement, so Endless jet and Moon jump pause. The last row on the page, **Fast-forward speed**, sets how fast the
 hold-to-fast-forward hotkey runs the game (2x, 3x, 4x, 5x, 6x or 8x; default
-3x). It is saved and applies even with the debug menu turned off. The first debug warp
+3x). It is saved and applies even with the debug menu turned off. **Rank timer**, on the same page, shows a top-right countdown to the best
+clear-time rank still reachable (S under the stage's par time, A within 30 s
+of it, B within 2 min, C within 5 min and under 10 min total, otherwise D),
+using the same rule as the game's own grading; it pauses with the stage timer
+and also works with the debug menu turned off. The first debug warp
 disables all save-buffer mutations
 until the process exits, while reads continue to use the save loaded at
 startup, so debug progression cannot overwrite the player's save file.

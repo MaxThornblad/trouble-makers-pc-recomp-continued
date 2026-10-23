@@ -28,6 +28,11 @@ constexpr int kFastForwardSpeeds[] = {2, 3, 4, 5, 6, 8};
 int fast_forward_speed();
 void cycle_fast_forward_speed();   // next value, wrapping; saved
 
+// Rank timer overlay (src/game/rank_timer.cpp), stored alongside the cheats.
+// Like the fast-forward speed it is not a cheat and works without the debug menu.
+bool rank_timer_enabled();
+void toggle_rank_timer();
+
 // Reads <folder>/cheats.cfg; toggles are written back on every change.
 void configure(const std::filesystem::path& folder);
 

@@ -1,5 +1,6 @@
 #include "debug_menu.h"
 #include "cheats.h"
+#include "rank_timer.h"
 
 #include <algorithm>
 #include <array>
@@ -181,7 +182,7 @@ void change_page(int delta) {
 void move_selection(int delta) {
     const int page = g_page.load(std::memory_order_relaxed);
     if (page == kPageCheats) {
-        const int count = mm::cheats::kCheatCount + 1;   // + fast-forward speed row
+        const int count = mm::cheats::kCheatCount + 2;   // + fast-forward speed, rank timer rows
         int selected = g_selected_cheat.load(std::memory_order_relaxed);
         selected = (selected + delta + count) % count;
         g_selected_cheat.store(selected, std::memory_order_relaxed);
@@ -202,6 +203,8 @@ void activate_selection() {
         const int selected = g_selected_cheat.load(std::memory_order_relaxed);
         if (selected == mm::cheats::kCheatCount) {
             mm::cheats::cycle_fast_forward_speed();
+        } else if (selected == mm::cheats::kCheatCount + 1) {
+            mm::cheats::toggle_rank_timer();
         } else {
             mm::cheats::toggle(static_cast<mm::cheats::Cheat>(selected));
         }
@@ -319,6 +322,7 @@ extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
     const int current_scene = static_cast<int16_t>(
         MEM_HU(0, rdram_gpr(kCurrentScene)));
     mm::telemetry::record_scene(game_state, current_stage, current_scene);
+    mm::rank_timer::publish(rdram);
 
     if (!g_enabled.load(std::memory_order_acquire)) {
         return;
@@ -461,6 +465,29 @@ void draw_overlay() {
                     "default) is held. Enter/A cycles 2x, 3x, 4x, 5x, 6x, 8x. Works "
                     "even with the debug menu turned off. Very high speeds may be "
                     "limited by how fast your PC can draw frames.");
+                ImGui::PopStyleColor();
+                ImGui::Unindent();
+            }
+        }
+        {
+            const bool row_selected = selected == mm::cheats::kCheatCount + 1;
+            const bool on = mm::cheats::rank_timer_enabled();
+            char row[96];
+            std::snprintf(row, sizeof row, "%-5s Rank timer", on ? "[ON]" : "[  ]");
+            if (on) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.95f, 0.55f, 1.0f));
+            }
+            ImGui::Selectable(row, row_selected);
+            if (on) {
+                ImGui::PopStyleColor();
+            }
+            if (row_selected) {
+                ImGui::Indent();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::TextWrapped(
+                    "Top-right countdown to the best clear-time rank you can still get "
+                    "(S, A, B, C, then D) and how long you have left for it. Pauses with "
+                    "the stage timer. Works even with the debug menu turned off.");
                 ImGui::PopStyleColor();
                 ImGui::Unindent();
             }

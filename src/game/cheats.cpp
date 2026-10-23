@@ -35,6 +35,7 @@ constexpr std::array<CheatInfo, kCheatCount> kCheats{{
 
 std::array<std::atomic<bool>, kCheatCount> g_enabled{};
 std::atomic<int> g_fast_forward_speed{3};
+std::atomic<bool> g_rank_timer{false};
 std::filesystem::path g_path;
 std::mutex g_file_mutex;
 
@@ -54,6 +55,7 @@ void save() {
         f << kCheats[i].key << '=' << (g_enabled[i].load() ? 1 : 0) << '\n';
     }
     f << "fast_forward_speed=" << g_fast_forward_speed.load() << '\n';
+    f << "rank_timer=" << (g_rank_timer.load() ? 1 : 0) << '\n';
 }
 
 // --- Endless jet -----------------------------------------------------------
@@ -206,6 +208,10 @@ void configure(const std::filesystem::path& folder) {
         if (eq == std::string::npos) continue;
         const std::string key = line.substr(0, eq);
         const bool on = line.substr(eq + 1) == "1";
+        if (key == "rank_timer") {
+            g_rank_timer.store(on);
+            continue;
+        }
         if (key == "fast_forward_speed") {
             const int value = std::atoi(line.substr(eq + 1).c_str());
             for (int speed : kFastForwardSpeeds) {
@@ -235,6 +241,17 @@ void cycle_fast_forward_speed() {
     }
     g_fast_forward_speed.store(next, std::memory_order_release);
     std::fprintf(stderr, "[cheats] fast-forward speed %dx\n", next);
+    save();
+}
+
+bool rank_timer_enabled() {
+    return g_rank_timer.load(std::memory_order_acquire);
+}
+
+void toggle_rank_timer() {
+    const bool now = !g_rank_timer.load();
+    g_rank_timer.store(now, std::memory_order_release);
+    std::fprintf(stderr, "[cheats] rank timer %s\n", now ? "on" : "off");
     save();
 }
 
