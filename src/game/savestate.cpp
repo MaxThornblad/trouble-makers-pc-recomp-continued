@@ -19,6 +19,7 @@
 #include "miniz.h"
 
 #include "mm_audio_input.hpp"
+#include "cheats.h"
 
 #include "ultramodern/ultra64.h"
 #include "ultramodern/ultramodern.hpp"
@@ -574,7 +575,7 @@ mm_audio_input::InputBinding g_ff_binding{};
 
 void set_fast_forward(bool on, mm_audio_input::InputBinding binding) {
     g_ff_binding = on ? binding : mm_audio_input::InputBinding{};
-    ultramodern::set_speed_multiplier(on ? 3 : 1);
+    ultramodern::set_speed_multiplier(on ? mm::cheats::fast_forward_speed() : 1);
 }
 
 bool handle_release(const mm_audio_input::InputBinding& binding) {

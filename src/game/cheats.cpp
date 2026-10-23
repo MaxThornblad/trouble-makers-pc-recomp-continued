@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <mutex>
 #include <string>
@@ -33,6 +34,7 @@ constexpr std::array<CheatInfo, kCheatCount> kCheats{{
 }};
 
 std::array<std::atomic<bool>, kCheatCount> g_enabled{};
+std::atomic<int> g_fast_forward_speed{3};
 std::filesystem::path g_path;
 std::mutex g_file_mutex;
 
@@ -51,6 +53,7 @@ void save() {
     for (int i = 0; i < kCheatCount; ++i) {
         f << kCheats[i].key << '=' << (g_enabled[i].load() ? 1 : 0) << '\n';
     }
+    f << "fast_forward_speed=" << g_fast_forward_speed.load() << '\n';
 }
 
 // --- Endless jet -----------------------------------------------------------
@@ -203,6 +206,13 @@ void configure(const std::filesystem::path& folder) {
         if (eq == std::string::npos) continue;
         const std::string key = line.substr(0, eq);
         const bool on = line.substr(eq + 1) == "1";
+        if (key == "fast_forward_speed") {
+            const int value = std::atoi(line.substr(eq + 1).c_str());
+            for (int speed : kFastForwardSpeeds) {
+                if (speed == value) g_fast_forward_speed.store(value);
+            }
+            continue;
+        }
         for (int i = 0; i < kCheatCount; ++i) {
             if (key == kCheats[i].key) g_enabled[i].store(on);
         }
@@ -210,6 +220,22 @@ void configure(const std::filesystem::path& folder) {
     for (int i = 0; i < kCheatCount; ++i) {
         if (g_enabled[i].load()) std::fprintf(stderr, "[cheats] %s on\n", kCheats[i].name);
     }
+}
+
+int fast_forward_speed() {
+    return g_fast_forward_speed.load(std::memory_order_acquire);
+}
+
+void cycle_fast_forward_speed() {
+    const int current = g_fast_forward_speed.load();
+    constexpr int count = static_cast<int>(sizeof kFastForwardSpeeds / sizeof kFastForwardSpeeds[0]);
+    int next = kFastForwardSpeeds[0];
+    for (int i = 0; i < count; ++i) {
+        if (kFastForwardSpeeds[i] == current) next = kFastForwardSpeeds[(i + 1) % count];
+    }
+    g_fast_forward_speed.store(next, std::memory_order_release);
+    std::fprintf(stderr, "[cheats] fast-forward speed %dx\n", next);
+    save();
 }
 
 void apply(uint8_t* rdram) {

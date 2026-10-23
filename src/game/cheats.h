@@ -22,6 +22,12 @@ const char* description(Cheat cheat);
 bool enabled(Cheat cheat);
 void toggle(Cheat cheat);
 
+// Fast-forward speed (held fast-forward hotkey), stored alongside the cheats.
+// Not a cheat: it applies whether or not the debug menu is enabled.
+constexpr int kFastForwardSpeeds[] = {2, 3, 4, 5, 6, 8};
+int fast_forward_speed();
+void cycle_fast_forward_speed();   // next value, wrapping; saved
+
 // Reads <folder>/cheats.cfg; toggles are written back on every change.
 void configure(const std::filesystem::path& folder);
 

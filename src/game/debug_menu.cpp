@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <string>
 
 #include "librecomp/game.hpp"
 #include "mm_audio_input.hpp"
@@ -180,7 +181,7 @@ void change_page(int delta) {
 void move_selection(int delta) {
     const int page = g_page.load(std::memory_order_relaxed);
     if (page == kPageCheats) {
-        const int count = mm::cheats::kCheatCount;
+        const int count = mm::cheats::kCheatCount + 1;   // + fast-forward speed row
         int selected = g_selected_cheat.load(std::memory_order_relaxed);
         selected = (selected + delta + count) % count;
         g_selected_cheat.store(selected, std::memory_order_relaxed);
@@ -198,8 +199,12 @@ void move_selection(int delta) {
 void activate_selection() {
     const int page = g_page.load(std::memory_order_relaxed);
     if (page == kPageCheats) {
-        mm::cheats::toggle(static_cast<mm::cheats::Cheat>(
-            g_selected_cheat.load(std::memory_order_relaxed)));
+        const int selected = g_selected_cheat.load(std::memory_order_relaxed);
+        if (selected == mm::cheats::kCheatCount) {
+            mm::cheats::cycle_fast_forward_speed();
+        } else {
+            mm::cheats::toggle(static_cast<mm::cheats::Cheat>(selected));
+        }
         return;
     }
     if (page != kPageWarp) {
@@ -441,8 +446,27 @@ void draw_overlay() {
                 ImGui::Unindent();
             }
         }
+        ImGui::Separator();
+        {
+            const bool row_selected = selected == mm::cheats::kCheatCount;
+            char row[96];
+            std::snprintf(row, sizeof row, "%-5s Fast-forward speed",
+                          (std::to_string(mm::cheats::fast_forward_speed()) + "x").c_str());
+            ImGui::Selectable(row, row_selected);
+            if (row_selected) {
+                ImGui::Indent();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::TextWrapped(
+                    "How fast the game runs while the fast-forward hotkey (Tab by "
+                    "default) is held. Enter/A cycles 2x, 3x, 4x, 5x, 6x, 8x. Works "
+                    "even with the debug menu turned off. Very high speeds may be "
+                    "limited by how fast your PC can draw frames.");
+                ImGui::PopStyleColor();
+                ImGui::Unindent();
+            }
+        }
         ImGui::EndChild();
-        ImGui::TextDisabled("Up/Down: select   Enter/A: on/off   Esc/B: close");
+        ImGui::TextDisabled("Up/Down: select   Enter/A: change   Esc/B: close");
     }
     else {
         ImGui::TextUnformatted("Debug session status");

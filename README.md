@@ -253,7 +253,9 @@ is held; jump and double-tap in the air to fly, holding Up to climb and Down to
 descend. **Moon jump** makes a held jump rise about 2.5 times higher and
 fall under weak gravity. **No clip** lets Marina pass through floors and walls,
 steered freely with the D-pad (Up/Down to rise and sink); while it is on, it
-takes over movement, so Endless jet and Moon jump pause. The first debug warp
+takes over movement, so Endless jet and Moon jump pause. The last row on the page, **Fast-forward speed**, sets how fast the
+hold-to-fast-forward hotkey runs the game (2x, 3x, 4x, 5x, 6x or 8x; default
+3x). It is saved and applies even with the debug menu turned off. The first debug warp
 disables all save-buffer mutations
 until the process exits, while reads continue to use the save loaded at
 startup, so debug progression cannot overwrite the player's save file.
