@@ -267,6 +267,9 @@ hook = [
     # Cheats (src/game/cheats.cpp): No clip skips the per-actor terrain
     # collision pass for Marina (actor index 0 in $a0).
     { func = "func_800160EC", text = '{ extern int mm_cheat_skip_terrain(uint8_t*, uint32_t); if (mm_cheat_skip_terrain(rdram, (uint32_t)ctx->r4)) return; }' },
+    # Rumble (src/game/rumble.cpp): every sound effect goes through
+    # Sound_AddSfx(id in $a0, ..., volume at 0x10($sp)); explosions rumble.
+    { func = "Sound_AddSfx", text = '{ extern void mm_rumble_sfx(uint8_t*, uint32_t, uint32_t); mm_rumble_sfx(rdram, (uint32_t)ctx->r4, (uint32_t)MEM_W(0x10, ctx->r29)); }' },
     { func = "Thread_MainProc", before_vram = 0x80000D70, text = '{ extern void mm_savestate_frame_hook(uint8_t*, recomp_context*); mm_savestate_frame_hook(rdram, ctx); }' },
     { func = "func_80010A10", before_vram = 0x80010A30, text = '{ MEM_W(0, (gpr)(int32_t)0x801780F0u) = 0x80460000u; ctx->r15 = (gpr)(int32_t)0x80470000u; }' },
     { func = "LookAt_Update", before_vram = 0x800108B8, text = '{ MEM_W(0, (gpr)(int32_t)0x801780F0u) = 0x80460000u; ctx->r15 = (gpr)(int32_t)0x80470000u; }' },

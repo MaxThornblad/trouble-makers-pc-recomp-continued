@@ -563,8 +563,8 @@ void draw_overlay() {
                 ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
                 ImGui::TextWrapped(
                     "Controller rumble when Marina is hit, lands from a long fall, "
-                    "starts a jet dash or collects a golden gem, and while the screen "
-                    "shakes. Enter/A cycles Off, "
+                    "starts a jet dash or collects a golden gem, when bombs and red "
+                    "blocks explode, and while the screen shakes. Enter/A cycles Off, "
                     "Low, Medium and High and plays a sample. Works even with the "
                     "debug menu turned off.");
                 ImGui::PopStyleColor();

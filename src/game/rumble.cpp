@@ -49,6 +49,8 @@ float g_pulse_strength = 0.0f;
 
 // strength 0..1 for each motor, scaled by the user's setting.
 void pulse(float low, float high, uint32_t ms) {
+    // A weaker pulse never cuts a stronger one short.
+    if (g_frame < g_pulse_until && std::max(low, high) < g_pulse_strength) return;
     g_pulse_until = g_frame + static_cast<long>(ms) * 60 / 1000;
     g_pulse_strength = std::max(low, high);
     static const float kScale[] = {0.0f, 0.35f, 0.65f, 1.0f};
@@ -60,6 +62,21 @@ void pulse(float low, float high, uint32_t ms) {
     };
     mm_audio_input::request_rumble(motor(low), motor(high), ms);
 }
+
+// Sound effects that stand for impacts (ids passed to Sound_AddSfx), found by
+// logging sounds while the events happen. Volume is the game's own (quieter
+// for things far away), so distant explosions rumble less.
+struct SfxRumble {
+    uint16_t id;
+    float low, high;
+    uint16_t ms;
+};
+constexpr SfxRumble kSfxRumble[] = {
+    {0x43, 1.0f, 0.7f, 280},     // bomb explosion
+    {0x93, 0.6f, 0.4f, 110},     // red block blown apart (chain reactions)
+};
+
+bool g_gameplay = false;
 
 struct Watch {
     bool valid = false;
@@ -82,6 +99,7 @@ void tick(uint8_t* rdram) {
     const uint16_t game_state = MEM_HU(0, addr(kGameState));
     const bool gameplay = (game_state == 6 || game_state == 10) &&
                           MEM_HU(0, addr(kGamePaused)) == 0;
+    g_gameplay = gameplay;
     const uint32_t generation = mm::savestate::load_generation();
     if (!gameplay || mm::cheats::rumble_level() == 0 ||
         generation != g_watch.load_generation) {
@@ -142,7 +160,7 @@ void tick(uint8_t* rdram) {
     if (g_watch.shake_frames > 0) {
         --g_watch.shake_frames;
         const float amount = std::clamp(static_cast<float>(g_watch.shake_peak) / 65536.0f / 4.0f, 0.3f, 1.0f);
-        if ((g_frame % 6) == 0 && (g_frame >= g_pulse_until || g_pulse_strength < amount)) {
+        if ((g_frame % 6) == 0) {
             pulse(amount, amount * 0.4f, 160);
             g_pulse_until = g_frame;                // shake pulses never block events
         }
@@ -158,3 +176,17 @@ void tick(uint8_t* rdram) {
 }
 
 } // namespace mm::rumble
+
+// Generated hook at Sound_AddSfx's entry (troublemakers.us1.toml): every sound
+// effect passes through it with its id in $a0 and volume (0..255) at 0x10($sp).
+extern "C" void mm_rumble_sfx(uint8_t* rdram, uint32_t id, uint32_t volume) {
+    (void)rdram;
+    if (!mm::rumble::g_gameplay) return;
+    for (const auto& s : mm::rumble::kSfxRumble) {
+        if (s.id == (id & 0xFFFFu)) {
+            const float v = std::clamp(static_cast<float>(volume & 0xFFu) / 255.0f, 0.25f, 1.0f);
+            mm::rumble::pulse(s.low * v, s.high * v, s.ms);
+            return;
+        }
+    }
+}
