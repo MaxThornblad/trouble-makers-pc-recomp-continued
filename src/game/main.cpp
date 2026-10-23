@@ -410,8 +410,8 @@ void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t) {
     // Drain SDL events so the OS/window manager stays responsive and so closing
     // the window cleanly shuts the runtime down. Hotkeys:
     //   F11        toggle fullscreen (persisted)
-    //   Tab (hold) fast-forward 3x (game speed via the VI/timer multiplier)
-    //   F5/F7      save/load state, F6 (Shift+F6) next (previous) slot
+    //   Save states and hold-to-fast-forward (3x) are bindable actions on the
+    //   launcher's Controls page; defaults F5/F7 save/load, F6/F8 slot, Tab.
     const auto toggle_fullscreen = [] {
         if (g_sdl_window == nullptr) return;
 
@@ -439,9 +439,9 @@ void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t) {
         if (mm::debug_menu::handle_event(ev)) {
             // Opening or navigating the overlay cancels a held fast-forward
             // so the menu remains readable at the normal cadence.
-            ultramodern::set_speed_multiplier(1);
+            mm::savestate::cancel_fast_forward();
         } else if (mm::savestate::handle_event(ev)) {
-            // F5 save / F7 load / F6 slot; applied on the game thread.
+            // Save states and held fast-forward, as bound on the Controls page.
         } else if (ev.type == SDL_QUIT) {
             ultramodern::quit();
         } else if (ev.type == SDL_CONTROLLERBUTTONDOWN &&
@@ -457,11 +457,11 @@ void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t) {
         } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0) {
             if (ev.key.keysym.scancode == SDL_SCANCODE_F11 && g_sdl_window != nullptr) {
                 toggle_fullscreen();
-            } else if (ev.key.keysym.scancode == SDL_SCANCODE_TAB) {
-                ultramodern::set_speed_multiplier(3);
             }
-        } else if (ev.type == SDL_KEYUP && ev.key.keysym.scancode == SDL_SCANCODE_TAB) {
-            ultramodern::set_speed_multiplier(1);
+        } else if (ev.type == SDL_WINDOWEVENT &&
+                   ev.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+            // A key released while unfocused never sends its key-up.
+            mm::savestate::cancel_fast_forward();
         }
     }
 }
@@ -587,7 +587,8 @@ static void print_usage(const char* argv0) {
         "settings persist in the app config folder (display.cfg, controls.json)\n"
         "diagnostic logs are written under its logs/ directory\n"
         "in game: F11 or controller Back/View = fullscreen; hold Tab = 3x fast-forward\n"
-        "save states: F5 = save, F7 = load, F6 / Shift+F6 = next / previous slot (0-9)\n"
+        "save states: F5 = save, F7 = load, F6 / F8 = next / previous slot (0-9)\n"
+        "(save-state and fast-forward keys/buttons can be rebound on the Controls page)\n"
         "debug: F1 or controller L+R+Start = overlay\n",
         argv0);
 }

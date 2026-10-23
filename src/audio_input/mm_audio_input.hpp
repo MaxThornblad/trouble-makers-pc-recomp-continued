@@ -49,8 +49,21 @@ enum class N64Input : uint8_t {
     CDown,
     CLeft,
     CRight,
+    // Host actions, not sent to the game. Bindable on the launcher's Controls
+    // page like any N64 input; src/game/savestate.cpp acts on them.
+    SaveState,
+    LoadState,
+    NextStateSlot,
+    PreviousStateSlot,
+    FastForward,        // held: game runs 3x
     Count,
 };
+
+constexpr N64Input kFirstHostAction = N64Input::SaveState;
+constexpr bool is_host_action(N64Input input) {
+    return static_cast<uint8_t>(input) >= static_cast<uint8_t>(kFirstHostAction) &&
+           input != N64Input::Count;
+}
 
 enum class BindingType : uint8_t {
     None,

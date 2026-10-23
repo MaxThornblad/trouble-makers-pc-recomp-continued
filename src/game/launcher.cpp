@@ -535,8 +535,8 @@ void draw_controls_tab(mm_audio_input::ControlDevice& selected_device,
     if (ImGui::BeginTable("##control_bindings", 5, flags,
                           ImVec2(0.0f, -footer_height))) {
         const float font_size = ImGui::GetFontSize();
-        ImGui::TableSetupColumn("N64 input", ImGuiTableColumnFlags_WidthFixed,
-                                font_size * 7.5f);
+        ImGui::TableSetupColumn("Input", ImGuiTableColumnFlags_WidthFixed,
+                                font_size * 8.5f);
         ImGui::TableSetupColumn("Binding 1", ImGuiTableColumnFlags_WidthStretch, 1.0f);
         ImGui::TableSetupColumn("Binding 2", ImGuiTableColumnFlags_WidthStretch, 1.0f);
         ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, font_size * 4.2f);
@@ -546,6 +546,12 @@ void draw_controls_tab(mm_audio_input::ControlDevice& selected_device,
 
         for (size_t index = 0; index < kN64InputCount; ++index) {
             const auto input = static_cast<N64Input>(index);
+            if (input == kFirstHostAction) {
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::Spacing();
+                ImGui::TextDisabled("Hotkeys");
+            }
             ImGui::PushID(static_cast<int>(index));
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);

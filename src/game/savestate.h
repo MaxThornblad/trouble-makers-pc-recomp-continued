@@ -29,9 +29,13 @@ constexpr int kSlotCount = 10;
 // Folder that holds slot0.tmstate .. slot9.tmstate. Called once at startup.
 void configure(const std::filesystem::path& folder);
 
-// F5 = save to the current slot, F7 = load it, F6 / Shift+F6 = next/previous
-// slot. Returns true when the event was a save-state hotkey.
+// Acts on the save-state and fast-forward actions bound on the launcher's
+// Controls page (keyboard defaults: F5 save, F7 load, F6/F8 next/previous
+// slot, hold Tab to fast-forward). Returns true when the event was one of them.
 bool handle_event(const SDL_Event& event);
+
+// Stops a held fast-forward (e.g. when a menu takes over input).
+void cancel_fast_forward();
 
 #ifdef MM_HAS_GRAPHICS
 // Draws the short "Saved slot 3" style notification (ImGui, post-present).

@@ -50,7 +50,8 @@ Prefer to build it yourself? See [Building and running](#building-and-running).
 - ✅ Natively 60 fps (the game's own rate), correct audio pacing
 - ✅ High-resolution rendering (window-integer-scale via RT64), fullscreen, MSAA/SSAA
 - ✅ EEPROM saves persist to disk
-- ✅ Save states: 10 slots (F5 save, F7 load, F6 change slot)
+- ✅ Save states: 10 slots (F5 save, F7 load, F6/F8 change slot), bindable to
+  keyboard or controller on the launcher's Controls page
 - ✅ Remappable keyboard/controller inputs with two bindings per N64 control
 - ✅ Persistent current/previous session logs and copyable support reports
 - 🧪 Experimental widescreen (opt-in), high-FPS frame interpolation
@@ -227,8 +228,13 @@ in the app config folder (CLI display options override the file). In game:
 fast-forwards 3x.
 
 **Save states**: **F5** saves the current moment to the selected slot, **F7**
-loads it, and **F6** / **Shift+F6** select the next / previous slot (0–9). A
-short notice in the top-left corner confirms each action. States are files
+loads it, and **F6** / **F8** select the next / previous slot (0–9). A
+short notice in the top-left corner confirms each action. These actions and
+the hold-to-fast-forward key (**Tab**) are listed under **Hotkeys** on the launcher's
+**Controls** page, where each can get two keyboard
+and two controller bindings (buttons, triggers or stick directions). They have
+no controller bindings by default; Back/View, a stick click or Share are good
+free buttons. States are files
 named `slot0.tmstate` … `slot9.tmstate` in the `savestates/` folder of the app
 config folder; they survive restarts and can be loaded from any point in the
 game. Loading a state never touches the cartridge (EEPROM) save, but if the

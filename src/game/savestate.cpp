@@ -18,6 +18,8 @@
 
 #include "miniz.h"
 
+#include "mm_audio_input.hpp"
+
 #include "ultramodern/ultra64.h"
 #include "ultramodern/ultramodern.hpp"
 #include "librecomp/overlays.hpp"
@@ -523,29 +525,118 @@ void configure(const std::filesystem::path& folder) {
     parse_test_script();
 }
 
+namespace {
+
+void change_slot(int delta) {
+    const int next = (g_slot.load() + delta + kSlotCount) % kSlotCount;
+    g_slot.store(next);
+    std::error_code ec;
+    const bool used = std::filesystem::exists(slot_path(next), ec);
+    toast("Slot " + std::to_string(next) + (used ? "" : " (empty)"));
+}
+
+void run_action(mm_audio_input::N64Input action) {
+    using mm_audio_input::N64Input;
+    switch (action) {
+        case N64Input::SaveState: request_save(g_slot.load()); break;
+        case N64Input::LoadState: request_load(g_slot.load()); break;
+        case N64Input::NextStateSlot: change_slot(1); break;
+        case N64Input::PreviousStateSlot: change_slot(-1); break;
+        default: break;
+    }
+}
+
+// Finds the save-state action (if any) bound to this exact input.
+bool action_for(mm_audio_input::ControlDevice device, mm_audio_input::InputBinding binding,
+                mm_audio_input::N64Input& action) {
+    using namespace mm_audio_input;
+    for (size_t i = static_cast<size_t>(kFirstHostAction); i < kN64InputCount; ++i) {
+        for (size_t slot = 0; slot < kBindingsPerInput; ++slot) {
+            if (get_binding(device, static_cast<N64Input>(i), slot) == binding) {
+                action = static_cast<N64Input>(i);
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Axis bindings (triggers, stick directions) fire once when they cross this
+// threshold, and again only after returning below the release point.
+constexpr int kAxisPress = 20000;
+constexpr int kAxisRelease = 12000;
+std::array<int, SDL_CONTROLLER_AXIS_MAX> g_axis_direction{}; // -1, 0, +1 held
+
+} // namespace
+
+// Fast-forward runs while its input is held; remember which one started it.
+mm_audio_input::InputBinding g_ff_binding{};
+
+void set_fast_forward(bool on, mm_audio_input::InputBinding binding) {
+    g_ff_binding = on ? binding : mm_audio_input::InputBinding{};
+    ultramodern::set_speed_multiplier(on ? 3 : 1);
+}
+
+bool handle_release(const mm_audio_input::InputBinding& binding) {
+    if (g_ff_binding.type == mm_audio_input::BindingType::None || !(g_ff_binding == binding)) {
+        return false;
+    }
+    set_fast_forward(false, {});
+    return true;
+}
+
 bool handle_event(const SDL_Event& event) {
-    if (event.type != SDL_KEYDOWN || event.key.repeat != 0) {
+    using namespace mm_audio_input;
+    InputBinding binding{};
+    ControlDevice device = ControlDevice::Keyboard;
+
+    if (event.type == SDL_KEYUP) {
+        return handle_release({BindingType::Keyboard, static_cast<int>(event.key.keysym.scancode)});
+    }
+    if (event.type == SDL_CONTROLLERBUTTONUP) {
+        return handle_release({BindingType::ControllerButton, static_cast<int>(event.cbutton.button)});
+    }
+    if (event.type == SDL_KEYDOWN) {
+        if (event.key.repeat != 0) return false;
+        binding = {BindingType::Keyboard, static_cast<int>(event.key.keysym.scancode)};
+    } else if (event.type == SDL_CONTROLLERBUTTONDOWN) {
+        device = ControlDevice::Controller;
+        binding = {BindingType::ControllerButton, static_cast<int>(event.cbutton.button)};
+    } else if (event.type == SDL_CONTROLLERAXISMOTION) {
+        const int axis = event.caxis.axis;
+        if (axis < 0 || axis >= SDL_CONTROLLER_AXIS_MAX) return false;
+        const int value = event.caxis.value;
+        int& held = g_axis_direction[axis];
+        if (held != 0) {
+            if (value * held < kAxisRelease) {
+                const InputBinding released{BindingType::ControllerAxis, (axis + 1) * held};
+                held = 0;
+                return handle_release(released);
+            }
+            return false;
+        }
+        if (value >= kAxisPress) held = 1;
+        else if (value <= -kAxisPress) held = -1;
+        else return false;
+        device = ControlDevice::Controller;
+        binding = {BindingType::ControllerAxis, (axis + 1) * held};
+    } else {
         return false;
     }
-    const int slot = g_slot.load();
-    switch (event.key.keysym.scancode) {
-    case SDL_SCANCODE_F5:
-        request_save(slot);
-        return true;
-    case SDL_SCANCODE_F7:
-        request_load(slot);
-        return true;
-    case SDL_SCANCODE_F6: {
-        const bool back = (event.key.keysym.mod & KMOD_SHIFT) != 0;
-        const int next = (slot + (back ? kSlotCount - 1 : 1)) % kSlotCount;
-        g_slot.store(next);
-        std::error_code ec;
-        const bool used = std::filesystem::exists(slot_path(next), ec);
-        toast("Slot " + std::to_string(next) + (used ? "" : " (empty)"));
-        return true;
+
+    N64Input action{};
+    if (!action_for(device, binding, action)) return false;
+    if (action == N64Input::FastForward) {
+        set_fast_forward(true, binding);
+    } else {
+        run_action(action);
     }
-    default:
-        return false;
+    return true;
+}
+
+void cancel_fast_forward() {
+    if (g_ff_binding.type != mm_audio_input::BindingType::None) {
+        set_fast_forward(false, {});
     }
 }
 

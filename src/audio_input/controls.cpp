@@ -58,6 +58,11 @@ ControlMap make_keyboard_defaults() {
     bind(N64Input::CDown, SDL_SCANCODE_K);
     bind(N64Input::CLeft, SDL_SCANCODE_J);
     bind(N64Input::CRight, SDL_SCANCODE_L);
+    bind(N64Input::SaveState, SDL_SCANCODE_F5);
+    bind(N64Input::LoadState, SDL_SCANCODE_F7);
+    bind(N64Input::NextStateSlot, SDL_SCANCODE_F6);
+    bind(N64Input::PreviousStateSlot, SDL_SCANCODE_F8);
+    bind(N64Input::FastForward, SDL_SCANCODE_TAB);
     return map;
 }
 
@@ -100,6 +105,10 @@ ControlMap make_controller_defaults() {
     button(N64Input::CLeft, SDL_CONTROLLER_BUTTON_Y, 1);           // north
     axis(N64Input::CRight, SDL_CONTROLLER_AXIS_RIGHTX, 1);
     button(N64Input::CRight, SDL_CONTROLLER_BUTTON_B, 1);         // east
+    // Save-state and fast-forward actions start unbound on controllers: every comfortable
+    // button already drives the game, and an accidental save overwrites a slot.
+    // Players bind them on the launcher's Controls page (Back, a stick click
+    // and Share/Misc are the usual free buttons).
     return map;
 }
 
@@ -114,6 +123,8 @@ constexpr std::array<const char*, kN64InputCount> kInputNames = {
     "D-pad Up", "D-pad Down", "D-pad Left", "D-pad Right",
     "A", "B", "Z", "Start", "L", "R",
     "C Up", "C Down", "C Left", "C Right",
+    "Save state", "Load state", "Next slot", "Previous slot",
+    "Fast-forward",
 };
 
 constexpr std::array<const char*, kN64InputCount> kConfigNames = {
@@ -121,6 +132,8 @@ constexpr std::array<const char*, kN64InputCount> kConfigNames = {
     "dpad_up", "dpad_down", "dpad_left", "dpad_right",
     "a", "b", "z", "start", "l", "r",
     "c_up", "c_down", "c_left", "c_right",
+    "save_state", "load_state", "next_state_slot", "previous_state_slot",
+    "fast_forward",
 };
 
 ControlMap& map_for(ControlDevice device) {
