@@ -37,6 +37,10 @@ bool handle_event(const SDL_Event& event);
 // Stops a held fast-forward (e.g. when a menu takes over input).
 void cancel_fast_forward();
 
+// Increments every time a state is loaded, so per-frame watchers (rumble)
+// can tell a load's jump in game memory from something that happened in play.
+uint32_t load_generation();
+
 #ifdef MM_HAS_GRAPHICS
 // Draws the short "Saved slot 3" style notification (ImGui, post-present).
 void draw_overlay();

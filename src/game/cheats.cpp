@@ -10,6 +10,7 @@
 #include <string>
 
 #include "gem_compass.h"
+#include "mm_audio_input.hpp"
 #include "recomp.h"
 
 namespace mm::cheats {
@@ -44,6 +45,7 @@ std::atomic<int> g_fast_forward_speed{3};
 std::atomic<bool> g_rank_timer{false};
 std::atomic<bool> g_gem_hints{true};
 std::atomic<bool> g_gem_compass{false};
+std::atomic<int> g_rumble_level{2};
 std::atomic<bool> g_active{false};
 std::filesystem::path g_path;
 std::mutex g_file_mutex;
@@ -67,6 +69,7 @@ void save() {
     f << "rank_timer=" << (g_rank_timer.load() ? 1 : 0) << '\n';
     f << "gem_hints=" << (g_gem_hints.load() ? 1 : 0) << '\n';
     f << "gem_compass=" << (g_gem_compass.load() ? 1 : 0) << '\n';
+    f << "rumble=" << g_rumble_level.load() << '\n';
 }
 
 // --- Endless jet -----------------------------------------------------------
@@ -319,6 +322,10 @@ void configure(const std::filesystem::path& folder) {
         if (eq == std::string::npos) continue;
         const std::string key = line.substr(0, eq);
         const bool on = line.substr(eq + 1) == "1";
+        if (key == "rumble") {
+            g_rumble_level.store(std::clamp(std::atoi(line.substr(eq + 1).c_str()), 0, 3));
+            continue;
+        }
         if (key == "gem_compass") {
             g_gem_compass.store(on);
             continue;
@@ -394,6 +401,28 @@ void toggle_gem_compass() {
     g_gem_compass.store(now, std::memory_order_release);
     std::fprintf(stderr, "[cheats] golden gem compass %s\n", now ? "on" : "off");
     save();
+}
+
+int rumble_level() {
+    return g_rumble_level.load(std::memory_order_relaxed);
+}
+
+const char* rumble_level_name() {
+    static const char* const kNames[] = {"Off", "Low", "Medium", "High"};
+    return kNames[std::clamp(rumble_level(), 0, 3)];
+}
+
+void cycle_rumble_level() {
+    const int next = (g_rumble_level.load() + 1) % 4;
+    g_rumble_level.store(next, std::memory_order_relaxed);
+    std::fprintf(stderr, "[cheats] rumble %s\n", rumble_level_name());
+    save();
+    if (next > 0) {
+        // A sample pulse at the new strength.
+        static const float kScale[] = {0.0f, 0.35f, 0.65f, 1.0f};
+        const auto v = static_cast<uint16_t>(kScale[next] * 65535.0f);
+        mm_audio_input::request_rumble(v, v, 250);
+    }
 }
 
 void set_active(bool active) {

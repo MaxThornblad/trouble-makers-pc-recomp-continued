@@ -111,6 +111,11 @@ bool binding_from_event(ControlDevice device, const SDL_Event& event,
 // launcher calls this before the runtime begins polling gameplay input.
 void refresh_controllers();
 
+// Starts a controller rumble pulse (SDL low/high-frequency motor strengths,
+// duration in ms), replacing any pulse still running. Safe from any thread;
+// applied on the next input poll. No-op without a rumble-capable controller.
+void request_rumble(uint16_t low, uint16_t high, uint32_t ms);
+
 // One-time setup. Idempotent. Brings up the SDL2 audio + game-controller
 // subsystems, opens the audio device, and opens the first attached
 // SDL game controller if any. Independent of SDL video — safe to call before

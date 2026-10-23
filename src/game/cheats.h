@@ -44,6 +44,12 @@ void toggle_gem_hints();
 bool gem_compass_enabled();
 void toggle_gem_compass();
 
+// Controller rumble strength (src/game/rumble.cpp): 0 off, 1 low, 2 medium
+// (default), 3 high. Works without the debug menu.
+int rumble_level();
+const char* rumble_level_name();
+void cycle_rumble_level();
+
 // Reads <folder>/cheats.cfg; toggles are written back on every change.
 void configure(const std::filesystem::path& folder);
 

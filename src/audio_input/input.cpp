@@ -34,6 +34,15 @@ constexpr uint16_t BTN_CR     = 0x0001; // CONT_F
 const Uint8* g_keys = nullptr;
 int g_numkeys = 0;
 SDL_GameController* g_controller = nullptr;
+// Host-side rumble pulse requested by src/game/rumble.cpp, applied on the
+// input-polling path that owns g_controller: low motor << 48 | high motor << 32
+// | milliseconds.
+std::atomic<uint64_t> g_rumble_request{0};
+// Last time the player pressed anything (SDL ticks). Rumble is skipped when
+// nobody has touched the controls for a minute, so the attract-mode demo on
+// the title screen does not shake an idle controller.
+std::atomic<uint64_t> g_last_activity{0};
+constexpr uint64_t kRumbleIdleMs = 60000;
 std::atomic_bool g_input_blocked{false};
 
 constexpr float kDigitalAxisThreshold = 0.5f;
@@ -124,6 +133,13 @@ void poll_input() {
     SDL_PumpEvents();
     g_keys = SDL_GetKeyboardState(&g_numkeys);
     refresh_controller_internal();
+    const uint64_t rumble = g_rumble_request.exchange(0, std::memory_order_acq_rel);
+    const bool active = SDL_GetTicks64() - g_last_activity.load(std::memory_order_relaxed) < kRumbleIdleMs;
+    if (rumble != 0 && active && g_controller != nullptr && SDL_GameControllerHasRumble(g_controller)) {
+        SDL_GameControllerRumble(g_controller, static_cast<uint16_t>(rumble >> 48),
+                                 static_cast<uint16_t>(rumble >> 32),
+                                 static_cast<uint32_t>(rumble & 0xFFFFFFFFu));
+    }
 }
 
 bool get_input(int controller_num, uint16_t* buttons, float* x, float* y) {
@@ -169,6 +185,9 @@ bool get_input(int controller_num, uint16_t* buttons, float* x, float* y) {
     const float sy = input_strength(N64Input::AnalogUp) -
                      input_strength(N64Input::AnalogDown);
 
+    if (b != 0 || std::fabs(sx) > 0.3f || std::fabs(sy) > 0.3f) {
+        g_last_activity.store(SDL_GetTicks64(), std::memory_order_relaxed);
+    }
     *buttons = b;
     *x = std::clamp(sx, -1.0f, 1.0f);
     *y = std::clamp(sy, -1.0f, 1.0f);
@@ -197,6 +216,13 @@ ultramodern::input::connected_device_info_t get_connected_device_info(int contro
 }
 
 } // namespace
+
+void request_rumble(uint16_t low, uint16_t high, uint32_t ms) {
+    if (ms == 0 || (low == 0 && high == 0)) return;
+    g_rumble_request.store((static_cast<uint64_t>(low) << 48) |
+                           (static_cast<uint64_t>(high) << 32) | ms,
+                           std::memory_order_release);
+}
 
 void refresh_controllers() {
     refresh_controller_internal();

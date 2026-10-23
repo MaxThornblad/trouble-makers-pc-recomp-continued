@@ -348,7 +348,10 @@ bool capture(uint8_t* rdram, recomp_context* ctx, Snapshot& s, std::string& erro
     return true;
 }
 
+std::atomic<uint32_t> g_load_generation{0};
+
 bool apply(uint8_t* rdram, recomp_context* ctx, const Snapshot& s, std::string& error) {
+    g_load_generation.fetch_add(1, std::memory_order_relaxed);
     // A state is only valid at the exact frame point it was taken from: the
     // same thread, at the same stack depth. Anything else would resume
     // translated code with a host call stack that does not match RDRAM.
@@ -633,6 +636,10 @@ bool handle_event(const SDL_Event& event) {
         run_action(action);
     }
     return true;
+}
+
+uint32_t load_generation() {
+    return g_load_generation.load(std::memory_order_relaxed);
 }
 
 void cancel_fast_forward() {

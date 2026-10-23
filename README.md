@@ -262,7 +262,13 @@ turned off) puts a gold arrow at the edge of the screen pointing to the
 stage's golden gem, with its distance in pixels, and a bobbing marker above
 the gem once it is on screen. It hides once the gem is collected; when the gem
 only appears later (from an enemy, an item or a reward) or lies in another
-area, a note at the top says so. The **Fast-forward speed** row sets how fast the
+area, a note at the top says so. **Rumble** (also on that page, Medium by default, and working with the debug
+menu turned off) adds controller vibration, which the original game never
+had: a strong pulse when Marina is hit (longer for bigger hits, longest when
+she runs out of health), a thump after a long fall, a short buzz when a jet
+dash starts and a long pulse for a golden gem. Enter/A cycles Off, Low, Medium
+and High with a sample pulse; it stays quiet while the controls have been
+idle for a minute, such as during the title demo. The **Fast-forward speed** row sets how fast the
 hold-to-fast-forward hotkey runs the game (2x, 3x, 4x, 5x, 6x or 8x; default
 3x). It is saved and applies even with the debug menu turned off. **Rank timer**, on the same page, shows a top-right countdown to the best
 clear-time rank still reachable (S under the stage's par time, A within 30 s

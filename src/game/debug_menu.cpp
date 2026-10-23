@@ -3,6 +3,7 @@
 #include "rank_timer.h"
 #include "gem_compass.h"
 #include "gem_hints.h"
+#include "rumble.h"
 
 #include <algorithm>
 #include <array>
@@ -184,7 +185,7 @@ void change_page(int delta) {
 void move_selection(int delta) {
     const int page = g_page.load(std::memory_order_relaxed);
     if (page == kPageCheats) {
-        const int count = mm::cheats::kCheatCount + 4;   // + fast-forward speed, rank timer, gem hints, gem compass rows
+        const int count = mm::cheats::kCheatCount + 5;   // + fast-forward speed, rank timer, gem hints, gem compass, rumble rows
         int selected = g_selected_cheat.load(std::memory_order_relaxed);
         selected = (selected + delta + count) % count;
         g_selected_cheat.store(selected, std::memory_order_relaxed);
@@ -211,6 +212,8 @@ void activate_selection() {
             mm::cheats::toggle_gem_hints();
         } else if (selected == mm::cheats::kCheatCount + 3) {
             mm::cheats::toggle_gem_compass();
+        } else if (selected == mm::cheats::kCheatCount + 4) {
+            mm::cheats::cycle_rumble_level();
         } else {
             mm::cheats::toggle(static_cast<mm::cheats::Cheat>(selected));
         }
@@ -331,6 +334,7 @@ extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
     mm::rank_timer::publish(rdram);
     mm::gem_hints::publish(rdram);
     mm::gem_compass::publish(rdram);
+    mm::rumble::tick(rdram);
     mm::cheats::set_active(g_enabled.load(std::memory_order_acquire));
 
     if (!g_enabled.load(std::memory_order_acquire)) {
@@ -545,6 +549,23 @@ void draw_overlay() {
                     "the gem is collected. Gems that appear later (from an enemy or a "
                     "reward) show a note instead. Works even with the debug menu "
                     "turned off.");
+                ImGui::PopStyleColor();
+                ImGui::Unindent();
+            }
+        }
+        {
+            const bool row_selected = selected == mm::cheats::kCheatCount + 4;
+            char row[96];
+            std::snprintf(row, sizeof row, "      Rumble: %s", mm::cheats::rumble_level_name());
+            ImGui::Selectable(row, row_selected);
+            if (row_selected) {
+                ImGui::Indent();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::TextWrapped(
+                    "Controller rumble when Marina is hit, lands from a long fall, "
+                    "starts a jet dash or collects a golden gem. Enter/A cycles Off, "
+                    "Low, Medium and High and plays a sample. Works even with the "
+                    "debug menu turned off.");
                 ImGui::PopStyleColor();
                 ImGui::Unindent();
             }

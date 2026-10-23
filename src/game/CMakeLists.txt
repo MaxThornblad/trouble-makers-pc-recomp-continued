@@ -28,6 +28,7 @@ add_executable(troublemakers
     gem_hints.cpp
     gem_compass.cpp
     rank_timer.cpp
+    rumble.cpp
     savestate.cpp
     widescreen.cpp
 )
