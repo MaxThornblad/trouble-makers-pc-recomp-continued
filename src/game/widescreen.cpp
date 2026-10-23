@@ -429,6 +429,64 @@ bool prepare_rotation_material(
     return true;
 }
 
+// Sea of Lava (2-1) floor blocks, actor 0x515, draw the same kind of private
+// list: 32x32 CI8 textures in render tile 0 with maskS=maskT=0 and no combiner
+// of their own, under the shared two-cycle TRILERP setup (see the rotation
+// material notes above and docs/README.md). Their look then depends on RDP
+// state left behind by earlier draws. A normal session happens to leave usable
+// state, but after a save state is loaded from the title screen the blocks
+// draw flat-coloured or not at all.
+//
+// The lists are built once per area in the game's heap, so they are corrected
+// in place: the leading G_RDPPIPESYNC (a no-op for RT64) becomes the same
+// draw-local combiner the rotation copies prepend, and each tile-0 CI8
+// G_SETTILE gains the 32x32 wrap masks. The layout is verified first and a
+// list that does not match is left alone; a corrected list is recognised by
+// its leading combiner and skipped.
+constexpr uint16_t kLavaBlockActorType = 0x515u;
+constexpr int kLavaBlockMaxCommands = 64;
+
+void fix_lava_block_material(uint8_t* rdram, uint32_t list) {
+    if (list < 0x80000000u || list >= 0x80800000u || (list & 7u) != 0) {
+        return;
+    }
+    const gpr dl = static_cast<gpr>(static_cast<int32_t>(list));
+    const uint32_t first = static_cast<uint32_t>(MEM_W(0, dl));
+    if (first == 0xFCFFFE04u) {
+        return;                                    // already corrected
+    }
+    if (first != 0xE7000000u || MEM_W(4, dl) != 0) {
+        return;
+    }
+    int tiles = 0;
+    int end = -1;
+    for (int i = 1; i < kLavaBlockMaxCommands; ++i) {
+        const uint32_t w0 = static_cast<uint32_t>(MEM_W(i * 8, dl));
+        const uint32_t w1 = static_cast<uint32_t>(MEM_W(i * 8 + 4, dl));
+        if (w0 == 0xB8000000u) {
+            end = i;
+            break;
+        }
+        if ((w0 >> 24) == 0xFCu) {
+            return;                                // has its own combiner
+        }
+        if (w0 == 0xF5480800u && w1 == 0x00000000u) {
+            ++tiles;
+        }
+    }
+    if (end < 0 || tiles == 0) {
+        return;
+    }
+    for (int i = 1; i < end; ++i) {
+        if (static_cast<uint32_t>(MEM_W(i * 8, dl)) == 0xF5480800u &&
+            MEM_W(i * 8 + 4, dl) == 0) {
+            MEM_W(i * 8 + 4, dl) = 0x00014050u;
+        }
+    }
+    MEM_W(4, dl) = 0xFF10F3FFu;
+    MEM_W(0, dl) = 0xFCFFFE04u;
+}
+
 } // namespace
 
 // Camera_UpdateViewBounds is widened by translated return hooks during
@@ -573,6 +631,10 @@ extern "C" void mm_fix_rotation_material(
     uint8_t* rdram, recomp_context* ctx) {
     const gpr actor = static_cast<gpr>(ctx->r20);
     const uint16_t actor_type = MEM_HU(0xD2, actor);
+    if (actor_type == kLavaBlockActorType) {
+        fix_lava_block_material(rdram, static_cast<uint32_t>(MEM_W(0x17C, actor)));
+        return;
+    }
     if (actor_type != kRotationWallActorType &&
         actor_type != kRotationPlatformActorType) {
         return;

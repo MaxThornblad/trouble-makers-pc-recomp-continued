@@ -848,6 +848,14 @@ layout mismatch fails closed to the original list. There is no scene-wide
 clear, global LOD rule, texture-address heuristic, or renderer-wide
 mask-zero override.
 
+Sea of Lava (2-1) floor blocks, actor `0x0515`, draw the same kind of private
+list from the game heap (built once per area): 32 × 32 CI8 tiles with zero
+masks and no combiner. A normal session leaves usable RDP state behind, but a
+save state loaded straight from the title screen does not, and the blocks then
+draw flat-coloured or disappear. Those lists are corrected in place: the
+leading `G_RDPPIPESYNC` becomes the same `FCFFFE04 FF10F3FF` combiner and the
+tile-0 `G_SETTILE` words gain the 32 × 32 masks, after the same layout check.
+
 ## 14. Widescreen compatibility model
 
 Widescreen is not a single projection flag for this engine. A complete frame
