@@ -11,7 +11,9 @@
 // mm::graphics::create_render_context directly. The runtime then drives
 // send_dl / update_screen / update_config / shutdown through the interface.
 
+#include <cstdint>
 #include <memory>
+#include <vector>
 
 #include "ultramodern/renderer_context.hpp"
 
@@ -42,6 +44,17 @@ namespace mm::graphics {
     // Window width relative to the original 4:3 canvas, published by the
     // renderer for game-thread background layout. Never less than one.
     float get_widescreen_scale();
+
+    // Save-state support. The RDP keeps texture memory, tile descriptors,
+    // render modes and colours between display lists, and some of the
+    // game's lists draw with state an earlier list left behind. A save state
+    // therefore records it: capture returns the renderer's persistent RDP
+    // state (empty without a renderer), restore puts it back (false when the
+    // blob does not match this build's layout). Call both only while no
+    // display list is being processed (the save-state code waits for the RSP
+    // to go idle first).
+    std::vector<uint8_t> capture_rdp_state();
+    bool restore_rdp_state(const std::vector<uint8_t>& blob);
 
     // Registers create_render_context (and the API-name helper) with the
     // ultramodern renderer layer. Idempotent; call once before recomp::start().

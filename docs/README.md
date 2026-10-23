@@ -856,6 +856,17 @@ draw flat-coloured or disappear. Those lists are corrected in place: the
 leading `G_RDPPIPESYNC` becomes the same `FCFFFE04 FF10F3FF` combiner and the
 tile-0 `G_SETTILE` words gain the 32 × 32 masks, after the same layout check.
 
+**Save states carry RDP state.** The general cause is that RT64's RDP state
+(TMEM, tile descriptors, other modes, combiner and colour registers) persists
+between display lists, and these lists draw with whatever an earlier list left
+there. A session that loads a state before the game has naturally produced that
+state draws them wrongly, in any stage. Save-state format 2 therefore stores
+the persistent RDP fields alongside RDRAM (`mm::graphics::capture_rdp_state` /
+`restore_rdp_state`, taken while the RSP is idle) and restores them on load;
+loading a format-2 state from the title screen was verified to draw the Sea of
+Lava floor correctly with the per-actor correction disabled. Format-1 states
+still load without RDP state.
+
 ## 14. Widescreen compatibility model
 
 Widescreen is not a single projection flag for this engine. A complete frame

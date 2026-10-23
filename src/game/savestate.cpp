@@ -27,6 +27,7 @@
 
 #ifdef MM_HAS_GRAPHICS
 #include "imgui.h"
+#include "mm_graphics.h"
 #endif
 
 // Widescreen host state that must travel with a state (widescreen.cpp).
@@ -61,7 +62,9 @@ constexpr uint32_t kCurrentScene = 0x800BE5D0u;
 constexpr uint32_t kCurrentStage = 0x80178162u;
 
 constexpr char kMagic[8] = {'T', 'M', 'S', 'T', 'A', 'T', 'E', '\0'};
-constexpr uint32_t kFormatVersion = 1;
+// 1: original. 2: adds the renderer's persistent RDP state (version 1 states
+// still load; they simply keep whatever RDP state the session has).
+constexpr uint32_t kFormatVersion = 2;
 constexpr const char* kExtension = ".tmstate";
 
 struct Snapshot {
@@ -80,6 +83,7 @@ struct Snapshot {
     int16_t scene = 0;
     uint16_t stage = 0;
     int64_t saved_at = 0;        // unix time, informational
+    std::vector<uint8_t> rdp;    // mm::graphics RDP state; empty if none
 };
 
 // ---------------------------------------------------------------------------
@@ -112,6 +116,12 @@ public:
     bool bytes(std::vector<uint8_t>& b, uint32_t expected) {
         uint32_t n = 0;
         if (!get(n) || n != expected || pos_ + n > in_.size()) return false;
+        b.assign(in_.begin() + pos_, in_.begin() + pos_ + n);
+        pos_ += n;
+        return true;
+    }
+    bool bytes_raw(std::vector<uint8_t>& b, uint32_t n) {
+        if (pos_ + n > in_.size()) return false;
         b.assign(in_.begin() + pos_, in_.begin() + pos_ + n);
         pos_ += n;
         return true;
@@ -162,10 +172,12 @@ std::vector<uint8_t> serialize(const Snapshot& s) {
     w.put(s.scene);
     w.put(s.stage);
     w.put(s.saved_at);
+    w.put<uint32_t>(static_cast<uint32_t>(s.rdp.size()));
+    w.out.insert(w.out.end(), s.rdp.begin(), s.rdp.end());
     return std::move(w.out);
 }
 
-bool deserialize(const std::vector<uint8_t>& payload, Snapshot& s) {
+bool deserialize(const std::vector<uint8_t>& payload, Snapshot& s, uint32_t version) {
     Reader r(payload);
     uint32_t region_count = 0;
     if (!r.get(region_count) || region_count != kRegions.size()) return false;
@@ -195,8 +207,15 @@ bool deserialize(const std::vector<uint8_t>& payload, Snapshot& s) {
         if (!r.get(mq) || !r.get(mesg) || !r.get(jam) || !r.get(requeue)) return false;
         m = {mq, mesg, jam != 0, requeue != 0};
     }
-    return r.get(s.ws_bank_end) && r.get(s.game_state) && r.get(s.scene) &&
-           r.get(s.stage) && r.get(s.saved_at) && r.done();
+    if (!(r.get(s.ws_bank_end) && r.get(s.game_state) && r.get(s.scene) &&
+          r.get(s.stage) && r.get(s.saved_at))) {
+        return false;
+    }
+    if (version >= 2) {
+        uint32_t n = 0;
+        if (!r.get(n) || n > (1u << 20) || !r.bytes_raw(s.rdp, n)) return false;
+    }
+    return r.done();
 }
 
 // File: magic[8] u32 version u64 payload_size u64 payload_fnv1a
@@ -268,7 +287,7 @@ bool read_file(const std::filesystem::path& path, Snapshot& s, std::string& erro
         error = "not a Trouble Makers save state";
         return false;
     }
-    if (version != kFormatVersion) {
+    if (version != 1 && version != kFormatVersion) {
         error = "made by a different version";
         return false;
     }
@@ -290,7 +309,7 @@ bool read_file(const std::filesystem::path& path, Snapshot& s, std::string& erro
         error = "corrupt";
         return false;
     }
-    if (!deserialize(payload, s)) {
+    if (!deserialize(payload, s, version)) {
         error = "corrupt";
         return false;
     }
@@ -345,6 +364,9 @@ bool capture(uint8_t* rdram, recomp_context* ctx, Snapshot& s, std::string& erro
     s.scene = static_cast<int16_t>(MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kCurrentScene))));
     s.stage = MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kCurrentStage)));
     s.saved_at = static_cast<int64_t>(std::time(nullptr));
+#ifdef MM_HAS_GRAPHICS
+    s.rdp = mm::graphics::capture_rdp_state();
+#endif
     return true;
 }
 
@@ -398,6 +420,11 @@ bool apply(uint8_t* rdram, recomp_context* ctx, const Snapshot& s, std::string& 
     ultramodern::set_deferred_external_messages(s.deferred);
     mm_ws_set_host_bank_end(s.ws_bank_end);
     mm_ws_after_state_load();
+#ifdef MM_HAS_GRAPHICS
+    if (!s.rdp.empty() && !mm::graphics::restore_rdp_state(s.rdp)) {
+        std::fprintf(stderr, "[savestate] renderer state not restored (different renderer build)\n");
+    }
+#endif
     return true;
 }
 

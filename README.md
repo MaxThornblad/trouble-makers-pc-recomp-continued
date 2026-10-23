@@ -240,7 +240,12 @@ config folder; they survive restarts and can be loaded from any point in the
 game. Loading a state never touches the cartridge (EEPROM) save, but if the
 game saves after a load it writes the loaded progress, exactly as it would on
 the console. States are tied to this build: a state made by a different version
-may be refused.
+may be refused. States also record the renderer's drawing state (texture
+memory and render settings the game leaves between frames), so a state loaded
+straight from the title screen draws exactly as when it was saved. States made
+before this was added still load, but some 3D floors and blocks can then draw
+flat-coloured or vanish for the rest of that session; save them again from a
+session where everything looks right to fix that.
 
 The launcher's **Enable debug menu** option enables an in-game overlay. Press
 **F1** or controller **L+R+Start** to open it; use Up/Down and Enter (or

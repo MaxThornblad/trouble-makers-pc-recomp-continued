@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -25,6 +26,8 @@
 #endif
 #include "hle/rt64_application.h"
 #include "hle/rt64_present_queue.h"
+#include "hle/rt64_rdp.h"
+#include "hle/rt64_state.h"
 #include "gui/rt64_inspector.h"
 #include "imgui.h"
 
@@ -231,8 +234,69 @@ void apply_config(RT64::Application& app, const ultramodern::renderer::GraphicsC
     app.userConfig.graphicsAPI = to_rt64_api(config.api_option);
 }
 
+class Rt64Context;
+std::atomic<Rt64Context*> g_active_context{nullptr};
+
+// Persistent RDP fields recorded in save states, in this order. Display-list
+// work buffers, framebuffer bookkeeping and the colour/depth image (which the
+// game sets every frame) are left out.
+#define MM_RDP_SAVED_FIELDS(X) \
+    X(TMEM) X(texture) X(tiles) X(tileReplacementHashes) X(extended) X(rice) \
+    X(otherMode) X(colorCombinerStack) X(envColorStack) X(primColorStack) \
+    X(primLODStack) X(primDepthStack) X(blendColorStack) X(fogColorStack) \
+    X(fillColorStack) X(scissorRectStack) X(scissorModeStack) \
+    X(colorCombinerStackSize) X(envColorStackSize) X(primColorStackSize) \
+    X(primDepthStackSize) X(blendColorStackSize) X(fogColorStackSize) \
+    X(fillColorStackSize) X(scissorStackSize) X(convertK) X(keyCenter) X(keyScale)
+
+constexpr uint32_t kRdpStateMagic = 0x52445053u; // "RDPS"
+
+uint32_t rdp_state_layout() {
+    // Changes whenever a recorded field changes size, so a blob from a build
+    // with a different RT64 layout is refused rather than misread.
+    uint32_t h = 2166136261u;
+#define MM_RDP_LAYOUT(f) h = (h ^ static_cast<uint32_t>(sizeof(RT64::RDP::f))) * 16777619u;
+    MM_RDP_SAVED_FIELDS(MM_RDP_LAYOUT)
+#undef MM_RDP_LAYOUT
+    return h;
+}
+
 class Rt64Context final : public ultramodern::renderer::RendererContext {
 public:
+    std::vector<uint8_t> capture_rdp() const {
+        std::vector<uint8_t> out;
+        if (app_ == nullptr || app_->state == nullptr || app_->state->rdp == nullptr) return out;
+        const RT64::RDP& rdp = *app_->state->rdp;
+        const auto put = [&out](const void* p, size_t n) {
+            const auto* b = static_cast<const uint8_t*>(p);
+            out.insert(out.end(), b, b + n);
+        };
+        const uint32_t header[2] = {kRdpStateMagic, rdp_state_layout()};
+        put(header, sizeof header);
+#define MM_RDP_PUT(f) put(&rdp.f, sizeof(rdp.f));
+        MM_RDP_SAVED_FIELDS(MM_RDP_PUT)
+#undef MM_RDP_PUT
+        return out;
+    }
+
+    bool restore_rdp(const std::vector<uint8_t>& blob) {
+        if (app_ == nullptr || app_->state == nullptr || app_->state->rdp == nullptr) return false;
+        size_t expected = 2 * sizeof(uint32_t);
+#define MM_RDP_SIZE(f) expected += sizeof(RT64::RDP::f);
+        MM_RDP_SAVED_FIELDS(MM_RDP_SIZE)
+#undef MM_RDP_SIZE
+        if (blob.size() != expected) return false;
+        uint32_t header[2];
+        std::memcpy(header, blob.data(), sizeof header);
+        if (header[0] != kRdpStateMagic || header[1] != rdp_state_layout()) return false;
+        RT64::RDP& rdp = *app_->state->rdp;
+        size_t pos = sizeof header;
+#define MM_RDP_GET(f) std::memcpy(static_cast<void*>(&rdp.f), blob.data() + pos, sizeof(rdp.f)); pos += sizeof(rdp.f);
+        MM_RDP_SAVED_FIELDS(MM_RDP_GET)
+#undef MM_RDP_GET
+        return true;
+    }
+
     Rt64Context(uint8_t* rdram, ultramodern::renderer::WindowHandle window, bool developer_mode) {
         mm::telemetry::set_phase(mm::telemetry::Phase::RendererStarting,
                                  "RT64 setup beginning");
@@ -287,6 +351,7 @@ public:
         app_config.useConfigurationFile = false; // settings come from ultramodern, not rt64.json
 
         app_ = std::make_unique<RT64::Application>(core, app_config);
+        g_active_context.store(this, std::memory_order_release);
 
         auto initial_config = ultramodern::renderer::get_graphics_config();
         interpolation_suppressed_ =
@@ -416,7 +481,10 @@ public:
         }
     }
 
-    ~Rt64Context() override = default;
+    ~Rt64Context() override {
+        Rt64Context* self = this;
+        g_active_context.compare_exchange_strong(self, nullptr);
+    }
 
     bool valid() override {
         return app_ != nullptr;
@@ -702,6 +770,16 @@ private:
 };
 
 } // namespace
+
+std::vector<uint8_t> capture_rdp_state() {
+    Rt64Context* context = g_active_context.load(std::memory_order_acquire);
+    return context != nullptr ? context->capture_rdp() : std::vector<uint8_t>{};
+}
+
+bool restore_rdp_state(const std::vector<uint8_t>& blob) {
+    Rt64Context* context = g_active_context.load(std::memory_order_acquire);
+    return context != nullptr && context->restore_rdp(blob);
+}
 
 void set_vsync_enabled(bool enabled) {
     g_vsync_enabled.store(enabled, std::memory_order_release);
