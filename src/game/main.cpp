@@ -45,6 +45,7 @@
 
 #include "app_dirs.h"
 #include "debug_menu.h"
+#include "savestate.h"
 #include "session_log.h"
 #include "steam_deck.h"
 #include "telemetry.h"
@@ -410,6 +411,7 @@ void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t) {
     // the window cleanly shuts the runtime down. Hotkeys:
     //   F11        toggle fullscreen (persisted)
     //   Tab (hold) fast-forward 3x (game speed via the VI/timer multiplier)
+    //   F5/F7      save/load state, F6 (Shift+F6) next (previous) slot
     const auto toggle_fullscreen = [] {
         if (g_sdl_window == nullptr) return;
 
@@ -438,6 +440,8 @@ void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t) {
             // Opening or navigating the overlay cancels a held fast-forward
             // so the menu remains readable at the normal cadence.
             ultramodern::set_speed_multiplier(1);
+        } else if (mm::savestate::handle_event(ev)) {
+            // F5 save / F7 load / F6 slot; applied on the game thread.
         } else if (ev.type == SDL_QUIT) {
             ultramodern::quit();
         } else if (ev.type == SDL_CONTROLLERBUTTONDOWN &&
@@ -536,10 +540,22 @@ static std::vector<recomp::GameEntry> supported_games() {
             .has_compressed_code = false,
             .entrypoint_address = get_entrypoint_address(),
             .entrypoint = recomp_entrypoint,
+            .thread_create_callback = mm_savestate_thread_created,
             .on_init_callback = troublemakers::on_game_init,
         },
     };
 }
+
+#ifdef MM_HAS_GRAPHICS
+static void draw_overlays() {
+    mm::savestate::draw_overlay();
+}
+
+static void draw_overlays_with_debug_menu() {
+    mm::debug_menu::draw_overlay();
+    mm::savestate::draw_overlay();
+}
+#endif
 
 static void exit_error(const char* str) {
     std::fprintf(stderr, "%s\n", str);
@@ -571,6 +587,7 @@ static void print_usage(const char* argv0) {
         "settings persist in the app config folder (display.cfg, controls.json)\n"
         "diagnostic logs are written under its logs/ directory\n"
         "in game: F11 or controller Back/View = fullscreen; hold Tab = 3x fast-forward\n"
+        "save states: F5 = save, F7 = load, F6 / Shift+F6 = next / previous slot (0-9)\n"
         "debug: F1 or controller L+R+Start = overlay\n",
         argv0);
 }
@@ -798,9 +815,10 @@ int main(int argc, char** argv) {
     log_display_config("active");
 
     mm::debug_menu::configure(g_debug_menu);
+    mm::savestate::configure(config_dir / "savestates");
 #ifdef MM_HAS_GRAPHICS
     mm::graphics::set_overlay_draw_callback(
-        g_debug_menu ? mm::debug_menu::draw_overlay : nullptr);
+        g_debug_menu ? draw_overlays_with_debug_menu : draw_overlays);
     mm::graphics::set_vsync_enabled(g_vsync);
 #endif
 

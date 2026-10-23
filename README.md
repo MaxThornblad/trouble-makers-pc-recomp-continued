@@ -50,6 +50,7 @@ Prefer to build it yourself? See [Building and running](#building-and-running).
 - ✅ Natively 60 fps (the game's own rate), correct audio pacing
 - ✅ High-resolution rendering (window-integer-scale via RT64), fullscreen, MSAA/SSAA
 - ✅ EEPROM saves persist to disk
+- ✅ Save states: 10 slots (F5 save, F7 load, F6 change slot)
 - ✅ Remappable keyboard/controller inputs with two bindings per N64 control
 - ✅ Persistent current/previous session logs and copyable support reports
 - 🧪 Experimental widescreen (opt-in), high-FPS frame interpolation
@@ -224,6 +225,16 @@ Display options persist to `display.cfg` and input mappings to `controls.json`
 in the app config folder (CLI display options override the file). In game:
 **F11** or controller **Back/View** toggles fullscreen, and **hold Tab**
 fast-forwards 3x.
+
+**Save states**: **F5** saves the current moment to the selected slot, **F7**
+loads it, and **F6** / **Shift+F6** select the next / previous slot (0–9). A
+short notice in the top-left corner confirms each action. States are files
+named `slot0.tmstate` … `slot9.tmstate` in the `savestates/` folder of the app
+config folder; they survive restarts and can be loaded from any point in the
+game. Loading a state never touches the cartridge (EEPROM) save, but if the
+game saves after a load it writes the loaded progress, exactly as it would on
+the console. States are tied to this build: a state made by a different version
+may be refused.
 
 The launcher's **Enable debug menu** option enables an in-game overlay. Press
 **F1** or controller **L+R+Start** to open it; use Up/Down and Enter (or

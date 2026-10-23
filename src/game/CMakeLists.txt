@@ -24,6 +24,7 @@ add_executable(troublemakers
     register_overlays.cpp
     os_stubs.cpp
     debug_menu.cpp
+    savestate.cpp
     widescreen.cpp
 )
 

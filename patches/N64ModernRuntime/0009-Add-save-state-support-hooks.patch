@@ -1,0 +1,215 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Trouble Makers <noreply@example.com>
+Date: Fri, 23 Oct 2026 13:09:01 +0200
+Subject: [PATCH] Add save-state support hooks
+
+wait_for_rsp_idle() tracks submitted RSP/RDP tasks until their completion
+message is enqueued. deliver_pending_external_messages() and the deferred
+message accessors let a host flush and snapshot pending events. Overlays
+expose the loaded code-section list and can re-register a saved one.
+---
+ librecomp/include/librecomp/overlays.hpp      | 11 ++++++
+ librecomp/src/overlays.cpp                    | 36 +++++++++++++++++++
+ .../include/ultramodern/ultramodern.hpp       | 17 +++++++++
+ ultramodern/src/events.cpp                    | 20 +++++++++++
+ ultramodern/src/mesgqueue.cpp                 | 21 +++++++++++
+ 5 files changed, 105 insertions(+)
+
+diff --git a/librecomp/include/librecomp/overlays.hpp b/librecomp/include/librecomp/overlays.hpp
+index 35703bd..55a7fd3 100644
+--- a/librecomp/include/librecomp/overlays.hpp
++++ b/librecomp/include/librecomp/overlays.hpp
+@@ -6,6 +6,7 @@
+ #include <string>
+ #include <unordered_map>
+ #include <span>
++#include <vector>
+ #include "sections.h"
+ 
+ namespace recomp {
+@@ -33,6 +34,16 @@ namespace recomp {
+ 
+         void init_overlays();
+         const std::unordered_map<uint32_t, uint16_t>& get_vrom_to_section_map();
++
++        // Save-state support.
++        struct LoadedSectionRecord {
++            uint32_t rom_addr;
++            int32_t ram_addr;
++        };
++        std::vector<LoadedSectionRecord> get_loaded_sections();
++        // Re-registers exactly these sections (in order). Returns false without
++        // changing anything if a ROM address is not a known code section.
++        bool restore_loaded_sections(const std::vector<LoadedSectionRecord>& records);
+         uint32_t get_section_ram_addr(uint16_t code_section_index);
+         std::span<const RelocEntry> get_section_relocs(uint16_t code_section_index);
+         recomp_func_t* get_func_by_section_rom_function_vram(uint32_t section_rom, uint32_t function_vram);
+diff --git a/librecomp/src/overlays.cpp b/librecomp/src/overlays.cpp
+index 8c8e5d1..262919d 100644
+--- a/librecomp/src/overlays.cpp
++++ b/librecomp/src/overlays.cpp
+@@ -271,6 +271,42 @@ extern "C" void unload_overlays(int32_t ram_addr, uint32_t size) {
+     }
+ }
+ 
++// Save-state support: the ordered list of code sections the game has DMA'd
++// into RAM (by ROM address, so it survives a rebuild of the section table),
++// with duplicate loads of the same section at the same address collapsed to
++// the most recent one.
++std::vector<recomp::overlays::LoadedSectionRecord> recomp::overlays::get_loaded_sections() {
++    std::vector<LoadedSectionRecord> out;
++    for (size_t i = 0; i < loaded_sections.size(); i++) {
++        const LoadedSection& cur = loaded_sections[i];
++        bool superseded = false;
++        for (size_t j = i + 1; j < loaded_sections.size(); j++) {
++            if (loaded_sections[j].loaded_ram_addr == cur.loaded_ram_addr &&
++                loaded_sections[j].section_table_index == cur.section_table_index) {
++                superseded = true;
++                break;
++            }
++        }
++        if (!superseded) {
++            out.push_back({sections_info.code_sections[cur.section_table_index].rom_addr, cur.loaded_ram_addr});
++        }
++    }
++    return out;
++}
++
++bool recomp::overlays::restore_loaded_sections(const std::vector<LoadedSectionRecord>& records) {
++    for (const LoadedSectionRecord& r : records) {
++        if (code_sections_by_rom.find(r.rom_addr) == code_sections_by_rom.end()) {
++            return false;
++        }
++    }
++    loaded_sections.clear();
++    for (const LoadedSectionRecord& r : records) {
++        load_overlay(code_sections_by_rom[r.rom_addr], r.ram_addr);
++    }
++    return true;
++}
++
+ void recomp::overlays::init_overlays() {
+     func_map.clear();
+     section_addresses = (int32_t *)calloc(sections_info.total_num_sections, sizeof(int32_t));
+diff --git a/ultramodern/include/ultramodern/ultramodern.hpp b/ultramodern/include/ultramodern/ultramodern.hpp
+index 816f366..8d66fe4 100644
+--- a/ultramodern/include/ultramodern/ultramodern.hpp
++++ b/ultramodern/include/ultramodern/ultramodern.hpp
+@@ -7,6 +7,7 @@
+ #include <span>
+ #include <chrono>
+ #include <filesystem>
++#include <vector>
+ 
+ #undef MOODYCAMEL_DELETE_FUNCTION
+ #define MOODYCAMEL_DELETE_FUNCTION = delete
+@@ -100,6 +101,22 @@ void set_entrypoint_thread();
+ bool is_entrypoint_thread();
+ bool is_game_thread();
+ void submit_rsp_task(RDRAM_ARG PTR(OSTask) task);
++
++// Save-state support (game thread only, except wait_for_rsp_idle).
++// Blocks until every submitted RSP/RDP task has posted its completion
++// message, or the timeout passes (returns false).
++bool wait_for_rsp_idle(std::chrono::milliseconds timeout);
++// Delivers every queued host event (VI/SI/SP/DP...) into its N64 queue now.
++void deliver_pending_external_messages(RDRAM_ARG1);
++struct PendingExternalMessage {
++    PTR(OSMesgQueue) mq;
++    OSMesg mesg;
++    bool jam;
++    bool requeue_if_blocked;
++};
++// Host events that could not be delivered because their queue was full.
++std::vector<PendingExternalMessage> get_deferred_external_messages();
++void set_deferred_external_messages(const std::vector<PendingExternalMessage>& messages);
+ void send_si_message();
+ uint32_t get_speed_multiplier();
+ void set_speed_multiplier(uint32_t multiplier); // 0 clamps to 1
+diff --git a/ultramodern/src/events.cpp b/ultramodern/src/events.cpp
+index 518529d..6ff21bf 100644
+--- a/ultramodern/src/events.cpp
++++ b/ultramodern/src/events.cpp
+@@ -249,6 +249,23 @@ void vi_thread_func() {
+     }
+ }
+ 
++// Save-state support: RSP/RDP work submitted by the game but not yet signalled
++// back as an external message. Decremented only after the completion message
++// is enqueued, so "zero" means every completion is already visible to
++// dequeue_external_messages().
++static std::atomic<int> tasks_in_flight{0};
++
++bool ultramodern::wait_for_rsp_idle(std::chrono::milliseconds timeout) {
++    const auto deadline = std::chrono::steady_clock::now() + timeout;
++    while (tasks_in_flight.load(std::memory_order_acquire) != 0) {
++        if (std::chrono::steady_clock::now() >= deadline) {
++            return false;
++        }
++        std::this_thread::sleep_for(std::chrono::microseconds(200));
++    }
++    return true;
++}
++
+ void sp_complete() {
+     uint8_t* rdram = events_context.rdram;
+     std::lock_guard lock{ events_context.message_mutex };
+@@ -284,6 +301,7 @@ void task_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_r
+ 
+         // Tell the game that the RSP has completed
+         sp_complete();
++        tasks_in_flight.fetch_sub(1, std::memory_order_release);
+     }
+ }
+ 
+@@ -373,6 +391,7 @@ void gfx_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_re
+                 [[maybe_unused]] auto renderer_end = std::chrono::high_resolution_clock::now();
+ 
+                 dp_complete();
++                tasks_in_flight.fetch_sub(1, std::memory_order_release);
+                 // TODO hook the parsed event up to the actual parsing point when a callback is added to RT64.
+                 ultramodern::extensions::on_displaylist_parsed(displaylist);
+                 ultramodern::extensions::on_displaylist_completed(displaylist);
+@@ -555,6 +574,7 @@ extern "C" PTR(void) osViGetCurrentFramebuffer() {
+ void ultramodern::submit_rsp_task(RDRAM_ARG PTR(OSTask) task_) {
+     OSTask* task = TO_PTR(OSTask, task_);
+ 
++    tasks_in_flight.fetch_add(1, std::memory_order_acq_rel);
+     // Send gfx tasks to the graphics action queue
+     if (task->t.type == M_GFXTASK) {
+         events_context.action_queue.enqueue(SpTaskAction{ *task });
+diff --git a/ultramodern/src/mesgqueue.cpp b/ultramodern/src/mesgqueue.cpp
+index 5ce5cba..5db9234 100644
+--- a/ultramodern/src/mesgqueue.cpp
++++ b/ultramodern/src/mesgqueue.cpp
+@@ -115,6 +115,27 @@ void ultramodern::wait_for_external_message_timed(RDRAM_ARG u32 millis) {
+     }
+ }
+ 
++// Save-state support. Both run on the game thread, which owns deferred_messages.
++void ultramodern::deliver_pending_external_messages(RDRAM_ARG1) {
++    dequeue_external_messages(PASS_RDRAM1);
++}
++
++std::vector<ultramodern::PendingExternalMessage> ultramodern::get_deferred_external_messages() {
++    std::vector<PendingExternalMessage> out;
++    out.reserve(deferred_messages.size());
++    for (const QueuedMessage& m : deferred_messages) {
++        out.push_back({m.mq, m.mesg, m.jam, m.requeue_if_blocked});
++    }
++    return out;
++}
++
++void ultramodern::set_deferred_external_messages(const std::vector<PendingExternalMessage>& messages) {
++    deferred_messages.clear();
++    for (const PendingExternalMessage& m : messages) {
++        deferred_messages.push_back({m.mq, m.mesg, m.jam, m.requeue_if_blocked});
++    }
++}
++
+ extern "C" void osCreateMesgQueue(RDRAM_ARG PTR(OSMesgQueue) mq_, PTR(OSMesg) msg, s32 count) {
+     OSMesgQueue *mq = TO_PTR(OSMesgQueue, mq_);
+     mq->blocked_on_recv = NULLPTR;
+-- 
+2.43.0
+

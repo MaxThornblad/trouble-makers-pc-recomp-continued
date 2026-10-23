@@ -259,6 +259,12 @@ hook = [
     # two LookAt initializers also publish both arena bases for matrix writes.
     { func = "Graphics_Begin_Frame", before_vram = 0x80000AE0, text = '{ ctx->r13 = (gpr)(int32_t)(0x80460000u + ((ctx->r14 & 1u) << 16)); }' },
     { func = "Thread_MainProc", before_vram = 0x80000D68, text = '{ ctx->r22 = (gpr)(int32_t)0x80460000u; ctx->r23 = 0x10000u; }' },
+    # Save states: once per frame, right after osContStartReadData returns at
+    # the top of the main loop. The previous frame's DP wait has completed, so
+    # this is the one point where the whole CPU state is rdram + this thread's
+    # registers and the host call chain is always the same. Saving and loading
+    # both happen here (src/game/savestate.cpp).
+    { func = "Thread_MainProc", before_vram = 0x80000D70, text = '{ extern void mm_savestate_frame_hook(uint8_t*, recomp_context*); mm_savestate_frame_hook(rdram, ctx); }' },
     { func = "func_80010A10", before_vram = 0x80010A30, text = '{ MEM_W(0, (gpr)(int32_t)0x801780F0u) = 0x80460000u; ctx->r15 = (gpr)(int32_t)0x80470000u; }' },
     { func = "LookAt_Update", before_vram = 0x800108B8, text = '{ MEM_W(0, (gpr)(int32_t)0x801780F0u) = 0x80460000u; ctx->r15 = (gpr)(int32_t)0x80470000u; }' },
     # Layer repacks: rebuild each 7x10 layer grid at stride 20 with real

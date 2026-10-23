@@ -2142,3 +2142,18 @@ extern "C" void mm_ws_bank_reloaded(uint8_t* rdram, recomp_context* ctx) {
     (void)ctx;
     g_host_bank_end = 0;
 }
+
+// Save-state support (src/game/savestate.cpp). The bank extent is host-only
+// knowledge about what the game DMA'd earlier, so it travels with a state;
+// the captured fill origin is per-frame and is simply recaptured.
+extern "C" uint32_t mm_ws_get_host_bank_end() {
+    return g_host_bank_end;
+}
+
+extern "C" void mm_ws_set_host_bank_end(uint32_t value) {
+    g_host_bank_end = value;
+}
+
+extern "C" void mm_ws_after_state_load() {
+    g_layer_fill_state.valid = false;
+}
