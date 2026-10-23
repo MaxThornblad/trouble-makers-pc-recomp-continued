@@ -9,6 +9,7 @@
 #include <mutex>
 #include <string>
 
+#include "gem_compass.h"
 #include "recomp.h"
 
 namespace mm::cheats {
@@ -42,6 +43,7 @@ std::array<std::atomic<bool>, kCheatCount> g_enabled{};
 std::atomic<int> g_fast_forward_speed{3};
 std::atomic<bool> g_rank_timer{false};
 std::atomic<bool> g_gem_hints{true};
+std::atomic<bool> g_gem_compass{false};
 std::atomic<bool> g_active{false};
 std::filesystem::path g_path;
 std::mutex g_file_mutex;
@@ -64,6 +66,7 @@ void save() {
     f << "fast_forward_speed=" << g_fast_forward_speed.load() << '\n';
     f << "rank_timer=" << (g_rank_timer.load() ? 1 : 0) << '\n';
     f << "gem_hints=" << (g_gem_hints.load() ? 1 : 0) << '\n';
+    f << "gem_compass=" << (g_gem_compass.load() ? 1 : 0) << '\n';
 }
 
 // --- Endless jet -----------------------------------------------------------
@@ -253,7 +256,7 @@ void pull_gem_actors(uint8_t* rdram) {
 
 } // namespace
 
-extern "C" void mm_cheat_gem_magnet(uint8_t* rdram, uint32_t list) {
+void gem_magnet(uint8_t* rdram, uint32_t list) {
     if (!magnet_live(rdram)) return;
     int tx, ty;
     marina_centre(rdram, tx, ty);
@@ -276,6 +279,15 @@ extern "C" void mm_cheat_gem_magnet(uint8_t* rdram, uint32_t list) {
         MEM_H(4, rec) = static_cast<uint16_t>(y + sy);
     }
 }
+
+} // namespace mm::cheats
+
+extern "C" void mm_item_list_hook(uint8_t* rdram, uint32_t list) {
+    mm::gem_compass::scan_items(rdram, list);
+    mm::cheats::gem_magnet(rdram, list);
+}
+
+namespace mm::cheats {
 
 extern "C" int mm_cheat_skip_terrain(uint8_t* rdram, uint32_t actor_index) {
     return (actor_index & 0xFFFF) == 0 && g_active.load(std::memory_order_relaxed) &&
@@ -307,6 +319,10 @@ void configure(const std::filesystem::path& folder) {
         if (eq == std::string::npos) continue;
         const std::string key = line.substr(0, eq);
         const bool on = line.substr(eq + 1) == "1";
+        if (key == "gem_compass") {
+            g_gem_compass.store(on);
+            continue;
+        }
         if (key == "gem_hints") {
             g_gem_hints.store(on);
             continue;
@@ -366,6 +382,17 @@ void toggle_gem_hints() {
     const bool now = !g_gem_hints.load();
     g_gem_hints.store(now, std::memory_order_release);
     std::fprintf(stderr, "[cheats] gem hints %s\n", now ? "on" : "off");
+    save();
+}
+
+bool gem_compass_enabled() {
+    return g_gem_compass.load(std::memory_order_acquire);
+}
+
+void toggle_gem_compass() {
+    const bool now = !g_gem_compass.load();
+    g_gem_compass.store(now, std::memory_order_release);
+    std::fprintf(stderr, "[cheats] golden gem compass %s\n", now ? "on" : "off");
     save();
 }
 

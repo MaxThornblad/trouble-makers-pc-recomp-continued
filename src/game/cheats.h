@@ -39,6 +39,11 @@ void toggle_rank_timer();
 bool gem_hints_enabled();
 void toggle_gem_hints();
 
+// Golden gem compass overlay (src/game/gem_compass.cpp). Off by default;
+// works without the debug menu.
+bool gem_compass_enabled();
+void toggle_gem_compass();
+
 // Reads <folder>/cheats.cfg; toggles are written back on every change.
 void configure(const std::filesystem::path& folder);
 

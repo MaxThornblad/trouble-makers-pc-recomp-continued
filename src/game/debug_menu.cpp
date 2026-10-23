@@ -1,6 +1,7 @@
 #include "debug_menu.h"
 #include "cheats.h"
 #include "rank_timer.h"
+#include "gem_compass.h"
 #include "gem_hints.h"
 
 #include <algorithm>
@@ -183,7 +184,7 @@ void change_page(int delta) {
 void move_selection(int delta) {
     const int page = g_page.load(std::memory_order_relaxed);
     if (page == kPageCheats) {
-        const int count = mm::cheats::kCheatCount + 3;   // + fast-forward speed, rank timer, gem hint rows
+        const int count = mm::cheats::kCheatCount + 4;   // + fast-forward speed, rank timer, gem hints, gem compass rows
         int selected = g_selected_cheat.load(std::memory_order_relaxed);
         selected = (selected + delta + count) % count;
         g_selected_cheat.store(selected, std::memory_order_relaxed);
@@ -208,6 +209,8 @@ void activate_selection() {
             mm::cheats::toggle_rank_timer();
         } else if (selected == mm::cheats::kCheatCount + 2) {
             mm::cheats::toggle_gem_hints();
+        } else if (selected == mm::cheats::kCheatCount + 3) {
+            mm::cheats::toggle_gem_compass();
         } else {
             mm::cheats::toggle(static_cast<mm::cheats::Cheat>(selected));
         }
@@ -327,6 +330,7 @@ extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
     mm::telemetry::record_scene(game_state, current_stage, current_scene);
     mm::rank_timer::publish(rdram);
     mm::gem_hints::publish(rdram);
+    mm::gem_compass::publish(rdram);
     mm::cheats::set_active(g_enabled.load(std::memory_order_acquire));
 
     if (!g_enabled.load(std::memory_order_acquire)) {
@@ -516,6 +520,31 @@ void draw_overlay() {
                     "When you pause in a stage, shows how to find its golden gem (from "
                     "the Mischief Makers Wiki) and whether you already have it. Works "
                     "even with the debug menu turned off.");
+                ImGui::PopStyleColor();
+                ImGui::Unindent();
+            }
+        }
+        {
+            const bool row_selected = selected == mm::cheats::kCheatCount + 3;
+            const bool on = mm::cheats::gem_compass_enabled();
+            char row[96];
+            std::snprintf(row, sizeof row, "%-5s Golden gem compass", on ? "[ON]" : "[  ]");
+            if (on) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.95f, 0.55f, 1.0f));
+            }
+            ImGui::Selectable(row, row_selected);
+            if (on) {
+                ImGui::PopStyleColor();
+            }
+            if (row_selected) {
+                ImGui::Indent();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::TextWrapped(
+                    "A gold arrow at the screen edge points to the stage's golden gem, "
+                    "with its distance; on screen a marker bobs above it. Hidden once "
+                    "the gem is collected. Gems that appear later (from an enemy or a "
+                    "reward) show a note instead. Works even with the debug menu "
+                    "turned off.");
                 ImGui::PopStyleColor();
                 ImGui::Unindent();
             }
