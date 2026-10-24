@@ -70,7 +70,7 @@ blocks also get `+0x98 |= 0x00080000` while held.
 - **Terrain map**: one byte per 16x16 cell at `0x8010CDF0`, index
   `((x >> 4) & [0x800BE658]) + (((H - y - 1) << [0x800BE660]) & [0x800BE65C])`
   for world pixel (x, y), H = `[0x800BE648]` (1-9: 2048, 512 columns). Bits
-  `0xC0` = solid, `0x40` alone = platform *(guess)*. Covers the whole stage.
+  `0xC0` = solid, `0x40` + low nibble = slope / stand-on cell. Covers the whole stage.
   Read by `func_80012AB4(x, y)` (camera-relative arguments). Stage blocks are
   solid only through their cells here: hiding a block's item record leaves its
   collision, and moving the record does not move it.
@@ -85,6 +85,9 @@ blocks also get `+0x98 |= 0x00080000` while held.
   enemies and blocks stand on such actors; standing sets `+0xCC`. The lists
   hold boxes from before actors are shifted for camera movement, so they lag
   by the camera's motion that frame (several px while Marina jumps).
+- Per-actor terrain collision (`func_800160EC`) only runs for actors with a
+  flag in `0x00C30000`; the brown carry blocks (`0x00001402`) have none and
+  are still grabbable.
 - The pot (`0x18`, flags `0x0001B003`) is a platform; the brown carry blocks
   (`0x2605`, flags `0x00001402`) are neither.
 
@@ -152,10 +155,12 @@ An actor draws shape s as image `0x44 + 2 * s` (with draw mode `0x208` and the
 sprite at `+0x18C`). Handler index → shape table, size (from the terrain cells
 they fill): `0x01` block `0x3740` 32x32, `0x02` wide wall block `0x3748`
 32x16, `0x03` tall wall block `0x3750` 16x32, `0x04` small `0x3758` 16x16
-(all four shatter in colour 1), `0x06`/`0x07` `0x3760`/`0x3768` *(unknown)*,
-`0x11-0x14` cylinder versions of `0x01-0x04` (seen without terrain cells in
-3-7), `0x2B-0x2E` and `0x2F-0x32` slopes `0x3780-0x3798` 32x16 (terrain values
-`0x41/0x45/0x49/0x4D`), `0x17-0x2A` fixed shapes `0x2F-` with sprites from
+(all four shatter in colour 1), `0x06` big cylinder block `0x3760` 32x32
+(stacks in 1-3), `0x07` `0x3768` *(unknown)*, `0x11-0x16` darker versions of
+`0x01-0x06` with no terrain cells: background bricks (3-7, 1-3), `0x2B-0x2E` and `0x2F-0x32` slopes `0x3780-0x3798` 32x16: two cells with
+slope codes (`0x41, 0x45` left to right rises to the right, `0x4D, 0x49`
+falls; the low nibble picks a height function from `0x800C7CD0`, used by
+`func_80012B88`), `0x17-0x2A` fixed shapes `0x2F-` with sprites from
 `0x800D19B8`, `0x05` gems, `0x00/0x09-0x0B/0x10` empty.
 
 Handlers: `0x800446F0` gems (colour `& 3`: 2 = golden), `0x80044390` blocks

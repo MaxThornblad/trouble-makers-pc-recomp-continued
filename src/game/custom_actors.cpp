@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstdlib>
 
+#include "terrain.h"
+
 extern "C" void func_80012AB4(uint8_t* rdram, recomp_context* ctx);
 
 namespace mm::custom_actors {
@@ -29,6 +31,7 @@ constexpr uint32_t kPlatform = 0x00002000u;     // stand-on-top only, 8 px thick
 constexpr uint32_t kRestFlags = 0x00011403u | kSolid;  // lying still, can be grabbed and stood on
 constexpr uint32_t kHeldFlags = 0x00020503u;           // a held brown carry block's flags
 constexpr uint32_t kFlyingFlags = 0x00021483u;         // a thrown enemy's flags
+constexpr uint32_t kSlopeRestFlags = 0x00001403u;      // slope block lying as terrain
 
 // Scratch stack for calling the game's leaf collision tests from the host
 // (host-only expansion memory, as mm::actors uses for func_8001E2D0).
@@ -152,6 +155,69 @@ int floor_between(uint8_t* rdram, int slot, int x, int old_bottom, int new_botto
     return best;
 }
 
+// --- Slope blocks ----------------------------------------------------------
+// A box can't be sloped, so a slope block at rest writes its two slope cells
+// (the codes its stage cells had, kept at +0x110 as 0x53000000 | right << 8 |
+// left) back into the terrain map and is not a solid actor itself: Marina
+// walks up it exactly as on a stage slope. It snaps to the 16 px terrain
+// grid to do so (at most 8 px). Where it wrote them is kept at +0x114 as
+// world x << 16 | y; picking it up or losing its support empties them again.
+constexpr uint32_t kFieldSlope = 0x110;
+constexpr uint32_t kFieldSlopeAt = 0x114;
+constexpr uint32_t kSlopeMarker = 0x53000000u;
+
+bool is_slope(uint8_t* rdram, gpr a) {
+    return (static_cast<uint32_t>(MEM_W(kFieldSlope, a)) & 0xFF000000u) == kSlopeMarker;
+}
+
+void lift_slope(uint8_t* rdram, int slot) {
+    const gpr a = slot_addr(slot);
+    const uint32_t at = static_cast<uint32_t>(MEM_W(kFieldSlopeAt, a));
+    if (!is_slope(rdram, a) || at == 0) return;
+    const uint32_t codes = static_cast<uint32_t>(MEM_W(kFieldSlope, a));
+    const int gx = static_cast<int16_t>(at >> 16), gy = static_cast<int16_t>(at & 0xFFFF);
+    if (mm::terrain::read(rdram, gx - 8, gy) == (codes & 0xFF)) mm::terrain::write(rdram, gx - 8, gy, 0);
+    if (mm::terrain::read(rdram, gx + 8, gy) == ((codes >> 8) & 0xFF)) mm::terrain::write(rdram, gx + 8, gy, 0);
+    MEM_W(kFieldSlopeAt, a) = 0;
+}
+
+// Stopped: rest (solid). A slope block instead becomes terrain where it lies.
+void come_to_rest(uint8_t* rdram, int slot) {
+    const gpr a = slot_addr(slot);
+    MEM_W(0xEC, a) = 0;
+    MEM_W(0xF0, a) = 0;
+    MEM_H(0xD0, a) = 0x0001;
+    MEM_W(0x80, a) = static_cast<int32_t>(kRestFlags);
+    if (!is_slope(rdram, a)) return;
+    const int cx = MEM_H(0, addr(0x800BE558u)), cy = MEM_H(0, addr(0x800BE55Cu));
+    const int wx = cx + MEM_H(0x88, a), wy = cy + MEM_H(0x8C, a);
+    // Centre on a cell border; a 16-tall block sits 7 px above its row's
+    // bottom (stage slope at y 839 fills the row 832-847).
+    const int gx = ((wx + 8) >> 4) << 4;
+    int gy = mm::terrain::cell_bottom(rdram, wy - 7) + 7;
+    if (std::abs(mm::terrain::cell_bottom(rdram, wy + 9) + 7 - wy) < std::abs(gy - wy)) {
+        gy = mm::terrain::cell_bottom(rdram, wy + 9) + 7;
+    }
+    for (int tries = 0; tries < 3; ++tries, gy += 16) {
+        if ((mm::terrain::read(rdram, gx - 8, gy) & 0xC0) != 0 || (mm::terrain::read(rdram, gx + 8, gy) & 0xC0) != 0) {
+            continue;                            // occupied: one row up
+        }
+        const uint32_t codes = static_cast<uint32_t>(MEM_W(kFieldSlope, a));
+        mm::terrain::write(rdram, gx - 8, gy, static_cast<uint8_t>(codes & 0xFF));
+        mm::terrain::write(rdram, gx + 8, gy, static_cast<uint8_t>((codes >> 8) & 0xFF));
+        MEM_W(0x88, a) = (gx - cx) << 16;
+        MEM_W(0x8C, a) = (gy - cy) << 16;
+        MEM_W(kFieldSlopeAt, a) = static_cast<int32_t>((static_cast<uint32_t>(gx) << 16) | (static_cast<uint32_t>(gy) & 0xFFFF));
+        // The terrain does the colliding. Flags without 0x00C30000 also keep
+        // the block out of the per-actor terrain collision (func_800160EC),
+        // which would push it out of its own cells; it stays grabbable (the
+        // brown carry blocks use 0x00001402).
+        MEM_W(0x80, a) = static_cast<int32_t>(kSlopeRestFlags);
+        return;
+    }
+    // No room on the grid: stay a solid box.
+}
+
 void block_setup(uint8_t* rdram, int slot) {
     const gpr a = slot_addr(slot);
     MEM_H(0x84, a) = kBlockImage;
@@ -159,6 +225,8 @@ void block_setup(uint8_t* rdram, int slot) {
     MEM_W(0x18C, a) = MEM_W(4 * 4, addr(kBlockSprites));
     MEM_W(0x80, a) = static_cast<int32_t>(kRestFlags);
     MEM_H(0xD0, a) = 0x0001;
+    MEM_W(kFieldSlope, a) = 0;
+    MEM_W(kFieldSlopeAt, a) = 0;
     g_scratch[slot] = Scratch{};
 }
 
@@ -176,6 +244,7 @@ void block_update(uint8_t* rdram, recomp_context* /*ctx*/, int slot) {
     if (holder_set) {
         MEM_W(0x98, a) = MEM_W(0x98, a) & ~0x200;
         if (state != 0x61) {
+            lift_slope(rdram, slot);
             MEM_H(0xD0, a) = 0x0161;
             MEM_W(0x80, a) = static_cast<int32_t>(kHeldFlags);
         }
@@ -212,6 +281,7 @@ void block_update(uint8_t* rdram, recomp_context* /*ctx*/, int slot) {
         MEM_W(0xEC, a) = 0;
         MEM_W(0xF0, a) = 0;
         if (supported(rdram, slot)) return;
+        lift_slope(rdram, slot);
         MEM_H(0xD0, a) = 0x0171;                 // support gone: fall (not solid meanwhile)
         MEM_W(0x80, a) = static_cast<int32_t>(kFlyingFlags);
         sc.frames = 0;
@@ -226,10 +296,7 @@ void block_update(uint8_t* rdram, recomp_context* /*ctx*/, int slot) {
     sc.base_y = y;
     int32_t vx = MEM_W(0xEC, a), vy = MEM_W(0xF0, a);
     if (blocked_y && supported(rdram, slot)) {
-        MEM_W(0xEC, a) = 0;                      // landed: rest, solid again
-        MEM_W(0xF0, a) = 0;
-        MEM_H(0xD0, a) = 0x0001;
-        MEM_W(0x80, a) = static_cast<int32_t>(kRestFlags);
+        come_to_rest(rdram, slot);               // landed: rest, solid again
         return;
     }
     if (blocked_y) vx /= 2;                      // scraping along: slow down
@@ -241,10 +308,7 @@ void block_update(uint8_t* rdram, recomp_context* /*ctx*/, int slot) {
         if (floor != kNoFloor) {
             MEM_W(0x88, a) = x + vx;             // land exactly on top of it
             MEM_W(0x8C, a) = (floor - MEM_H(0xB0, a)) << 16;
-            MEM_W(0xEC, a) = 0;
-            MEM_W(0xF0, a) = 0;
-            MEM_H(0xD0, a) = 0x0001;
-            MEM_W(0x80, a) = static_cast<int32_t>(kRestFlags);
+            come_to_rest(rdram, slot);
             return;
         }
     }
@@ -263,6 +327,11 @@ std::array<TypeInfo, 256> make_table() {
 const std::array<TypeInfo, 256> kTable = make_table();
 
 } // namespace
+
+void make_slope(uint8_t* rdram, int slot, uint8_t left_code, uint8_t right_code) {
+    MEM_W(kFieldSlope, slot_addr(slot)) =
+        static_cast<int32_t>(kSlopeMarker | (static_cast<uint32_t>(right_code) << 8) | left_code);
+}
 
 const TypeInfo* info(uint16_t type) {
     if ((type >> 8) != kBank) return nullptr;

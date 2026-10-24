@@ -11,6 +11,9 @@
 //   MM_TEST_WORDS=121@60               print all of a slot's words on a frame
 //   MM_TEST_PEEK=800C8040[:n]          print 8 (or n) words on frame 1
 //   MM_TEST_INSPECT=121                collision view on, that slot highlighted
+//   MM_TEST_SLOPE=dx,dy,41,45          spawn a slope block object (cell codes) on frame 5
+//   MM_TEST_ITEMS=frame                item records near the camera
+//   MM_TEST_TERRAIN="x,y;x,y"          terrain bytes around world points (frame 3)
 // With MM_TEST_SCRIPT, "[clock] t<frame> <unix time>" lines every 10 frames
 // line screenshots up with frames (Wine runs far slower than 60 fps).
 #include "dev_harness.h"
@@ -22,7 +25,9 @@
 
 #include "recomp.h"
 #include "actors.h"
+#include "custom_actors.h"
 #include "inspector.h"
+#include "terrain.h"
 #include "savestate.h"
 
 namespace mm::dev_harness {
@@ -142,7 +147,8 @@ void tick(uint8_t* rdram) {
                          static_cast<uint32_t>(MEM_W(((kind & 0x3FF0u) >> 4) * 4, addr(0x800D37BCu))), x, y);
         }
     }
-    if (const char* tm = std::getenv("MM_TEST_TERRAIN"); tm && t == 3) {
+    static const long terrain_at = std::getenv("MM_TEST_TERRAIN_AT") ? std::atol(std::getenv("MM_TEST_TERRAIN_AT")) : 3;
+    if (const char* tm = std::getenv("MM_TEST_TERRAIN"); tm && t == terrain_at) {
         // "x,y;x,y": terrain bytes every 8 px within 40 px of each world point.
         for (const char* p = tm; p && *p;) {
             int wx = 0, wy = 0;
@@ -163,6 +169,20 @@ void tick(uint8_t* rdram) {
             }
             p = std::strchr(p, ';');
             if (p) ++p;
+        }
+    }
+    if (const char* sl = std::getenv("MM_TEST_SLOPE"); sl && t == 5) {
+        // "dx,dy,left,right": a slope block object with those cell codes.
+        int dx = 40, dy = 30;
+        unsigned left = 0x41, right = 0x45;
+        std::sscanf(sl, "%d,%d,%x,%x", &dx, &dy, &left, &right);
+        const int slot = mm::actors::spawn_now(rdram, mm::custom_actors::type_id(mm::custom_actors::kBlock), dx, dy);
+        if (slot >= 0) {
+            const gpr a = slot_addr(slot);
+            MEM_H(0x84, a) = 0x44 + 2 * 0x19;
+            MEM_H(0xAA, a) = -16; MEM_H(0xAC, a) = 16; MEM_H(0xAE, a) = 8; MEM_H(0xB0, a) = -8;
+            mm::custom_actors::make_slope(rdram, slot, static_cast<uint8_t>(left), static_cast<uint8_t>(right));
+            std::fprintf(stderr, "[harness] slope block in slot %d\n", slot);
         }
     }
     if (inspect && t == 1) {

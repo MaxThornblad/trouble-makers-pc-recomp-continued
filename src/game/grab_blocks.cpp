@@ -1,5 +1,6 @@
 #include "grab_blocks.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 
@@ -7,6 +8,7 @@
 #include "cheats.h"
 #include "custom_actors.h"
 #include "recomp.h"
+#include "terrain.h"
 
 namespace mm::grab_blocks {
 namespace {
@@ -27,18 +29,8 @@ constexpr uint32_t kMarinaHold = 0x801370CCu;
 constexpr uint16_t kUp = 0x0800, kDown = 0x0400;
 constexpr int kReachX = 22, kReachY = 16, kReachTolerance = 26;
 
-// Terrain collision map, read by func_80012AB4(x, y) (camera-relative x/y,
-// which it turns into world pixels): one byte per 16x16 cell at 0x8010CDF0,
-// index ((x >> 4) & col_mask) + (((height - y - 1) << shift) & row_mask) for
-// world pixel (x, y), +y up. Bits 0xC0 = solid. It covers the whole stage
-// (1-9: height 2048, 512 columns) and is not streamed. Stage blocks are solid
-// because their cells are solid here; the item record only draws the block.
-constexpr uint32_t kTerrainMap = 0x8010CDF0u;
-constexpr uint32_t kTerrainHeight = 0x800BE648u;
-constexpr uint32_t kTerrainColMask = 0x800BE658u;
-constexpr uint32_t kTerrainRowMask = 0x800BE65Cu;
-constexpr uint32_t kTerrainShift = 0x800BE660u;
-
+// Stage blocks are solid because their cells in the terrain collision map
+// are (terrain.h); the item record only draws the block.
 
 gpr addr(uint32_t vaddr) {
     return static_cast<gpr>(static_cast<int32_t>(vaddr));
@@ -51,7 +43,7 @@ gpr slot_addr(int slot) {
 // Stage block kinds that can be picked up. Every block-like item handler
 // (table 0x800D37BC, indexed by (kind & 0x3FF0) >> 4) stores a shape number
 // in its draw slot (+0x80), taken from a 4-frame table at 0x800D3740 + 8 * n
-// (frame counter 0x800D37A4, or 0x800D37A8 for the cylinder kinds), and the
+// (frame counter 0x800D37A4, or 0x800D37A8 for the background kinds), and the
 // sprite 0x800D1968[colour] (+0x8C). The actor image for shape s is
 // 0x44 + 2 * s: the game's own break pieces (func_800441F4) use 0x46 / 0x4C /
 // 0x52 / 0x58 / 0x5E / 0x64 for shapes 1 / 4 / 7 / 10 / 13 / 16. Size comes
@@ -68,10 +60,7 @@ const Shape* shape_of(uint8_t* rdram, uint16_t kind) {
     static const Shape kWide{0x3748, 32, 16, true, "wall block (wide)"};
     static const Shape kTall{0x3750, 16, 32, true, "wall block (tall)"};
     static const Shape kSmall{0x3758, 16, 16, true, "small block"};
-    static const Shape kCylBlock{0x3740, 32, 32, false, "cylinder block"};
-    static const Shape kCylWide{0x3748, 32, 16, false, "cylinder (wide)"};
-    static const Shape kCylTall{0x3750, 16, 32, false, "cylinder (tall)"};
-    static const Shape kCylSmall{0x3758, 16, 16, false, "cylinder (small)"};
+    static const Shape kBig{0x3760, 32, 32, true, "big cylinder block"};
     static const Shape kSlope0{0x3780, 32, 16, false, "slope block"};
     static const Shape kSlope1{0x3788, 32, 16, false, "slope block"};
     static const Shape kSlope2{0x3790, 32, 16, false, "slope block"};
@@ -81,24 +70,20 @@ const Shape* shape_of(uint8_t* rdram, uint16_t kind) {
         case 0x02: return &kWide;
         case 0x03: return &kTall;
         case 0x04: return &kSmall;
-        case 0x11: return &kCylBlock;
-        case 0x12: return &kCylWide;
-        case 0x13: return &kCylTall;
-        case 0x14: return &kCylSmall;
+        case 0x06: return &kBig;               // 1-3: stacks of these, 32 px apart, 32 px wide in the terrain
         case 0x2B: case 0x2F: return &kSlope0;
         case 0x2C: case 0x30: return &kSlope1;
         case 0x2D: case 0x31: return &kSlope2;
         case 0x2E: case 0x32: return &kSlope3;
+        // 0x11-0x16 draw the same shapes darker with no terrain cells: background
+        // bricks behind the playfield (3-7, 1-3), not blocks. Left alone.
         default: return nullptr;
     }
     (void)rdram;
 }
 
-uint32_t terrain_cell(uint8_t* rdram, int x, int y) {
-    const uint32_t col = (static_cast<uint32_t>(x) & 0xFFFF) >> 4;
-    const uint32_t row = static_cast<uint32_t>(MEM_HU(0, addr(kTerrainHeight)) - y - 1) & 0xFFFF;
-    return kTerrainMap + (col & MEM_HU(0, addr(kTerrainColMask))) +
-           ((row << MEM_HU(0, addr(kTerrainShift))) & MEM_HU(0, addr(kTerrainRowMask)));
+bool is_slope(const Shape* shape) {
+    return shape->table >= 0x3780;
 }
 
 // The terrain cells (16 px) a block of w x h centred on its record (x, y)
@@ -110,22 +95,26 @@ int block_cells(uint8_t* rdram, int x, int y, int w, int h, uint32_t out[4]) {
         if (dy != 0 && h < 32) break;
         for (int dx : {-8, 8}) {
             const int px = w >= 32 ? x + dx : x;
-            out[n++] = terrain_cell(rdram, px, y + dy);
+            out[n++] = mm::terrain::cell(rdram, px, y + dy);
             if (w < 32) break;
         }
     }
     return n;
 }
 
-// Is a block object already within Marina's reach? Then her grab takes that.
+// Is a block object right at Marina's hand? Then her grab takes that. (Only
+// close to its box: a block object she stands on is near her hand too, but
+// her grab can't reach it, and must not stop her taking the stage block.)
 bool object_in_reach(uint8_t* rdram, int fx, int fy) {
     const int cx = MEM_H(0, addr(kCameraX)), cy = MEM_H(0, addr(kCameraY));
     const uint16_t type = mm::custom_actors::type_id(mm::custom_actors::kBlock);
+    constexpr int kSlack = 6;
     for (int s = 1; s < 0x90; ++s) {
         const gpr a = slot_addr(s);
         if (MEM_W(0x80, a) == 0 || MEM_HU(0xD2, a) != type) continue;
-        if (std::abs(cx + MEM_H(0x88, a) - fx) <= kReachTolerance &&
-            std::abs(cy + MEM_H(0x8C, a) - fy) <= kReachTolerance) {
+        const int ox = cx + MEM_H(0x88, a), oy = cy + MEM_H(0x8C, a);
+        if (fx >= ox + MEM_H(0xAA, a) - kSlack && fx <= ox + MEM_H(0xAC, a) + kSlack &&
+            fy >= oy + MEM_H(0xB0, a) - kSlack && fy <= oy + MEM_H(0xAE, a) + kSlack) {
             return true;
         }
     }
@@ -187,8 +176,12 @@ void on_item_list(uint8_t* rdram, uint32_t list) {
     if (slot < 0) return;
     const Shape* shape = shape_of(rdram, kind);
     const gpr a = slot_addr(slot);
-    // Look like the stage block: its shape's image, its colour's sprite.
-    const uint16_t first_frame = MEM_HU(0, addr(0x800D0000u | shape->table));
+    // Look like the stage block: its shape's image (the table's lowest frame,
+    // as the game's break pieces use), its colour's sprite.
+    uint16_t first_frame = 0xFFFF;
+    for (int f = 0; f < 4; ++f) {
+        first_frame = std::min<uint16_t>(first_frame, MEM_HU(2 * f, addr(0x800D0000u | shape->table)));
+    }
     MEM_H(0x84, a) = static_cast<int16_t>(0x44 + 2 * first_frame);
     MEM_W(0x18C, a) = MEM_W((kind & 0xF) * 4, addr(kBlockSprites));
     // Same size for collision, standing on it and landing.
@@ -196,9 +189,13 @@ void on_item_list(uint8_t* rdram, uint32_t list) {
     MEM_H(0xAC, a) = static_cast<int16_t>(shape->w / 2);
     MEM_H(0xAE, a) = static_cast<int16_t>(shape->h / 2);
     MEM_H(0xB0, a) = static_cast<int16_t>(-shape->h / 2);
-    // Take the stage block out for good: no drawing, no collision.
+    // Take the stage block out for good: no drawing, no collision. A slope
+    // keeps its two cells' slope codes so it can put them back where it lands.
     uint32_t cells[4];
     const int count = block_cells(rdram, bx, by, shape->w, shape->h, cells);
+    if (is_slope(shape) && count == 2) {
+        mm::custom_actors::make_slope(rdram, slot, MEM_BU(0, addr(cells[0])), MEM_BU(0, addr(cells[1])));
+    }
     for (int i = 0; i < count; ++i) MEM_B(0, addr(cells[i])) = 0;
     MEM_H(0, addr(best)) = static_cast<int16_t>(kind | kGone);
     std::fprintf(stderr, "[grab-blocks] %s %03X at %d,%d is now an object (slot %d, image %02X)\n",

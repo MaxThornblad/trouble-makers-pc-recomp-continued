@@ -48,6 +48,10 @@ struct TypeInfo {
     SetupFn setup;
 };
 
+// Turn a kBlock into a slope block: at rest it writes these two terrain
+// cell codes (left, right) instead of being a solid box.
+void make_slope(uint8_t* rdram, int slot, uint8_t left_code, uint8_t right_code);
+
 // nullptr for an index with no type.
 const TypeInfo* info(uint16_t type);
 
