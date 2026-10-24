@@ -10,6 +10,7 @@
 #include <string>
 
 #include "gem_compass.h"
+#include "grab_blocks.h"
 #include "mm_audio_input.hpp"
 #include "recomp.h"
 
@@ -38,6 +39,10 @@ constexpr std::array<CheatInfo, kCheatCount> kCheats{{
       "Gems near Marina fly to her and are collected: red, blue, green and "
       "golden gems placed in the stage as well as gems knocked out of "
       "enemies." },
+    { "grab_blocks", "Grabbable blocks",
+      "Marina can grab plain stage blocks like any other object: carry them, "
+      "throw them or set them down. A block comes to rest on the 32-pixel "
+      "block grid and is solid again. Breakable (red) blocks are left alone." },
 }};
 
 std::array<std::atomic<bool>, kCheatCount> g_enabled{};
@@ -291,6 +296,7 @@ void gem_magnet(uint8_t* rdram, uint32_t list) {
 
 extern "C" void mm_item_list_hook(uint8_t* rdram, uint32_t list) {
     mm::gem_compass::scan_items(rdram, list);
+    mm::grab_blocks::on_item_list(rdram, list);
     mm::cheats::gem_magnet(rdram, list);
 }
 
@@ -300,6 +306,10 @@ extern "C" int mm_cheat_skip_terrain(uint8_t* rdram, uint32_t actor_index) {
     return (actor_index & 0xFFFF) == 0 && g_active.load(std::memory_order_relaxed) &&
            enabled(Cheat::NoClip) &&
            MEM_HU(0, addr(kGameState)) == 6;
+}
+
+bool grab_blocks_live() {
+    return g_active.load(std::memory_order_relaxed) && enabled(Cheat::GrabBlocks);
 }
 
 const char* name(Cheat cheat) { return kCheats[static_cast<int>(cheat)].name; }

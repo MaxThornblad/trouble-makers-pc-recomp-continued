@@ -2,6 +2,8 @@
 #include "cheats.h"
 #include "rank_timer.h"
 #include "gem_compass.h"
+#include "actors.h"
+#include "spawn_catalog.h"
 #include "enemy_bars.h"
 #include "gem_hints.h"
 #include "rumble.h"
@@ -114,10 +116,21 @@ std::atomic_bool g_waiting_for_release{false};
 std::atomic<int> g_page{0};
 std::atomic<int> g_selected_warp{0};
 std::atomic<int> g_selected_cheat{0};
-// Pages: 0 Level Warp, 1 Cheats, 2 Session.
+// Pages: 0 Level Warp, 1 Cheats, 2 Spawn, 3 Session.
 constexpr int kPageWarp = 0;
 constexpr int kPageCheats = 1;
-constexpr int kPageCount = 3;
+constexpr int kPageSpawn = 2;
+constexpr int kPageCount = 4;
+std::atomic<int> g_selected_spawn{0};
+std::atomic<bool> g_spawn_show_all{false};
+
+// Spawn page rows: the curated catalogue (or every safe shared type when
+// "show all" is on), then the show-all toggle and "remove spawned objects".
+int spawn_row_count() {
+    return (g_spawn_show_all.load(std::memory_order_relaxed)
+                ? mm::spawn_catalog::kSafeTypeCount
+                : mm::spawn_catalog::kCatalogCount) + 2;
+}
 std::atomic<int> g_pending_warp{-1};
 std::atomic<int> g_current_stage{-1};
 std::atomic<int> g_current_scene{-1};
@@ -192,6 +205,13 @@ void move_selection(int delta) {
         g_selected_cheat.store(selected, std::memory_order_relaxed);
         return;
     }
+    if (page == kPageSpawn) {
+        const int count = spawn_row_count();
+        int selected = g_selected_spawn.load(std::memory_order_relaxed);
+        selected = (selected + delta + count) % count;
+        g_selected_spawn.store(selected, std::memory_order_relaxed);
+        return;
+    }
     if (page != kPageWarp) {
         return;
     }
@@ -221,6 +241,21 @@ void activate_selection() {
             mm::cheats::toggle_damage_numbers();
         } else {
             mm::cheats::toggle(static_cast<mm::cheats::Cheat>(selected));
+        }
+        return;
+    }
+    if (page == kPageSpawn) {
+        const int rows = spawn_row_count();
+        const int selected = g_selected_spawn.load(std::memory_order_relaxed);
+        if (selected == rows - 2) {
+            g_spawn_show_all.store(!g_spawn_show_all.load());
+            g_selected_spawn.store(spawn_row_count() - 2, std::memory_order_relaxed);
+        } else if (selected == rows - 1) {
+            mm::actors::request_clear();
+        } else if (g_spawn_show_all.load(std::memory_order_relaxed)) {
+            mm::actors::request_spawn(mm::spawn_catalog::kSafeTypes[selected]);
+        } else {
+            mm::actors::request_spawn(mm::spawn_catalog::kCatalog[selected].type);
         }
         return;
     }
@@ -340,6 +375,7 @@ extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
     mm::gem_hints::publish(rdram);
     mm::gem_compass::publish(rdram);
     mm::rumble::tick(rdram);
+    mm::actors::tick(rdram);
     mm::enemy_bars::publish(rdram);
     mm::cheats::set_active(g_enabled.load(std::memory_order_acquire));
 
@@ -412,9 +448,10 @@ void draw_overlay() {
 
     const int page = g_page.load(std::memory_order_relaxed);
     static const char* const kPageTitles[kPageCount] = {
-        "[ Level Warp ]   Cheats     Session  ",
-        "  Level Warp   [ Cheats ]   Session  ",
-        "  Level Warp     Cheats   [ Session ]",
+        "[ Level Warp ]   Cheats     Spawn     Session  ",
+        "  Level Warp   [ Cheats ]   Spawn     Session  ",
+        "  Level Warp     Cheats   [ Spawn ]   Session  ",
+        "  Level Warp     Cheats     Spawn   [ Session ]",
     };
     ImGui::TextUnformatted(kPageTitles[page]);
     ImGui::SameLine();
@@ -625,6 +662,52 @@ void draw_overlay() {
         }
         ImGui::EndChild();
         ImGui::TextDisabled("Up/Down: select   Enter/A: change   Esc/B: close");
+    }
+    else if (page == kPageSpawn) {
+        const bool show_all = g_spawn_show_all.load(std::memory_order_relaxed);
+        ImGui::TextWrapped(
+            "Enter/A drops the object a short step in front of Marina, in the "
+            "direction she last walked. Up to %d spawned objects at a time; they "
+            "disappear when you leave the stage.", mm::actors::kMaxSpawned);
+        ImGui::TextDisabled("%s   (%d spawned now)", mm::actors::last_result(),
+                            mm::actors::spawned_count());
+        ImGui::Spacing();
+        const int selected = g_selected_spawn.load(std::memory_order_relaxed);
+        const int rows = spawn_row_count();
+        ImGui::BeginChild("##spawn", ImVec2(0.0f, -34.0f), true);
+        for (int i = 0; i < rows - 2; ++i) {
+            char row[128];
+            if (show_all) {
+                const uint16_t type = mm::spawn_catalog::kSafeTypes[i];
+                const char* name = mm::spawn_catalog::name_of(type);
+                std::snprintf(row, sizeof row, "0x%02X   %s", type, name ? name : "(unnamed)");
+            } else {
+                const auto& e = mm::spawn_catalog::kCatalog[i];
+                std::snprintf(row, sizeof row, "%-28s 0x%02X", e.name, e.type);
+            }
+            ImGui::Selectable(row, i == selected);
+            if (i == selected) {
+                ImGui::SetScrollHereY(0.5f);
+                if (!show_all && mm::spawn_catalog::kCatalog[i].note[0] != '\0') {
+                    ImGui::Indent();
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                    ImGui::TextWrapped("%s", mm::spawn_catalog::kCatalog[i].note);
+                    ImGui::PopStyleColor();
+                    ImGui::Unindent();
+                }
+            }
+        }
+        ImGui::Separator();
+        {
+            char row[96];
+            std::snprintf(row, sizeof row, "%-5s Show every shared object type", show_all ? "[ON]" : "[  ]");
+            ImGui::Selectable(row, selected == rows - 2);
+            if (selected == rows - 2) ImGui::SetScrollHereY(0.5f);
+        }
+        ImGui::Selectable("      Remove spawned objects", selected == rows - 1);
+        if (selected == rows - 1) ImGui::SetScrollHereY(0.5f);
+        ImGui::EndChild();
+        ImGui::TextDisabled("Up/Down: select   Enter/A: spawn   Esc/B: close");
     }
     else {
         ImGui::TextUnformatted("Debug session status");

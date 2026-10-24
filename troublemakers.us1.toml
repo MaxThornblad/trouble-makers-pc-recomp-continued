@@ -267,6 +267,9 @@ hook = [
     # Cheats (src/game/cheats.cpp): No clip skips the per-actor terrain
     # collision pass for Marina (actor index 0 in $a0).
     { func = "func_800160EC", text = '{ extern int mm_cheat_skip_terrain(uint8_t*, uint32_t); if (mm_cheat_skip_terrain(rdram, (uint32_t)ctx->r4)) return; }' },
+    # Custom actor table (src/game/custom_actors.cpp): bank 0x7F types run in
+    # C++; every other type falls through to the game's bank switch.
+    { func = "func_80016E70", text = '{ extern int mm_custom_actor_dispatch(uint8_t*, recomp_context*); if (mm_custom_actor_dispatch(rdram, ctx)) return; }' },
     # Rumble (src/game/rumble.cpp): every sound effect goes through
     # Sound_AddSfx(id in $a0, ..., volume at 0x10($sp)); explosions rumble.
     { func = "Sound_AddSfx", text = '{ extern void mm_rumble_sfx(uint8_t*, uint32_t, uint32_t); mm_rumble_sfx(rdram, (uint32_t)ctx->r4, (uint32_t)MEM_W(0x10, ctx->r29)); }' },

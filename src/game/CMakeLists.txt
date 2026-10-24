@@ -26,6 +26,10 @@ add_executable(troublemakers
     cheats.cpp
     debug_menu.cpp
     gem_hints.cpp
+    actors.cpp
+    custom_actors.cpp
+    grab_blocks.cpp
+    spawn_catalog.cpp
     enemy_bars.cpp
     gem_compass.cpp
     rank_timer.cpp

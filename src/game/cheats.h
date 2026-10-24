@@ -13,6 +13,7 @@ enum class Cheat : int {
     MoonJump,
     NoClip,
     GemMagnet,
+    GrabBlocks,
     Count,
 };
 
@@ -69,5 +70,9 @@ void apply(uint8_t* rdram);
 // Whether cheats are in effect (the debug menu is enabled). Cheats that act
 // from game-code hooks (no clip, gem magnet) check this.
 void set_active(bool active);
+
+// Grabbable blocks (src/game/grab_blocks.cpp): the cheat is on and cheats are
+// live this frame (debug menu enabled).
+bool grab_blocks_live();
 
 } // namespace mm::cheats
