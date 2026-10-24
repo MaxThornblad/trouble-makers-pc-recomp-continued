@@ -46,6 +46,7 @@ Marina-specific: hold buttons `0x801370CC`, press `0x801370CE` (D-pad bits come
 from `0x800BE50C` left / `0x800BE510` right; up `0x0800`, down `0x0400`, A
 `0x8000`, B `0x4000`). States: `0x020B` ground jet, `0x0110` air jet, `0x0116`
 jump rise, `0x0216` fall, `0x0401` hurt, `0x0230` held-and-struggling *(guess)*,
+`0x?10B` ground jet (`0x810B` seen jetting left; `+0x150` counts 15 → 0, full speed while ≥ 8; flag `0x20` is not set during a left jet, the jet's `+0xEC` sign gives its direction), `0x?110` air jet,
 `0x011F` grab reach, `0x0122` lift, `0x0004` holding, `0x021A` wind-up, `0x0126` throw.
 
 ### Grabbing and throwing

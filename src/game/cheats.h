@@ -55,6 +55,13 @@ void toggle_enemy_bars();
 bool damage_numbers_enabled();
 void toggle_damage_numbers();
 
+// Hold to dash (a setting, not a cheat; on by default; works without the
+// debug menu): after a double-tap jet, holding that direction keeps the jet
+// going at full speed, as if double-tapping again and again.
+bool hold_dash_enabled();
+void toggle_hold_dash();
+void apply_settings(uint8_t* rdram);   // every frame, debug menu or not
+
 // Controller rumble strength (src/game/rumble.cpp): 0 off, 1 low, 2 medium
 // (default), 3 high. Works without the debug menu.
 int rumble_level();

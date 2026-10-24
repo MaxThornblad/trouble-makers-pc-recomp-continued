@@ -54,6 +54,7 @@ std::atomic<bool> g_gem_compass{false};
 std::atomic<int> g_rumble_level{2};
 std::atomic<bool> g_enemy_bars{true};
 std::atomic<bool> g_damage_numbers{true};
+std::atomic<bool> g_hold_dash{true};
 std::atomic<bool> g_active{false};
 std::filesystem::path g_path;
 std::mutex g_file_mutex;
@@ -80,6 +81,7 @@ void save() {
     f << "rumble=" << g_rumble_level.load() << '\n';
     f << "enemy_bars=" << (g_enemy_bars.load() ? 1 : 0) << '\n';
     f << "damage_numbers=" << (g_damage_numbers.load() ? 1 : 0) << '\n';
+    f << "hold_dash=" << (g_hold_dash.load() ? 1 : 0) << '\n';
 }
 
 // --- Endless jet -----------------------------------------------------------
@@ -118,9 +120,9 @@ constexpr int32_t kClimbSpeed = 0x18000;       // 1.5 px/frame
 void apply_endless_jet(uint8_t* rdram) {
     if (MEM_HU(0, addr(kGameState)) != 6) return;           // gameplay only
     const gpr marina = addr(kMarina);
-    const uint16_t state = MEM_HU(0xD0, marina);
-    const bool ground = state == kGroundJetState;
-    const bool air = state == kAirJetState;
+    const uint16_t action = MEM_HU(0xD0, marina) & 0xFF;     // high byte varies (0x810B: jet left)
+    const bool ground = action == (kGroundJetState & 0xFF);
+    const bool air = action == (kAirJetState & 0xFF);
     if (!ground && !air) return;
     const uint16_t hold = MEM_HU(0, addr(kMarinaHold));
     if ((hold & kDirectionMask) == 0) return;
@@ -133,6 +135,37 @@ void apply_endless_jet(uint8_t* rdram) {
         MEM_W(kGravityStep, marina) = 0;
     }
 
+    const uint32_t timer = static_cast<uint32_t>(MEM_W(kJetTimer, marina));
+    if (timer == 0 || timer > kRetriggerAt) return;
+    MEM_W(kJetTimer, marina) = kJetDuration;
+    MEM_H(kJetAnimStep, marina) = 0x0100;
+    MEM_B(kJetAnimFrame, marina) = 1;
+}
+
+// --- Hold to dash ------------------------------------------------------------
+//
+// The same re-trigger as endless jet, on the ground and in the air, but only
+// while the held direction is the way the jet goes (the game's own D-pad
+// masks at 0x800BE50C / 0x800BE510), and
+// without endless jet's free flight: an air jet still arcs down.
+constexpr uint32_t kButtonLeft = 0x800BE50Cu;
+constexpr uint32_t kButtonRight = 0x800BE510u;
+
+void apply_hold_dash(uint8_t* rdram) {
+    const uint16_t game_state = MEM_HU(0, addr(kGameState));
+    if (game_state != 6 && game_state != 10) return;
+    const gpr marina = addr(kMarina);
+    // Low byte = action (high byte: phase / variant; 0x810B is the ground
+    // jet to the left in 1-9).
+    const uint16_t action = MEM_HU(0xD0, marina) & 0xFF;
+    if (action != (kGroundJetState & 0xFF) && action != (kAirJetState & 0xFF)) return;
+    const uint16_t hold = MEM_HU(0, addr(kMarinaHold));
+    // Which way the jet goes: its horizontal velocity (+0xEC). (Flag 0x20,
+    // facing left when standing, is not set during a left jet.)
+    const int32_t vx = MEM_W(0xEC, marina);
+    if (vx == 0) return;
+    const uint16_t forward = MEM_HU(0, addr(vx < 0 ? kButtonLeft : kButtonRight));
+    if ((hold & forward) == 0) return;
     const uint32_t timer = static_cast<uint32_t>(MEM_W(kJetTimer, marina));
     if (timer == 0 || timer > kRetriggerAt) return;
     MEM_W(kJetTimer, marina) = kJetDuration;
@@ -338,6 +371,10 @@ void configure(const std::filesystem::path& folder) {
         if (eq == std::string::npos) continue;
         const std::string key = line.substr(0, eq);
         const bool on = line.substr(eq + 1) == "1";
+        if (key == "hold_dash") {
+            g_hold_dash.store(on);
+            continue;
+        }
         if (key == "damage_numbers") {
             g_damage_numbers.store(on);
             continue;
@@ -436,6 +473,23 @@ void toggle_enemy_bars() {
     g_enemy_bars.store(now, std::memory_order_release);
     std::fprintf(stderr, "[cheats] enemy health bars %s\n", now ? "on" : "off");
     save();
+}
+
+bool hold_dash_enabled() {
+    return g_hold_dash.load(std::memory_order_acquire);
+}
+
+void toggle_hold_dash() {
+    const bool now = !g_hold_dash.load();
+    g_hold_dash.store(now, std::memory_order_release);
+    std::fprintf(stderr, "[cheats] hold to dash %s\n", now ? "on" : "off");
+    save();
+}
+
+void apply_settings(uint8_t* rdram) {
+    // Endless jet (a cheat) already covers this, and adds flight.
+    if (g_active.load(std::memory_order_relaxed) && (enabled(Cheat::EndlessJet) || enabled(Cheat::NoClip))) return;
+    if (g_hold_dash.load(std::memory_order_relaxed)) apply_hold_dash(rdram);
 }
 
 bool damage_numbers_enabled() {

@@ -207,7 +207,7 @@ void change_page(int delta) {
 void move_selection(int delta) {
     const int page = g_page.load(std::memory_order_relaxed);
     if (page == kPageCheats) {
-        const int count = mm::cheats::kCheatCount + 7;   // + fast-forward speed, rank timer, gem hints, gem compass, rumble, enemy bars, damage number rows
+        const int count = mm::cheats::kCheatCount + 8;   // + fast-forward speed, rank timer, gem hints, gem compass, rumble, enemy bars, damage numbers, hold to dash rows
         int selected = g_selected_cheat.load(std::memory_order_relaxed);
         selected = (selected + delta + count) % count;
         g_selected_cheat.store(selected, std::memory_order_relaxed);
@@ -254,6 +254,8 @@ void activate_selection() {
             mm::cheats::toggle_enemy_bars();
         } else if (selected == mm::cheats::kCheatCount + 6) {
             mm::cheats::toggle_damage_numbers();
+        } else if (selected == mm::cheats::kCheatCount + 7) {
+            mm::cheats::toggle_hold_dash();
         } else {
             mm::cheats::toggle(static_cast<mm::cheats::Cheat>(selected));
         }
@@ -400,6 +402,7 @@ extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
     mm::gem_hints::publish(rdram);
     mm::gem_compass::publish(rdram);
     mm::rumble::tick(rdram);
+    mm::cheats::apply_settings(rdram);
     mm::actors::tick(rdram);
     mm::dev_harness::tick(rdram);
     mm::enemy_bars::publish(rdram);
@@ -684,6 +687,30 @@ void draw_overlay() {
                     "The damage of each hit floats up from whoever took it: yellow "
                     "for enemies, red for Marina. Works even with the debug menu "
                     "turned off.");
+                ImGui::PopStyleColor();
+                ImGui::Unindent();
+            }
+        }
+        {
+            const bool row_selected = selected == mm::cheats::kCheatCount + 7;
+            const bool on = mm::cheats::hold_dash_enabled();
+            char row[96];
+            std::snprintf(row, sizeof row, "%-5s Hold to dash", on ? "[ON]" : "[  ]");
+            if (on) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.95f, 0.55f, 1.0f));
+            }
+            ImGui::Selectable(row, row_selected);
+            if (on) {
+                ImGui::PopStyleColor();
+            }
+            if (row_selected) {
+                ImGui::SetScrollHereY(0.5f);
+                ImGui::Indent();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::TextWrapped(
+                    "Double-tap a direction to jet, then keep holding it: the jet keeps "
+                    "going at full speed until you let go, no more tapping. In the air "
+                    "the jet still arcs down. Works even with the debug menu turned off.");
                 ImGui::PopStyleColor();
                 ImGui::Unindent();
             }

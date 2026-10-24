@@ -268,6 +268,10 @@ object in her hands that she can carry, throw or set down anywhere. Like the
 pot it can be stood on, and it is solid from the sides too, so blocks can be
 stacked; grab it again to move it. A slope block keeps its slope where it
 lands (it settles onto the 16-pixel terrain grid to do so). Breakable red blocks are left to the game.
+**Hold to dash** (a setting on the same page, on by default, and working with
+the debug menu turned off): after a double-tap jet, keep holding the
+direction and the jet keeps going at full speed until you let go, instead of
+double-tapping over and over. In the air the jet still arcs down.
 **Golden gem compass**
 (a setting on the same page, off by default, and working with the debug menu
 turned off) puts a gold arrow at the edge of the screen pointing to the
