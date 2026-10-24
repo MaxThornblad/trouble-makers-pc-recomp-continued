@@ -112,6 +112,46 @@ bool supported(uint8_t* rdram, int slot) {
     return false;
 }
 
+// Falling from old_bottom to new_bottom (camera-relative px, +y up) with
+// the block's columns at x: the highest floor met on the way (terrain cell
+// top or a solid actor's top), or kNoFloor. Landing is done here rather than
+// left to the terrain collision, which pushes a block that sinks into the
+// edge of another sideways, so blocks slid off instead of stacking.
+constexpr int kNoFloor = -100000;
+
+bool terrain_solid(uint8_t* rdram, int x, int y) {
+    recomp_context ctx{};
+    ctx.r29 = addr(kScratchStack);
+    ctx.r4 = static_cast<gpr>(static_cast<int16_t>(x));
+    ctx.r5 = static_cast<gpr>(static_cast<int16_t>(y));
+    func_80012AB4(rdram, &ctx);
+    return (ctx.r2 & 0xC0) != 0;
+}
+
+int floor_between(uint8_t* rdram, int slot, int x, int old_bottom, int new_bottom) {
+    const gpr a = slot_addr(slot);
+    const int left = x + MEM_H(0xAA, a) + 2, right = x + MEM_H(0xAC, a) - 2;
+    int best = kNoFloor;
+    for (int px : {left, x, right}) {
+        for (int py = old_bottom - 1; py >= new_bottom - 1; --py) {
+            if (terrain_solid(rdram, px, py)) {
+                if (!terrain_solid(rdram, px, py + 1)) best = std::max(best, py + 1);
+                break;
+            }
+        }
+    }
+    for (int s = 0; s < 0x90; ++s) {
+        if (s == slot) continue;
+        const gpr o = slot_addr(s);
+        if ((static_cast<uint32_t>(MEM_W(0x80, o)) & (kSolid | kPlatform)) == 0) continue;
+        const int ox = MEM_H(0x88, o);
+        if (right < ox + MEM_H(0xAA, o) || left > ox + MEM_H(0xAC, o)) continue;
+        const int top = MEM_H(0x8C, o) + MEM_H(0xAE, o);
+        if (top <= old_bottom + 2 && top >= new_bottom) best = std::max(best, top);
+    }
+    return best;
+}
+
 void block_setup(uint8_t* rdram, int slot) {
     const gpr a = slot_addr(slot);
     MEM_H(0x84, a) = kBlockImage;
@@ -194,6 +234,20 @@ void block_update(uint8_t* rdram, recomp_context* /*ctx*/, int slot) {
     }
     if (blocked_y) vx /= 2;                      // scraping along: slow down
     vy = std::max(vy - kGravity, kMaxFall);
+    if (vy < 0) {
+        const int nx = (x + vx) >> 16;
+        const int bottom = (y >> 16) + MEM_H(0xB0, a);
+        const int floor = floor_between(rdram, slot, nx, bottom, bottom + (vy >> 16) - 1);
+        if (floor != kNoFloor) {
+            MEM_W(0x88, a) = x + vx;             // land exactly on top of it
+            MEM_W(0x8C, a) = (floor - MEM_H(0xB0, a)) << 16;
+            MEM_W(0xEC, a) = 0;
+            MEM_W(0xF0, a) = 0;
+            MEM_H(0xD0, a) = 0x0001;
+            MEM_W(0x80, a) = static_cast<int32_t>(kRestFlags);
+            return;
+        }
+    }
     MEM_W(0x88, a) = x + vx;
     MEM_W(0x8C, a) = y + vy;
     MEM_W(0xEC, a) = vx;
