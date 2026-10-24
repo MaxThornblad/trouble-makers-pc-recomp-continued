@@ -33,6 +33,8 @@
 #include "ultramodern/ultramodern.hpp"
 #include "savestate.h"
 
+extern "C" void func_8006CFDC(uint8_t* rdram, recomp_context* ctx);
+
 namespace mm::dev_harness {
 namespace {
 
@@ -108,7 +110,7 @@ void tick(uint8_t* rdram) {
     static const char* peek = std::getenv("MM_TEST_PEEK");
     static const char* words = std::getenv("MM_TEST_WORDS");   // slot@frame: all words
     static const char* inspect = std::getenv("MM_TEST_INSPECT");   // =slot: collision view on, slot selected
-    if (!std::getenv("MM_TEST_SETHP") && !std::getenv("MM_TEST_FFWD") && !std::getenv("MM_TEST_CRASH") && !script && !dump && !trace && !diff && !spawn && !peek && !words && !inspect) return;
+    if (!std::getenv("MM_TEST_KILL") && !std::getenv("MM_TEST_SETHP") && !std::getenv("MM_TEST_FFWD") && !std::getenv("MM_TEST_CRASH") && !script && !dump && !trace && !diff && !spawn && !peek && !words && !inspect) return;
     static uint32_t generation = 0;
     static long t = 0;
     static uint16_t prev = 0;
@@ -200,9 +202,23 @@ void tick(uint8_t* rdram) {
         std::fprintf(stderr, "[harness] crashing on purpose (crash report test)\n");
         *reinterpret_cast<volatile int*>(static_cast<uintptr_t>(0x10)) = 1;
     }
-    if (const char* sh = std::getenv("MM_TEST_SETHP"); sh && t == 10) {
-        int slot = 0, hp = 0;                    // "slot:hp" on frame 10
-        if (std::sscanf(sh, "%d:%d", &slot, &hp) == 2) MEM_H(0xE0, slot_addr(slot)) = static_cast<int16_t>(hp);
+    if (const char* sh = std::getenv("MM_TEST_SETHP")) {
+        int slot = 0, hp = 0;                    // "slot:hp[@frame]" (frame 10 by default)
+        long at = 10;
+        if (std::sscanf(sh, "%d:%d@%ld", &slot, &hp, &at) >= 2 && t == at) {
+            MEM_H(0xE0, slot_addr(slot)) = static_cast<int16_t>(hp);
+        }
+    }
+    if (const char* kl = std::getenv("MM_TEST_KILL")) {
+        int slot = 0;                            // "slot@frame": the game's Clancer death (func_8006CFDC)
+        long at = 0;
+        if (std::sscanf(kl, "%d@%ld", &slot, &at) == 2 && t == at) {
+            recomp_context ctx{};
+            ctx.r29 = static_cast<gpr>(static_cast<int32_t>(0x8045FF00u));
+            ctx.r4 = static_cast<gpr>(slot);
+            func_8006CFDC(rdram, &ctx);
+            std::fprintf(stderr, "[harness] killed slot %d\n", slot);
+        }
     }
     if (inspect && t == 1) {
         if (!mm::inspector::overlay_enabled()) mm::inspector::toggle_overlay();

@@ -272,9 +272,10 @@ lands (it settles onto the 16-pixel terrain grid to do so). Breakable red blocks
 the debug menu turned off): after a double-tap jet, keep holding the
 direction and the jet keeps going at full speed until you let go, instead of
 double-tapping over and over. In the air the jet still arcs down.
-**Mortal NPCs** lets the characters the game keeps alive (the hopping
-Clancers in 1-2 and 1-3 and others built the same way) be beaten like
-enemies: thrown or hit, they lose health and go down when it runs out.
+**Mortal NPCs** lets the characters the game keeps alive be beaten like
+enemies: the hopping Clancers in 1-2 and 1-3 die like any 1-health enemy,
+and scripted characters that are held at 10000 health (the 1-1 cast and the
+like) go down after about two throws.
 **Golden gem compass**
 (a setting on the same page, off by default, and working with the debug menu
 turned off) puts a gold arrow at the edge of the screen pointing to the

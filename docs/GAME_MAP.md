@@ -78,7 +78,10 @@ directly does not kill: death follows a hit (hurt states `0x?51` and up).
 health to `0x4000` once it is 0 or less in a hurt state if bit `0x80` is set
 in `+0x150`: that is what keeps the 1-2 / 1-3 hoppers (types `0x1818`,
 `0x181A`, health 1) alive. Without it a thrown hopper goes to `0x1C1` and
-turns into a drop (`0x0063`).
+turns into the rising spirit (`0x0063`, made by `func_8006CFDC(slot)`, which
+then vanishes). Scripted characters (1-1 tutorial cast `0x1806`, other stage
+types) set health to 10000 at the start of every update
+(`func_801A9880_710B10` and others): a hit shows as one frame of 9950.
 
 ### Collision
 

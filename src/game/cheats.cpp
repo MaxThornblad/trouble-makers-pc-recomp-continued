@@ -14,6 +14,7 @@
 #include "inspector.h"
 #include "mm_audio_input.hpp"
 #include "recomp.h"
+#include "savestate.h"
 
 namespace mm::cheats {
 namespace {
@@ -347,6 +348,66 @@ extern "C" void mm_mortal_hook(uint8_t* rdram, uint32_t slot) {
     MEM_W(0x150, a) = MEM_W(0x150, a) & ~0x80;
 }
 
+// The other kind of immortal: scripted characters (the 1-1 tutorial cast,
+// type 0x1806, and other stage types) whose update sets health back to
+// 10000 every frame (e.g. func_801A9880_710B10), so hits (seen as a drop
+// below that for one frame, -50 for a throw) never add up. With the cheat on
+// they get a shadow health of kShadowHealth that each such drop takes from;
+// when it runs out they get the game's own Clancer death (func_8006CFDC:
+// turns the actor into the rising-spirit type 0x63, which then vanishes).
+extern "C" void func_8006CFDC(uint8_t* rdram, recomp_context* ctx);
+
+namespace mm::cheats {
+namespace {
+
+constexpr int kRefillHealth = 5000;              // at or above: kept alive by a refill
+constexpr int kShadowHealth = 150;               // about two throws (a throw often lands two -50 hits)
+
+struct Shadow {
+    uint16_t type = 0;
+    int16_t full = 0;                            // the health it is held at
+    int health = 0;
+};
+std::array<Shadow, 0x90> g_shadow;
+uint32_t g_shadow_generation = 0;
+
+void apply_mortal_refills(uint8_t* rdram) {
+    const uint32_t generation = mm::savestate::load_generation();
+    if (generation != g_shadow_generation) {
+        g_shadow = {};
+        g_shadow_generation = generation;
+    }
+    for (int slot = 1; slot < 0x90; ++slot) {
+        const gpr a = addr(0x800EF510u + static_cast<uint32_t>(slot) * 0x198u);
+        Shadow& sh = g_shadow[slot];
+        const uint16_t type = MEM_W(0x80, a) != 0 ? MEM_HU(0xD2, a) : 0;
+        if (type == 0 || (type >> 8) == 0x7F) {
+            sh = {};
+            continue;
+        }
+        const int16_t hp = MEM_H(0xE0, a);
+        if (sh.type != type) {
+            sh = {};
+            if (hp < kRefillHealth) continue;
+            sh = {type, hp, kShadowHealth};
+            continue;
+        }
+        if (sh.full == 0) continue;
+        if (hp >= sh.full) continue;
+        sh.health -= sh.full - hp;
+        if (sh.health > 0) continue;
+        recomp_context ctx{};
+        ctx.r29 = addr(0x8045FF00u);             // scratch stack (host-only expansion memory)
+        ctx.r4 = static_cast<gpr>(slot);
+        func_8006CFDC(rdram, &ctx);
+        std::fprintf(stderr, "[cheats] mortal NPCs: slot %d (type %04X) beaten\n", slot, type);
+        sh = {};
+    }
+}
+
+} // namespace
+} // namespace mm::cheats
+
 extern "C" void mm_item_list_hook(uint8_t* rdram, uint32_t list) {
     mm::gem_compass::scan_items(rdram, list);
     mm::grab_blocks::on_item_list(rdram, list);
@@ -561,6 +622,7 @@ void apply(uint8_t* rdram) {
     if (magnet_live(rdram)) pull_gem_actors(rdram);
     if (enabled(Cheat::EndlessJet)) apply_endless_jet(rdram);
     if (enabled(Cheat::MoonJump)) apply_moon_jump(rdram);
+    if (enabled(Cheat::MortalNpcs)) apply_mortal_refills(rdram);
 }
 
 } // namespace mm::cheats
