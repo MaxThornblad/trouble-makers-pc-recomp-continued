@@ -16,6 +16,10 @@ enum class Session {
 
 bool start(const std::filesystem::path& app_folder, const std::string& version);
 void flush();
+// For a crash handler: write straight to the log file (bypassing the
+// stdout/stderr capture, whose reader may never run again) and flush.
+// Skips the write if the log is busy rather than deadlocking.
+void write_emergency(const char* text);
 void stop();
 
 std::filesystem::path log_directory();

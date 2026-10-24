@@ -10,6 +10,8 @@
 //   MM_TEST_POKE="DF=40"               bytes to set on slots MM_TEST_SPAWN makes
 //   MM_TEST_WORDS=121@60               print all of a slot's words on a frame
 //   MM_TEST_PEEK=800C8040[:n]          print 8 (or n) words on frame 1
+//   MM_TEST_CRASH=frame                null write on that frame (crash report test)
+//   MM_TEST_FFWD=from-to[:speed]       fast-forward between frames
 //   MM_TEST_INSPECT=121                collision view on, that slot highlighted
 //   MM_TEST_SLOPE=dx,dy,41,45          spawn a slope block object (cell codes) on frame 5
 //   MM_TEST_ITEMS=frame                item records near the camera
@@ -28,6 +30,7 @@
 #include "custom_actors.h"
 #include "inspector.h"
 #include "terrain.h"
+#include "ultramodern/ultramodern.hpp"
 #include "savestate.h"
 
 namespace mm::dev_harness {
@@ -105,7 +108,7 @@ void tick(uint8_t* rdram) {
     static const char* peek = std::getenv("MM_TEST_PEEK");
     static const char* words = std::getenv("MM_TEST_WORDS");   // slot@frame: all words
     static const char* inspect = std::getenv("MM_TEST_INSPECT");   // =slot: collision view on, slot selected
-    if (!script && !dump && !trace && !diff && !spawn && !peek && !words && !inspect) return;
+    if (!std::getenv("MM_TEST_FFWD") && !std::getenv("MM_TEST_CRASH") && !script && !dump && !trace && !diff && !spawn && !peek && !words && !inspect) return;
     static uint32_t generation = 0;
     static long t = 0;
     static uint16_t prev = 0;
@@ -184,6 +187,18 @@ void tick(uint8_t* rdram) {
             mm::custom_actors::make_slope(rdram, slot, static_cast<uint8_t>(left), static_cast<uint8_t>(right));
             std::fprintf(stderr, "[harness] slope block in slot %d\n", slot);
         }
+    }
+    if (const char* ff = std::getenv("MM_TEST_FFWD")) {
+        // "from-to[:speed]": fast-forward between those frames (default 3x).
+        long from = 0, to = 0;
+        int speed = 3;
+        std::sscanf(ff, "%ld-%ld:%d", &from, &to, &speed);
+        if (t == from) ultramodern::set_speed_multiplier(speed);
+        if (t == to) ultramodern::set_speed_multiplier(1);
+    }
+    if (const char* cr = std::getenv("MM_TEST_CRASH"); cr && t == std::atol(cr)) {
+        std::fprintf(stderr, "[harness] crashing on purpose (crash report test)\n");
+        *reinterpret_cast<volatile int*>(static_cast<uintptr_t>(0x10)) = 1;
     }
     if (inspect && t == 1) {
         if (!mm::inspector::overlay_enabled()) mm::inspector::toggle_overlay();

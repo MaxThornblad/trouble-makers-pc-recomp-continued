@@ -421,6 +421,14 @@ bool start(const std::filesystem::path& app_folder, const std::string& version) 
     return g_redirected;
 }
 
+void write_emergency(const char* text) {
+    std::fflush(stderr);
+    std::unique_lock lock(g_file_mutex, std::try_to_lock);
+    if (!lock.owns_lock() || !g_log_file.is_open()) return;
+    g_log_file << text;
+    g_log_file.flush();
+}
+
 void flush() {
     std::fflush(stdout);
     std::fflush(stderr);

@@ -31,6 +31,7 @@ add_executable(troublemakers
     grab_blocks.cpp
     dev_harness.cpp
     inspector.cpp
+    crash_handler.cpp
     spawn_catalog.cpp
     enemy_bars.cpp
     gem_compass.cpp

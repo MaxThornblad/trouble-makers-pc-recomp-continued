@@ -50,6 +50,7 @@
 #include "rank_timer.h"
 #include "enemy_bars.h"
 #include "inspector.h"
+#include "crash_handler.h"
 #include "gem_compass.h"
 #include "gem_hints.h"
 #include "session_log.h"
@@ -637,6 +638,7 @@ int main(int argc, char** argv) {
     std::error_code config_ec;
     fs::create_directories(config_dir, config_ec);
     mm::session_log::start(config_dir, kProjectVersion);
+    mm::crash_handler::install();
     mm::telemetry::start();
     mm::telemetry::set_phase(mm::telemetry::Phase::Startup, "process entry");
     mm::telemetry::log_system_info();

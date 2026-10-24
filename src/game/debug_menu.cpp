@@ -8,6 +8,7 @@
 #include "enemy_bars.h"
 #include "gem_hints.h"
 #include "inspector.h"
+#include "crash_handler.h"
 #include "rumble.h"
 
 #include <algorithm>
@@ -398,6 +399,7 @@ extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
     const int current_scene = static_cast<int16_t>(
         MEM_HU(0, rdram_gpr(kCurrentScene)));
     mm::telemetry::record_scene(game_state, current_stage, current_scene);
+    mm::crash_handler::note_scene(game_state, current_stage, current_scene);
     mm::rank_timer::publish(rdram);
     mm::gem_hints::publish(rdram);
     mm::gem_compass::publish(rdram);
