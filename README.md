@@ -262,10 +262,10 @@ takes over movement, so Endless jet and Moon jump pause. **Gem magnet** pulls
 gems within about 96 pixels of Marina to her so they are collected: red, blue,
 green and golden gems placed in the stage, and gems knocked out of enemies.
 **Grabbable blocks** lets Marina grab plain stage blocks like any other
-object: she lifts the block, carries it and throws it, and once it
-comes to rest it snaps onto the 32-pixel block grid and is solid again (on top
-of another block if one is in the way; back where it came from if it is lost
-off screen). Breakable red blocks are left to the game.
+object: the block leaves the stage (with its collision) and becomes a block
+object in her hands that she can carry, throw or set down anywhere. Like the
+pot it can be stood on, and it is solid from the sides too, so blocks can be
+stacked; grab it again to move it. Breakable red blocks are left to the game.
 **Golden gem compass**
 (a setting on the same page, off by default, and working with the debug menu
 turned off) puts a gold arrow at the edge of the screen pointing to the
@@ -296,8 +296,8 @@ have it. The hints are condensed from the community
 [Mischief Makers Wiki](https://mischiefmakers.fandom.com) (text CC BY-SA 3.0)
 and cover all 52 campaign levels. The overlay's **Spawn** page drops an
 object in front of Marina during a stage: a short list of identified objects
-(the pot, a gem, clancers, a clanball, a bomb ball, a loose block you can
-throw), or, with **Show all**, every shared object type that can be spawned
+(the pot, a gem, clancers, a clanball, a bomb ball, a block you can stand
+on and throw), or, with **Show all**, every shared object type that can be spawned
 without crashing (many do nothing visible on their own). At most 8 spawned
 objects exist at once; **Remove spawned objects** clears them, and they are
 forgotten when the stage, area or save state changes. The first debug warp

@@ -29,6 +29,7 @@ add_executable(troublemakers
     actors.cpp
     custom_actors.cpp
     grab_blocks.cpp
+    dev_harness.cpp
     spawn_catalog.cpp
     enemy_bars.cpp
     gem_compass.cpp

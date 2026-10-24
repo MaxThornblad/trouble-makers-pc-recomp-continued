@@ -9,10 +9,12 @@
 // in every stage. func_8001E2D0 gives such a slot generic defaults (a 32x32
 // hitbox, 10 health, active + drawn); each type's setup sets the rest.
 //
-// An actor draws whatever its fields describe: with +0x94 = 0x208 the game's
-// actor renderer draws the sprite whose pointer is at +0x18C (the same path
-// a breaking block's flying piece uses), which is how custom types reuse the
-// game's shared graphics.
+// An actor draws whatever its fields describe: with image 0x46 at +0x84 and
+// +0x94 = 0x208 the game's actor renderer draws the sprite whose pointer is
+// at +0x18C (the same path a breaking block's flying piece uses), which is
+// how custom types reuse the game's shared graphics. Collision comes from
+// +0x80 flag bits 0x00040000 (solid) and 0x2000 (stand-on platform), which
+// the game honours for slots below 0x90.
 #pragma once
 
 #include <cstdint>
@@ -30,7 +32,7 @@ constexpr uint16_t type_id(uint8_t index) {
 // Custom types defined so far.
 enum : uint8_t {
     kTestBlock = 0x00,   // a block that bobs in place: proves the table works
-    kLooseBlock = 0x01,  // a block Marina can carry and throw (grabbable blocks)
+    kBlock = 0x01,       // a solid block object Marina can carry and throw (grabbable blocks)
 };
 
 // Per-frame update, called with the actor's slot (and the game's context, so

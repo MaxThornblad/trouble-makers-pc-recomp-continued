@@ -15,23 +15,25 @@ Related: `docs/README.md` (engine internals, widescreen, rendering).
 | Offset | Size | Meaning | Source |
 |---:|---|---|---|
 | `0x00-0x7F` | | two renderer matrices (one per framebuffer); never copy | docs/README.md 12.1 |
-| `0x80` | u32 | flags; 0 = slot free. Bit `0x2` = runs each frame, `0x1` = drawn *(guess)*, `0x20` = facing left (Marina), `0x80` = attack box active, `0x400` = hit box active, `0x02000000` = Marina is holding something. Grabbable object free `0x00011403`, held `0x00020123`, thrown `0x00021483` | func_8001751C, func_8001EC1C, grab traces |
+| `0x80` | u32 | flags; 0 = slot free. Bit `0x2` = runs each frame and gets terrain collision, `0x1` = drawn *(guess)*, `0x20` = facing left (Marina), `0x2000` = platform (stand on top), `0x00040000` = solid on all sides (both only for slots below `0x90`, see Collision), `0x80` = attack box active, `0x400` = hit box active, `0x02000000` = Marina is holding something. Grabbable object free `0x00011403`, held `0x00020123`, thrown `0x00021483` | func_8001751C, func_8001EC1C, grab traces |
 | `0x84` | u16 | image id for the actor renderer (bank bits `0xF800`) | func_80009BE8, SpawnParticle_Image |
 | `0x88`, `0x8C` | Q16.16 | position, camera-relative, +y up | traces |
-| `0x90` | | depth / layer *(guess)* | SpawnParticle_Image |
+| `0x90` | | depth / layer *(guess)*; a held brown block copies the holder's `+0x10C` here | SpawnParticle_Image, traces |
+| `0xA0` | u8 | contact flags from terrain collision | func_800160EC |
+| `0xB4`, `0xB8` | f32 | scale x/y; the brown carry block shrinks to 0.5 while held (the `0x208` sprite path ignores it) | traces, Wine |
 | `0x98` | u32 | signal bits from other actors: `0x200` = held this frame (set by the holder every frame; the held actor clears it), `0x400` = thrown | func_800528F4, grab traces |
-| `0x94` | u16 | draw mode; `0x208` = draw the sprite whose pointer is at `0x18C` | func_800441F4 (block knock-out) |
+| `0x94` | u16 | draw mode; `0x208` with image `0x46` at `+0x84` = draw the sprite whose pointer is at `0x18C` (image 0 draws nothing) | func_800441F4 (block knock-out), Wine |
 | `0xA2-0xA8` | s16 x4 | attack box: left, right(?), top, bottom relative to position | func_8001E2D0, func_8001EC1C |
 | `0xAA-0xB0` | s16 x4 | hit box: left `AA`, right `AC`, top `AE`, bottom `B0` (+y up) | gem pickup func_8002FD48 |
-| `0xB4`, `0xB8` | f32 | scale x/y (1.0 after setup) | func_8001E2D0 |
+| `0xC8`, `0xCA` | s16 | world x / top of the actor this one stands on | func_800160EC |
+| `0xCC` | u16 | `0x8000 \| slot` of the actor this one stands on, else 0 | func_800160EC |
 | `0xD0` | u16 | state; low byte = action, high byte = phase | traces |
 | `0xD2` | u16 | type (see Actor types) | everywhere |
 | `0xD6` | u16 | Marina: slot of the actor she holds (stays set after a throw) | grab traces |
 | `0xE0` | s16 | health | Actor_ReduceHealth |
 | `0xEC`, `0xF0` | Q16.16 | velocity x / y | Marina movement |
 | `0xF8`, `0xFC` | Q16.16 | throw velocity, written by the holder with the `0x400` signal | grab traces |
-| `0x104`, `0x108` | Q16.16 | hold point (camera-relative), written by the holder each frame | grab traces |
-| `0x110-0x118` | | loose block (`0x7F01`): item record address, original kind, original x<<16\|y | grab_blocks.cpp |
+| `0x104`, `0x108`, `0x10C` | Q16.16 | hold point (camera-relative x, y) and depth, written by the holder each frame | grab traces |
 | `0x150` | s32 | per-state timer (jet, jump) | cheats.cpp |
 | `0x158` | s32 | gravity accumulator (air jet arc) | cheats.cpp |
 | `0x17C` | u32 | private display list (3D actors) | func_80009BE8 |
@@ -55,7 +57,30 @@ hold point. On a throw (state `0x0126`) she sets `held+0x98 |= 0x400` and the
 velocity at `+0xF8/+0xFC`; the actor then flies (state `0x0170` then `0x0171`,
 flags `0x00021483`) and the per-actor terrain collision stops it at walls and
 floors. Any actor with flags `0x00011403` near her hand can be grabbed this
-way (proved with the custom loose block).
+way (proved with the custom block). Marina's set-down is B while holding still
+(the held actor sees the `0x200` bit stop without a `0x400`). Brown carry
+blocks also get `+0x98 |= 0x00080000` while held.
+
+### Collision
+
+- **Terrain map**: one byte per 16x16 cell at `0x8010CDF0`, index
+  `((x >> 4) & [0x800BE658]) + (((H - y - 1) << [0x800BE660]) & [0x800BE65C])`
+  for world pixel (x, y), H = `[0x800BE648]` (1-9: 2048, 512 columns). Bits
+  `0xC0` = solid, `0x40` alone = platform *(guess)*. Covers the whole stage.
+  Read by `func_80012AB4(x, y)` (camera-relative arguments). Stage blocks are
+  solid only through their cells here: hiding a block's item record leaves its
+  collision, and moving the record does not move it.
+- **Solid actors**: `func_8001F88C` rebuilds two lists each frame from slots
+  `0x00-0x8F`: flag `0x00040000` → solid boxes (count `0x800BE4D0`, slots
+  `0x8011CF20`, right/left/top/bottom at `0x8011D170/D3D0/D610/D850`), flag
+  `0x2000` → stand-on platforms 8 px thick (count `0x800BE4D4`, slots
+  `0x8011CDF8`, then `0x8011D048/D290/D4F0/D730`). `func_8001FA78(slot, x, y)`
+  tests a point against them (skipping itself and its holder), returns `0xC0`
+  or `0x40` and leaves the hit slot in `0x800BE4DC`. Every actor's terrain
+  collision (`func_80015B28`, part of `func_800160EC`) uses it, so Marina,
+  enemies and blocks stand on such actors; standing sets `+0xCC`.
+- The pot (`0x18`, flags `0x0001B003`) is a platform; the brown carry blocks
+  (`0x2605`, flags `0x00001402`) are neither.
 
 ### Actor code paths
 
@@ -87,18 +112,18 @@ way (proved with the custom loose block).
 | `0x54`, `0x55`, `0x56`, `0x5B`, `0x77` | blue clancers | Wine catalogue |
 | `0x3D`, `0x76`, `0x7C` | gem variants *(guess)* | Wine catalogue |
 | one of `0x0D 0x2E 0x31 0x42` | changes the sky to grey clouds | Wine catalogue |
-| `0x18` | the pot from Clanpot Shake; works in other stages | spawn test, 1-9 |
+| `0x18` | the pot from Clanpot Shake; works in other stages; stand-on platform, can't be carried (Marina's grab lets go at once) | spawn test, 1-9 |
 | `0x11-0x14`, `0x35`, `0x74` | crash when spawned bare (need parameters or other code) | spawn catalogue |
 | one of `0x0B 0x0C 0x0E 0x0F 0x10 0x15`, one of `0x61 0x62 0x64 0x6D 0x6E 0x70 0x72 0x75` | page fault under Wine when spawned bare in a group (0x0B's display list pointer is garbage) | Wine catalogue |
 
 Spawn-catalogue results for every shared type are listed in `src/game/spawn_catalog.cpp`.
 
-Stage-specific types seen: `0x0515` Sea of Lava floor block (3D), `0x0508`/`0x0509`
+Stage-specific types seen: `0x2605` brown carry block in 1-9 (image `0x0084`, draw `0x0109`; shrinks while held, breaks when thrown), `0x0515` Sea of Lava floor block (3D), `0x0508`/`0x0509`
 Migen's Shrine rotating wall/platform, `0x180F` 1-9 enemy with 50 health, `0x2604`
 health 10000 helpers in 1-9 *(guess: scenery)*.
 
 Custom types (bank `0x7F`, src/game/custom_actors.cpp): `0x7F00` bobbing test block,
-`0x7F01` loose block (grabbable; src/game/grab_blocks.cpp turns stage blocks into it).
+`0x7F01` block object (solid, grabbable, throwable; src/game/grab_blocks.cpp turns stage blocks into it).
 Spawning: src/game/actors.cpp (`spawn_now`: free slot from `0x79` down to `0x30`,
 clear `+0x80..`, set type, call `func_8001E2D0` with a scratch stack at `0x8045FF00`).
 
@@ -121,8 +146,9 @@ Each processed item gets a draw/collision slot in the pool at `0x804269E0`
 (128 x `0x90`, relocated from `0x801069E0`): `+0x80` u16 frame/kind, `+0x84`/`+0x88`
 camera-relative x/y, `+0x8C` sprite pointer. Current item index `0x801782C0`,
 current record pointer `0x801782BC`. Blocks sit on a 32-px grid
-(1-9: x 3440/3472, y 302/334). Setting a record's `0x4000` bit removes the block
-from view and collision; clearing it (with new x/y) puts it back. Gem pickup test: `func_8002FD48` (item box
+(1-9: x 3440/3472, y 302/334; a block at 3440,334 covers x 3424-3455, y 320-351).
+Setting a record's `0x8000` bit stops it drawing; its solidity is in the
+terrain map (see Collision). Gem pickup test: `func_8002FD48` (item box
 +-6 px against Marina's hit box), collect: `func_8002F93C`.
 
 ## Game state and globals

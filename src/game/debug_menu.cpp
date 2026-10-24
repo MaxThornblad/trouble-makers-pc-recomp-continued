@@ -4,6 +4,7 @@
 #include "gem_compass.h"
 #include "actors.h"
 #include "spawn_catalog.h"
+#include "dev_harness.h"
 #include "enemy_bars.h"
 #include "gem_hints.h"
 #include "rumble.h"
@@ -376,6 +377,7 @@ extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
     mm::gem_compass::publish(rdram);
     mm::rumble::tick(rdram);
     mm::actors::tick(rdram);
+    mm::dev_harness::tick(rdram);
     mm::enemy_bars::publish(rdram);
     mm::cheats::set_active(g_enabled.load(std::memory_order_acquire));
 

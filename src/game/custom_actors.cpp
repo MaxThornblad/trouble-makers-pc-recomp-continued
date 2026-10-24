@@ -1,11 +1,9 @@
 #include "custom_actors.h"
 
-#include <array>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
-
-#include "grab_blocks.h"
 
 namespace mm::custom_actors {
 namespace {
@@ -13,11 +11,25 @@ namespace {
 constexpr uint32_t kActors = 0x800EF510u;
 constexpr uint32_t kActorStride = 0x198u;
 constexpr uint32_t kBlockSprites = 0x800D1968u;  // block sprite per colour (item handler type 1)
-constexpr uint16_t kDrawSprite = 0x208;          // +0x94: draw the sprite at +0x18C
-// +0x80 flags for a grabbable object, as the game's own objects use them:
-constexpr uint32_t kFreeFlags = 0x00011403u;     // lying free, can be grabbed
-constexpr uint32_t kHeldFlags = 0x00020123u;     // a held enemy's flags
-constexpr uint32_t kFlyingFlags = 0x00021483u;   // a thrown enemy's flags
+// Drawing: the game's flying block piece (func_800441F4, spawned when a red
+// block breaks) is an actor with image 0x46 at +0x84, draw mode 0x208 at
+// +0x94 and the block's sprite pointer at +0x18C; the same three fields draw
+// any block sprite on a custom actor.
+constexpr uint16_t kBlockImage = 0x46;
+constexpr uint16_t kDrawSprite = 0x208;
+
+// +0x80 flag bits that make an actor collide (func_8001F88C rebuilds two
+// lists every frame from slots 0x00-0x8F; func_8001FA78 tests a point
+// against them for every actor's terrain collision, Marina's included):
+constexpr uint32_t kSolid = 0x00040000u;         // solid box on all sides (hit box AA..AC, B0..AE)
+[[maybe_unused]] constexpr uint32_t kPlatform = 0x00002000u;     // stand-on-top only, 8 px thick (the pot)
+// Grabbable object states, as the game's own objects use them:
+constexpr uint32_t kRestFlags = 0x00011403u | kSolid;  // lying still, can be grabbed and stood on
+constexpr uint32_t kHeldFlags = 0x00020503u;           // a held brown carry block's flags
+constexpr uint32_t kFlyingFlags = 0x00021483u;         // a thrown enemy's flags
+
+constexpr int32_t kGravity = 0x6000;             // Q16.16 per frame
+constexpr int32_t kMaxFall = -0x60000;
 
 gpr addr(uint32_t vaddr) {
     return static_cast<gpr>(static_cast<int32_t>(vaddr));
@@ -31,8 +43,6 @@ gpr slot_addr(int slot) {
 struct Scratch {
     int frames = 0;
     int32_t base_y = 0;
-    int32_t last_x = 0, last_y = 0;              // loose block: last position
-    int still = 0;                               // loose block: frames at rest
 };
 std::array<Scratch, 208> g_scratch;
 
@@ -40,6 +50,7 @@ std::array<Scratch, 208> g_scratch;
 
 void test_block_setup(uint8_t* rdram, int slot) {
     const gpr a = slot_addr(slot);
+    MEM_H(0x84, a) = kBlockImage;
     MEM_H(0x94, a) = kDrawSprite;
     MEM_W(0x18C, a) = MEM_W(4 * 4, addr(kBlockSprites));
     g_scratch[slot] = Scratch{0, MEM_W(0x8C, a)};
@@ -54,40 +65,27 @@ void test_block_update(uint8_t* rdram, recomp_context* /*ctx*/, int slot) {
     MEM_W(0x8C, a) = s.base_y + static_cast<int32_t>(std::sin(phase) * 4.0 * 65536.0);
 }
 
-// --- Loose block: a block Marina carries and throws -------------------------
-// Held protocol seen with a held enemy: Marina keeps the slot at her +0xD6 and
-// flag 0x02000000 while holding; the held actor sits in state 0x?61 and
-// Marina's code moves it; on release her code sets the held actor to state
-// 0x0170 with a velocity, and the actor flies on its own (0x0171).
+// --- Block: a solid block object Marina can carry and throw ----------------
+//
+// States (+0xD0 low byte): 0x01 resting / falling, 0x61 held, 0x71 flying.
+// Resting it is solid on all sides (kSolid), so Marina and other actors
+// stand on it and bump into it, and blocks stack. Held or flying it is not
+// solid, so it never shoves Marina. Its own terrain collision (flag bit 0x2,
+// func_80016CB4) stops it at floors, walls and other solid actors.
 
-void loose_block_setup(uint8_t* rdram, int slot) {
+void block_setup(uint8_t* rdram, int slot) {
     const gpr a = slot_addr(slot);
+    MEM_H(0x84, a) = kBlockImage;
     MEM_H(0x94, a) = kDrawSprite;
     MEM_W(0x18C, a) = MEM_W(4 * 4, addr(kBlockSprites));
-    MEM_W(0x80, a) = static_cast<int32_t>(kFreeFlags);
-    MEM_W(0x110, a) = 0;                         // no item record (grab_blocks sets one)
+    MEM_W(0x80, a) = static_cast<int32_t>(kRestFlags);
+    MEM_H(0xD0, a) = 0x0001;
     g_scratch[slot] = Scratch{};
 }
 
-// Frees the slot (the actor disappears next frame).
-void remove(uint8_t* rdram, int slot) {
-    MEM_W(0x80, slot_addr(slot)) = 0;
-    g_scratch[slot] = Scratch{};
-}
-
-void start_falling(uint8_t* rdram, gpr a, int32_t vx, int32_t vy) {
-    MEM_W(0xEC, a) = vx;
-    MEM_W(0xF0, a) = vy;
-    MEM_H(0xD0, a) = 0x0170;
-    MEM_W(0x80, a) = static_cast<int32_t>(kFlyingFlags);
-}
-
-void loose_block_update(uint8_t* rdram, recomp_context* /*ctx*/, int slot) {
+void block_update(uint8_t* rdram, recomp_context* /*ctx*/, int slot) {
     const gpr a = slot_addr(slot);
-    const uint16_t state = MEM_HU(0xD0, a);
-    Scratch& sc = g_scratch[slot];
-    ++sc.frames;
-    const bool was_held = (state & 0xFF) == 0x61;
+    const uint16_t state = MEM_HU(0xD0, a) & 0xFF;
     // Grab handshake: Marina's grab (func_800528F4) sets bit 0x200 at +0x98
     // and the hold point at +0x104/+0x108 every frame she holds us, and treats
     // a bit still standing on her next check as "let go", so the held actor
@@ -95,61 +93,63 @@ void loose_block_update(uint8_t* rdram, recomp_context* /*ctx*/, int slot) {
     const bool holder_set = (MEM_W(0x98, a) & 0x200) != 0;
     if (holder_set) {
         MEM_W(0x98, a) = MEM_W(0x98, a) & ~0x200;
-        if (!was_held) {
+        if (state != 0x61) {
             MEM_H(0xD0, a) = 0x0161;
             MEM_W(0x80, a) = static_cast<int32_t>(kHeldFlags);
         }
     }
-    // Thrown: the holder sets 0x400 at +0x98 and leaves the throw velocity at
-    // +0xF8/+0xFC.
     if ((MEM_W(0x98, a) & 0x400) != 0) {
+        // Thrown: the holder sets 0x400 and leaves the velocity at +0xF8/+0xFC.
         MEM_W(0x98, a) = MEM_W(0x98, a) & ~0x400;
-        start_falling(rdram, a, MEM_W(0xF8, a), MEM_W(0xFC, a));
-    } else if (was_held && !holder_set) {
-        start_falling(rdram, a, 0, 0);           // set down / let go without a throw
+        MEM_W(0xEC, a) = MEM_W(0xF8, a);
+        MEM_W(0xF0, a) = MEM_W(0xFC, a);
+        MEM_H(0xD0, a) = 0x0171;
+        MEM_W(0x80, a) = static_cast<int32_t>(kFlyingFlags);
+    } else if (state == 0x61 && !holder_set) {
+        // Set down (or let go without a throw): drop where it is.
+        MEM_W(0xEC, a) = 0;
+        MEM_W(0xF0, a) = 0;
+        MEM_H(0xD0, a) = 0x0171;
+        MEM_W(0x80, a) = static_cast<int32_t>(kFlyingFlags);
     }
-    const uint16_t now = MEM_HU(0xD0, a);
-    if ((now & 0xFF) == 0x61) {                  // carried: follow the hold point
+
+    if ((MEM_HU(0xD0, a) & 0xFF) == 0x61) {      // carried: follow the hold point
         MEM_W(0x88, a) = MEM_W(0x104, a);
         MEM_W(0x8C, a) = MEM_W(0x108, a);
-        sc.still = 0;
+        MEM_W(0xEC, a) = 0;
+        MEM_W(0xF0, a) = 0;
         return;
     }
-    const bool from_record = MEM_W(0x110, a) != 0;
-    if ((now & 0xFF) == 0x70 || (now & 0xFF) == 0x71) {
-        MEM_H(0xD0, a) = 0x0171;
-        // Terrain collision (func_80016CB4, flag bit 0x2) runs after the
-        // update and pushes the block out of floors and walls, so a block at
-        // rest shows the same position frame after frame.
-        const int32_t x = MEM_W(0x88, a), y = MEM_W(0x8C, a);
-        if (std::abs(x - sc.last_x) < 0x8000 && std::abs(y - sc.last_y) < 0x8000) {
-            ++sc.still;
-        } else {
-            sc.still = 0;
+
+    // Resting or flying: move by the velocity under gravity. The terrain
+    // collision that runs after this update pushes the block back out of
+    // anything solid, so a blocked axis shows up as no movement next frame.
+    Scratch& sc = g_scratch[slot];
+    const int32_t x = MEM_W(0x88, a), y = MEM_W(0x8C, a);
+    const bool blocked_y = sc.frames > 0 && std::abs(y - sc.base_y) < 0x4000 && MEM_W(0xF0, a) < 0;
+    ++sc.frames;
+    sc.base_y = y;
+    int32_t vx = MEM_W(0xEC, a), vy = MEM_W(0xF0, a);
+    if (blocked_y) {
+        vy = 0;                                  // on the ground: stop falling, slide to a halt
+        vx = vx / 2;
+        if (std::abs(vx) < 0x4000) vx = 0;
+        if ((MEM_HU(0xD0, a) & 0xFF) != 0x01 && vx == 0) {
+            MEM_H(0xD0, a) = 0x0001;             // landed: solid again
+            MEM_W(0x80, a) = static_cast<int32_t>(kRestFlags);
         }
-        sc.last_x = x;
-        sc.last_y = y;
-        MEM_W(0x88, a) = x + MEM_W(0xEC, a);
-        MEM_W(0x8C, a) = y + MEM_W(0xF0, a);
-        MEM_W(0xF0, a) = std::max<int32_t>(MEM_W(0xF0, a) - 0x6000, -0x60000);
-        const bool lost = sc.frames > 60 * 20 ||
-                          std::abs(MEM_H(0x88, a)) > 600 || MEM_H(0x8C, a) < -400;
-        if (from_record && (sc.still >= 6 || lost)) {
-            if (mm::grab_blocks::settle(rdram, slot, lost)) remove(rdram, slot);
-        }
-        return;
     }
-    // Free and never picked up: a block that came from the stage goes back
-    // if Marina's grab missed it.
-    if (from_record && sc.frames > 20) {
-        if (mm::grab_blocks::settle(rdram, slot, true)) remove(rdram, slot);
-    }
+    vy = std::max(vy - kGravity, kMaxFall);
+    MEM_W(0x88, a) = x + vx;
+    MEM_W(0x8C, a) = y + vy;
+    MEM_W(0xEC, a) = vx;
+    MEM_W(0xF0, a) = vy;
 }
 
 std::array<TypeInfo, 256> make_table() {
     std::array<TypeInfo, 256> t{};
-    t[kTestBlock] = {"Test block (custom type)", test_block_update, test_block_setup};
-    t[kLooseBlock] = {"Loose block", loose_block_update, loose_block_setup};
+    t[kTestBlock] = {"Bobbing block", test_block_update, test_block_setup};
+    t[kBlock] = {"Block", block_update, block_setup};
     return t;
 }
 const std::array<TypeInfo, 256> kTable = make_table();

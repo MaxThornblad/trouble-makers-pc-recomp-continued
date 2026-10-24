@@ -51,7 +51,7 @@ const Entry kCatalog[] = {
     {0x48, "Clancer", "A small clancer."},
     {0x49, "Bomb clanball", "A purple bomb ball."},
     {0x54, "Blue clancer", "A blue clancer that walks about."},
-    {0x7F01, "Loose block", "A block Marina can grab, carry and throw (custom type)."},
+    {0x7F01, "Block", "A solid block object: stand on it, grab it, carry it and throw it (custom type)."},
     {0x7F00, "Bobbing block", "A block that floats in place: the custom actor table's test type."},
 };
 const int kCatalogCount = static_cast<int>(sizeof kCatalog / sizeof kCatalog[0]);
