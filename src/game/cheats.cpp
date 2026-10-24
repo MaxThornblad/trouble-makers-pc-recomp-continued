@@ -47,6 +47,7 @@ std::atomic<bool> g_gem_hints{true};
 std::atomic<bool> g_gem_compass{false};
 std::atomic<int> g_rumble_level{2};
 std::atomic<bool> g_enemy_bars{true};
+std::atomic<bool> g_damage_numbers{true};
 std::atomic<bool> g_active{false};
 std::filesystem::path g_path;
 std::mutex g_file_mutex;
@@ -72,6 +73,7 @@ void save() {
     f << "gem_compass=" << (g_gem_compass.load() ? 1 : 0) << '\n';
     f << "rumble=" << g_rumble_level.load() << '\n';
     f << "enemy_bars=" << (g_enemy_bars.load() ? 1 : 0) << '\n';
+    f << "damage_numbers=" << (g_damage_numbers.load() ? 1 : 0) << '\n';
 }
 
 // --- Endless jet -----------------------------------------------------------
@@ -324,6 +326,10 @@ void configure(const std::filesystem::path& folder) {
         if (eq == std::string::npos) continue;
         const std::string key = line.substr(0, eq);
         const bool on = line.substr(eq + 1) == "1";
+        if (key == "damage_numbers") {
+            g_damage_numbers.store(on);
+            continue;
+        }
         if (key == "enemy_bars") {
             g_enemy_bars.store(on);
             continue;
@@ -417,6 +423,17 @@ void toggle_enemy_bars() {
     const bool now = !g_enemy_bars.load();
     g_enemy_bars.store(now, std::memory_order_release);
     std::fprintf(stderr, "[cheats] enemy health bars %s\n", now ? "on" : "off");
+    save();
+}
+
+bool damage_numbers_enabled() {
+    return g_damage_numbers.load(std::memory_order_acquire);
+}
+
+void toggle_damage_numbers() {
+    const bool now = !g_damage_numbers.load();
+    g_damage_numbers.store(now, std::memory_order_release);
+    std::fprintf(stderr, "[cheats] damage numbers %s\n", now ? "on" : "off");
     save();
 }
 

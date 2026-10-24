@@ -12,6 +12,11 @@
 // the most it has had since), sits above its hitbox, and fades a few seconds
 // after the last hit; actors with a lot of health (bosses) keep theirs on
 // screen until they are beaten. A setting on the Cheats page turns it off.
+//
+// The same watch drives floating damage numbers: when a run of drops ends,
+// the damage it added up to floats up from the actor (yellow) or from Marina
+// (red). A countdown never ends its run, so it never shows a number. Damage
+// numbers have their own setting.
 #pragma once
 
 #include <cstdint>

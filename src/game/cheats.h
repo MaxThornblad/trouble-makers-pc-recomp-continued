@@ -49,6 +49,11 @@ void toggle_gem_compass();
 bool enemy_bars_enabled();
 void toggle_enemy_bars();
 
+// Floating damage numbers (also src/game/enemy_bars.cpp). On by default;
+// works without the debug menu.
+bool damage_numbers_enabled();
+void toggle_damage_numbers();
+
 // Controller rumble strength (src/game/rumble.cpp): 0 off, 1 low, 2 medium
 // (default), 3 high. Works without the debug menu.
 int rumble_level();

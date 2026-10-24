@@ -186,7 +186,7 @@ void change_page(int delta) {
 void move_selection(int delta) {
     const int page = g_page.load(std::memory_order_relaxed);
     if (page == kPageCheats) {
-        const int count = mm::cheats::kCheatCount + 6;   // + fast-forward speed, rank timer, gem hints, gem compass, rumble, enemy bar rows
+        const int count = mm::cheats::kCheatCount + 7;   // + fast-forward speed, rank timer, gem hints, gem compass, rumble, enemy bars, damage number rows
         int selected = g_selected_cheat.load(std::memory_order_relaxed);
         selected = (selected + delta + count) % count;
         g_selected_cheat.store(selected, std::memory_order_relaxed);
@@ -217,6 +217,8 @@ void activate_selection() {
             mm::cheats::cycle_rumble_level();
         } else if (selected == mm::cheats::kCheatCount + 5) {
             mm::cheats::toggle_enemy_bars();
+        } else if (selected == mm::cheats::kCheatCount + 6) {
+            mm::cheats::toggle_damage_numbers();
         } else {
             mm::cheats::toggle(static_cast<mm::cheats::Cheat>(selected));
         }
@@ -594,6 +596,29 @@ void draw_overlay() {
                     "A small health bar appears above an enemy once you hit it and it "
                     "survives, and fades a few seconds later; bosses keep theirs until "
                     "beaten. Works even with the debug menu turned off.");
+                ImGui::PopStyleColor();
+                ImGui::Unindent();
+            }
+        }
+        {
+            const bool row_selected = selected == mm::cheats::kCheatCount + 6;
+            const bool on = mm::cheats::damage_numbers_enabled();
+            char row[96];
+            std::snprintf(row, sizeof row, "%-5s Damage numbers", on ? "[ON]" : "[  ]");
+            if (on) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.95f, 0.55f, 1.0f));
+            }
+            ImGui::Selectable(row, row_selected);
+            if (on) {
+                ImGui::PopStyleColor();
+            }
+            if (row_selected) {
+                ImGui::Indent();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::TextWrapped(
+                    "The damage of each hit floats up from whoever took it: yellow "
+                    "for enemies, red for Marina. Works even with the debug menu "
+                    "turned off.");
                 ImGui::PopStyleColor();
                 ImGui::Unindent();
             }
