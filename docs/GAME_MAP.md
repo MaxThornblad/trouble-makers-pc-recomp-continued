@@ -81,7 +81,9 @@ in `+0x150`: that is what keeps the 1-2 / 1-3 hoppers (types `0x1818`,
 turns into the rising spirit (`0x0063`, made by `func_8006CFDC(slot)`, which
 then vanishes). Scripted characters (1-1 tutorial cast `0x1806`, other stage
 types) set health to 10000 at the start of every update
-(`func_801A9880_710B10` and others): a hit shows as one frame of 9950.
+(`func_801A9880_710B10` and others): a hit shows as one frame of 9950. The
+3-11 cats (`0x2801`) are held at 5 the same way: a throw shows 5 -> -45 for one
+frame, then 5 again.
 
 ### Collision
 

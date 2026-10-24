@@ -348,28 +348,42 @@ extern "C" void mm_mortal_hook(uint8_t* rdram, uint32_t slot) {
     MEM_W(0x150, a) = MEM_W(0x150, a) & ~0x80;
 }
 
-// The other kind of immortal: scripted characters (the 1-1 tutorial cast,
-// type 0x1806, and other stage types) whose update sets health back to
-// 10000 every frame (e.g. func_801A9880_710B10), so hits (seen as a drop
-// below that for one frame, -50 for a throw) never add up. With the cheat on
-// they get a shadow health of kShadowHealth that each such drop takes from;
-// when it runs out they get the game's own Clancer death (func_8006CFDC:
-// turns the actor into the rising-spirit type 0x63, which then vanishes).
+// The other kind of immortal: characters whose update puts their health
+// back every frame, so a hit only shows as one frame of lower health. The
+// 1-1 tutorial cast (type 0x1806) is held at 10000 (func_801A9880_710B10 and
+// others); the 3-11 cats (type 0x2801) at 5 (a throw shows 5 -> -45 -> 5).
+// With the cheat on such a character is recognised either by health of 5000
+// or more, or by a drop that is undone on the very next frame, and gets a
+// shadow health (kShadowHealth, or kLowShadowHealth when found by an
+// undone drop) that each drop takes from. When it runs
+// out it gets the game's own Clancer death (func_8006CFDC: turns the actor
+// into the rising-spirit type 0x63, which then vanishes).
 extern "C" void func_8006CFDC(uint8_t* rdram, recomp_context* ctx);
 
 namespace mm::cheats {
 namespace {
 
 constexpr int kRefillHealth = 5000;              // at or above: kept alive by a refill
-constexpr int kShadowHealth = 150;               // about two throws (a throw often lands two -50 hits)
+constexpr int kShadowHealth = 150;               // high-health refillers: about three throws (-50 each)
+constexpr int kLowShadowHealth = 50;            // low-health ones (the 5-hp cats): one throw
 
 struct Shadow {
     uint16_t type = 0;
-    int16_t full = 0;                            // the health it is held at
+    int16_t last = 0;                            // health seen last frame
+    int16_t full = 0;                            // the health it is held at (0: not known yet)
+    int pending = 0;                             // drop seen last frame, not yet classed
     int health = 0;
 };
 std::array<Shadow, 0x90> g_shadow;
 uint32_t g_shadow_generation = 0;
+
+void beat(uint8_t* rdram, int slot, uint16_t type) {
+    recomp_context ctx{};
+    ctx.r29 = addr(0x8045FF00u);                 // scratch stack (host-only expansion memory)
+    ctx.r4 = static_cast<gpr>(slot);
+    func_8006CFDC(rdram, &ctx);
+    std::fprintf(stderr, "[cheats] mortal NPCs: slot %d (type %04X) beaten\n", slot, type);
+}
 
 void apply_mortal_refills(uint8_t* rdram) {
     const uint32_t generation = mm::savestate::load_generation();
@@ -381,26 +395,39 @@ void apply_mortal_refills(uint8_t* rdram) {
         const gpr a = addr(0x800EF510u + static_cast<uint32_t>(slot) * 0x198u);
         Shadow& sh = g_shadow[slot];
         const uint16_t type = MEM_W(0x80, a) != 0 ? MEM_HU(0xD2, a) : 0;
-        if (type == 0 || (type >> 8) == 0x7F) {
+        if (type == 0 || (type >> 8) == 0x7F || type == 0x63) {
             sh = {};
             continue;
         }
         const int16_t hp = MEM_H(0xE0, a);
-        if (sh.type != type) {
+        if (sh.type != type) {                   // new actor in this slot
             sh = {};
-            if (hp < kRefillHealth) continue;
-            sh = {type, hp, kShadowHealth};
+            sh.type = type;
+            sh.last = hp;
+            if (hp >= kRefillHealth) {
+                sh.full = hp;
+                sh.health = kShadowHealth;
+            }
             continue;
         }
-        if (sh.full == 0) continue;
-        if (hp >= sh.full) continue;
-        sh.health -= sh.full - hp;
+        int damage = 0;
+        if (sh.full != 0) {
+            if (hp < sh.full) damage = sh.full - hp;   // known refiller: every drop counts
+        } else if (sh.pending > 0) {
+            if (hp == sh.last + sh.pending) {          // last frame's drop was undone: a refiller
+                sh.full = hp;
+                sh.health = kLowShadowHealth;
+                damage = sh.pending;
+            }
+            sh.pending = 0;
+        } else if (hp < sh.last && hp > -0x4000) {
+            sh.pending = sh.last - hp;                 // see next frame whether it sticks
+        }
+        sh.last = hp;
+        if (damage <= 0) continue;
+        sh.health -= damage;
         if (sh.health > 0) continue;
-        recomp_context ctx{};
-        ctx.r29 = addr(0x8045FF00u);             // scratch stack (host-only expansion memory)
-        ctx.r4 = static_cast<gpr>(slot);
-        func_8006CFDC(rdram, &ctx);
-        std::fprintf(stderr, "[cheats] mortal NPCs: slot %d (type %04X) beaten\n", slot, type);
+        beat(rdram, slot, type);
         sh = {};
     }
 }
