@@ -86,6 +86,9 @@ void block_setup(uint8_t* rdram, int slot) {
 void block_update(uint8_t* rdram, recomp_context* /*ctx*/, int slot) {
     const gpr a = slot_addr(slot);
     const uint16_t state = MEM_HU(0xD0, a) & 0xFF;
+    // Unbreakable: hits (a projectile, or Marina being hurt while holding it)
+    // take health, and Marina will not hold or grab an actor at 0 health.
+    MEM_H(0xE0, a) = 10;
     // Grab handshake: Marina's grab (func_800528F4) sets bit 0x200 at +0x98
     // and the hold point at +0x104/+0x108 every frame she holds us, and treats
     // a bit still standing on her next check as "let go", so the held actor

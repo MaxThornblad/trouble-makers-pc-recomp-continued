@@ -25,7 +25,9 @@ constexpr uint32_t kBlockHandler = 0x80044390u;  // item handler type 1: blocks
 constexpr uint32_t kBlockSprites = 0x800D1968u;  // sprite per colour
 constexpr uint16_t kGone = 0x8000;               // item "gone" bit (as a broken block)
 constexpr int kMaxItems = 512;
-constexpr int kReachX = 22, kReachTolerance = 26;
+constexpr uint32_t kMarinaHold = 0x801370CCu;
+constexpr uint16_t kUp = 0x0800, kDown = 0x0400;
+constexpr int kReachX = 22, kReachY = 16, kReachTolerance = 26;
 
 // Terrain collision map, read by func_80012AB4(x, y) (camera-relative x/y,
 // which it turns into world pixels): one byte per 16x16 cell at 0x8010CDF0,
@@ -99,8 +101,19 @@ void on_item_list(uint8_t* rdram, uint32_t list) {
 
     const int cx = MEM_H(0, addr(kCameraX)), cy = MEM_H(0, addr(kCameraY));
     const int mx = cx + MEM_H(0x88, m);
-    const int my = cy + MEM_H(0x8C, m) + (MEM_H(0xAE, m) + MEM_H(0xB0, m)) / 2;
-    const int fx = mx + ((flags & kFacingLeftFlag) != 0 ? -kReachX : kReachX);
+    const int base_y = cy + MEM_H(0x8C, m);
+    // Where her hand reaches: in front at chest height, or straight up / down
+    // while Up / Down is held (the game's own grab works in all three).
+    const uint16_t hold = MEM_HU(0, addr(kMarinaHold));
+    int fx = mx + ((flags & kFacingLeftFlag) != 0 ? -kReachX : kReachX);
+    int my = base_y + (MEM_H(0xAE, m) + MEM_H(0xB0, m)) / 2;
+    if ((hold & kUp) != 0) {
+        fx = mx;
+        my = base_y + MEM_H(0xAE, m) + kReachY;
+    } else if ((hold & kDown) != 0) {
+        fx = mx;
+        my = base_y + MEM_H(0xB0, m) - kReachY;
+    }
 
     uint32_t best = 0;
     int best_d = 1 << 30;
@@ -122,7 +135,7 @@ void on_item_list(uint8_t* rdram, uint32_t list) {
 
     const uint16_t kind = MEM_HU(0, addr(best));
     const int bx = MEM_HU(2, addr(best)), by = MEM_HU(4, addr(best));
-    const int marina_y = cy + MEM_H(0x8C, m);
+    const int marina_y = base_y;
     const int slot = mm::actors::spawn_now(rdram, mm::custom_actors::type_id(mm::custom_actors::kBlock),
                                            bx - mx, by - marina_y);
     if (slot < 0) return;

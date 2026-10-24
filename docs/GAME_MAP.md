@@ -57,7 +57,9 @@ hold point. On a throw (state `0x0126`) she sets `held+0x98 |= 0x400` and the
 velocity at `+0xF8/+0xFC`; the actor then flies (state `0x0170` then `0x0171`,
 flags `0x00021483`) and the per-actor terrain collision stops it at walls and
 floors. Any actor with flags `0x00011403` near her hand can be grabbed this
-way (proved with the custom block). Marina's set-down is B while holding still
+way (proved with the custom block). Marina grabs in front, or straight up / down with Up / Down held. She will
+not grab, and lets go of, an actor at 0 health (hits on a held object, and
+Marina getting hurt, take its health). Marina's set-down is B while holding still
 (the held actor sees the `0x200` bit stop without a `0x400`). Brown carry
 blocks also get `+0x98 |= 0x00080000` while held.
 
