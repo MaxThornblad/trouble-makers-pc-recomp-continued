@@ -275,7 +275,10 @@ dash starts, a long pulse for a golden gem, and a steady rumble whenever the
 game shakes the screen (such as the eruption in Sea of Lava), plus a jolt for
 bomb explosions and each red block they blow apart. Enter/A cycles Off, Low, Medium
 and High with a sample pulse; it stays quiet while the controls have been
-idle for a minute, such as during the title demo. The **Fast-forward speed** row sets how fast the
+idle for a minute, such as during the title demo. **Enemy health bars** (on by default, also without the debug menu) put a
+small bar above an enemy once you hit it and it survives, coloured from green
+to red; it fades a few seconds after the last hit, while bosses keep theirs
+until beaten. The **Fast-forward speed** row sets how fast the
 hold-to-fast-forward hotkey runs the game (2x, 3x, 4x, 5x, 6x or 8x; default
 3x). It is saved and applies even with the debug menu turned off. **Rank timer**, on the same page, shows a top-right countdown to the best
 clear-time rank still reachable (S under the stage's par time, A within 30 s

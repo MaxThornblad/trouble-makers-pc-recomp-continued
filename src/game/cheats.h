@@ -44,6 +44,11 @@ void toggle_gem_hints();
 bool gem_compass_enabled();
 void toggle_gem_compass();
 
+// Enemy health bars (src/game/enemy_bars.cpp). On by default; works without
+// the debug menu.
+bool enemy_bars_enabled();
+void toggle_enemy_bars();
+
 // Controller rumble strength (src/game/rumble.cpp): 0 off, 1 low, 2 medium
 // (default), 3 high. Works without the debug menu.
 int rumble_level();

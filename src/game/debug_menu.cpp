@@ -2,6 +2,7 @@
 #include "cheats.h"
 #include "rank_timer.h"
 #include "gem_compass.h"
+#include "enemy_bars.h"
 #include "gem_hints.h"
 #include "rumble.h"
 
@@ -185,7 +186,7 @@ void change_page(int delta) {
 void move_selection(int delta) {
     const int page = g_page.load(std::memory_order_relaxed);
     if (page == kPageCheats) {
-        const int count = mm::cheats::kCheatCount + 5;   // + fast-forward speed, rank timer, gem hints, gem compass, rumble rows
+        const int count = mm::cheats::kCheatCount + 6;   // + fast-forward speed, rank timer, gem hints, gem compass, rumble, enemy bar rows
         int selected = g_selected_cheat.load(std::memory_order_relaxed);
         selected = (selected + delta + count) % count;
         g_selected_cheat.store(selected, std::memory_order_relaxed);
@@ -214,6 +215,8 @@ void activate_selection() {
             mm::cheats::toggle_gem_compass();
         } else if (selected == mm::cheats::kCheatCount + 4) {
             mm::cheats::cycle_rumble_level();
+        } else if (selected == mm::cheats::kCheatCount + 5) {
+            mm::cheats::toggle_enemy_bars();
         } else {
             mm::cheats::toggle(static_cast<mm::cheats::Cheat>(selected));
         }
@@ -335,6 +338,7 @@ extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
     mm::gem_hints::publish(rdram);
     mm::gem_compass::publish(rdram);
     mm::rumble::tick(rdram);
+    mm::enemy_bars::publish(rdram);
     mm::cheats::set_active(g_enabled.load(std::memory_order_acquire));
 
     if (!g_enabled.load(std::memory_order_acquire)) {
@@ -567,6 +571,29 @@ void draw_overlay() {
                     "blocks explode, and while the screen shakes. Enter/A cycles Off, "
                     "Low, Medium and High and plays a sample. Works even with the "
                     "debug menu turned off.");
+                ImGui::PopStyleColor();
+                ImGui::Unindent();
+            }
+        }
+        {
+            const bool row_selected = selected == mm::cheats::kCheatCount + 5;
+            const bool on = mm::cheats::enemy_bars_enabled();
+            char row[96];
+            std::snprintf(row, sizeof row, "%-5s Enemy health bars", on ? "[ON]" : "[  ]");
+            if (on) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.95f, 0.55f, 1.0f));
+            }
+            ImGui::Selectable(row, row_selected);
+            if (on) {
+                ImGui::PopStyleColor();
+            }
+            if (row_selected) {
+                ImGui::Indent();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::TextWrapped(
+                    "A small health bar appears above an enemy once you hit it and it "
+                    "survives, and fades a few seconds later; bosses keep theirs until "
+                    "beaten. Works even with the debug menu turned off.");
                 ImGui::PopStyleColor();
                 ImGui::Unindent();
             }

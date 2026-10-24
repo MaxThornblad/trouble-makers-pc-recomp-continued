@@ -26,6 +26,7 @@ add_executable(troublemakers
     cheats.cpp
     debug_menu.cpp
     gem_hints.cpp
+    enemy_bars.cpp
     gem_compass.cpp
     rank_timer.cpp
     rumble.cpp
