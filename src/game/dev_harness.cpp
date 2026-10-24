@@ -6,10 +6,13 @@
 //   MM_TEST_DUMP=40,120                list every active actor on those frames
 //   MM_TEST_TRACE=121[,frames]         one line per frame for a slot (and Marina)
 //   MM_TEST_DIFF=121:100-150           print changed words of a slot in a range
-//   MM_TEST_SPAWN=18@20@40@0[@flags]   spawn a type on a frame at dx,dy from Marina
+//   MM_TEST_SPAWN=18@20@40@0[@flags[@param]]  spawn a type on a frame at dx,dy from Marina
+//                                      (flags 0 = the type's own; param: the item parameter, see actors.h)
 //   MM_TEST_POKE="DF=40"               bytes to set on slots MM_TEST_SPAWN makes
 //   MM_TEST_WORDS=121@60               print all of a slot's words on a frame
 //   MM_TEST_PEEK=800C8040[:n]          print 8 (or n) words on frame 1
+//   MM_TEST_SETW=121:D0=2003F@30         set a slot's word on a frame (';' for more)
+//   MM_TEST_FIND=800E0048              list RDRAM words equal to a value (frame 2)
 //   MM_TEST_CRASH=frame                null write on that frame (crash report test)
 //   MM_TEST_FFWD=from-to[:speed]       fast-forward between frames
 //   MM_TEST_INSPECT=121                collision view on, that slot highlighted
@@ -110,7 +113,7 @@ void tick(uint8_t* rdram) {
     static const char* peek = std::getenv("MM_TEST_PEEK");
     static const char* words = std::getenv("MM_TEST_WORDS");   // slot@frame: all words
     static const char* inspect = std::getenv("MM_TEST_INSPECT");   // =slot: collision view on, slot selected
-    if (!std::getenv("MM_TEST_KILL") && !std::getenv("MM_TEST_SETHP") && !std::getenv("MM_TEST_FFWD") && !std::getenv("MM_TEST_CRASH") && !script && !dump && !trace && !diff && !spawn && !peek && !words && !inspect) return;
+    if (!std::getenv("MM_TEST_KILL") && !std::getenv("MM_TEST_SETHP") && !std::getenv("MM_TEST_FFWD") && !std::getenv("MM_TEST_CRASH") && !script && !dump && !trace && !diff && !spawn && !peek && !words && !inspect && !std::getenv("MM_TEST_FIND") && !std::getenv("MM_TEST_SETW")) return;
     static uint32_t generation = 0;
     static long t = 0;
     static uint16_t prev = 0;
@@ -229,9 +232,9 @@ void tick(uint8_t* rdram) {
             unsigned type = 0;
             long at = 0;
             int dx = 40, dy = 0;
-            unsigned flags = 0;
-            if (std::sscanf(p, "%x@%ld@%d@%d@%x", &type, &at, &dx, &dy, &flags) >= 2 && t == at) {
-                const int slot = mm::actors::spawn_now(rdram, static_cast<uint16_t>(type), dx, dy);
+            unsigned flags = 0, param = 0;
+            if (std::sscanf(p, "%x@%ld@%d@%d@%x@%x", &type, &at, &dx, &dy, &flags, &param) >= 2 && t == at) {
+                const int slot = mm::actors::spawn_now(rdram, static_cast<uint16_t>(type), dx, dy, param);
                 if (slot >= 0 && flags != 0) MEM_W(0x80, slot_addr(slot)) = static_cast<int32_t>(flags);
                 // MM_TEST_POKE="DF=40,A0=E0": bytes to set on spawned slots
                 if (const char* poke = std::getenv("MM_TEST_POKE"); poke && slot >= 0) {
@@ -243,6 +246,18 @@ void tick(uint8_t* rdram) {
                     }
                 }
                 std::fprintf(stderr, "[harness] spawned %04X in slot %d\n", type, slot);
+            }
+            p = std::strchr(p, ';');
+            if (p) ++p;
+        }
+    }
+    if (const char* sw = std::getenv("MM_TEST_SETW")) {   // slot:off=value@frame[;...] (words)
+        for (const char* p = sw; p && *p;) {
+            int slot = 0;
+            unsigned off = 0, val = 0;
+            long at = 0;
+            if (std::sscanf(p, "%d:%x=%x@%ld", &slot, &off, &val, &at) == 4 && t == at) {
+                MEM_W(off, slot_addr(slot)) = static_cast<int32_t>(val);
             }
             p = std::strchr(p, ';');
             if (p) ++p;
@@ -260,6 +275,13 @@ void tick(uint8_t* rdram) {
                 }
                 std::fprintf(stderr, "\n");
             }
+        }
+    }
+    if (const char* find = std::getenv("MM_TEST_FIND"); find && t == 2) {
+        // Every aligned word in RDRAM equal to the value (after the load).
+        const uint32_t want = static_cast<uint32_t>(std::strtoul(find, nullptr, 16));
+        for (uint32_t va = 0x80000000u; va < 0x80800000u; va += 4) {
+            if (static_cast<uint32_t>(MEM_W(0, addr(va))) == want) std::fprintf(stderr, "[find] %08X\n", va);
         }
     }
     if (peek && t == 1) {

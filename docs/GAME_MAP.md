@@ -136,6 +136,7 @@ frame, then 5 again.
 | `0x09` | particle (images, debris, the flying piece of a broken block) | SpawnParticle_Image |
 | `0x16` | Marina | slot 0 |
 | `0x1C`, `0x3F`, `0x40` | orange clanball (image `0x026E`) | Wine catalogue |
+| `0x3F` with item parameter `0x403` | the pale face clanball of stage 7 scene 67 (colour 4 = sprite `0x800E0048`); see below | save state, spawn test |
 | `0x48` | small clancer | Wine catalogue |
 | `0x49-0x52` | purple bomb balls (image `0x0272`) | Wine catalogue |
 | `0x54`, `0x55`, `0x56`, `0x5B`, `0x77` | blue clancers | Wine catalogue |
@@ -153,6 +154,12 @@ health 10000 helpers in 1-9 *(guess: scenery)*.
 
 Custom types (bank `0x7F`, src/game/custom_actors.cpp): `0x7F00` bobbing test block,
 `0x7F01` block object (solid, grabbable, throwable; src/game/grab_blocks.cpp turns stage blocks into it).
+Spawn parameters: stage spawners pass an item's parameter as a float at `+0x110`;
+func_8001E2D0 clears it, and the type's first update reads it. The clanball setup
+`func_80039724` (types `0x1C`/`0x3F`/`0x40`) stores it in `+0x150` (minus bit `0x1000`
+except in stage `0x35`) and, when bits `0x700` are set, takes its sprite from
+`0x800D26E0[(param & 0x700) >> 8]` (1 `0x800E0448`, 2 `0x800E0248`, 3 `0x800DFE48`,
+4 `0x800E0048`). With no parameter a clanball has no sprite (the plain orange look).
 Spawning: src/game/actors.cpp (`spawn_now`: free slot from `0x79` down to `0x30`,
 clear `+0x80..`, set type, call `func_8001E2D0` with a scratch stack at `0x8045FF00`).
 

@@ -1,6 +1,7 @@
 #include "actors.h"
 
 #include <algorithm>
+#include <cstring>
 #include <array>
 #include <atomic>
 #include <cstdio>
@@ -44,7 +45,11 @@ struct Owned {
 };
 
 std::mutex g_mutex;
-std::vector<uint16_t> g_spawn_queue;
+struct Request {
+    uint16_t type;
+    uint32_t param;
+};
+std::vector<Request> g_spawn_queue;
 bool g_clear_requested = false;
 std::string g_last_result = "Nothing spawned yet";
 std::atomic<int> g_count{0};
@@ -66,9 +71,9 @@ bool alive(uint8_t* rdram, const Owned& o) {
 
 } // namespace
 
-void request_spawn(uint16_t type) {
+void request_spawn(uint16_t type, uint32_t param) {
     std::lock_guard lock{g_mutex};
-    if (g_spawn_queue.size() < 4) g_spawn_queue.push_back(type);
+    if (g_spawn_queue.size() < 4) g_spawn_queue.push_back({type, param});
 }
 
 void request_clear() {
@@ -89,7 +94,7 @@ const char* last_result() {
     return copy.c_str();
 }
 
-int spawn_now(uint8_t* rdram, uint16_t type, int dx, int dy) {
+int spawn_now(uint8_t* rdram, uint16_t type, int dx, int dy, uint32_t param) {
     int slot = -1;
     for (int i = kLastSlot; i >= kFirstSlot; --i) {
         if (MEM_W(0x80, slot_addr(i)) == 0) {
@@ -107,7 +112,16 @@ int spawn_now(uint8_t* rdram, uint16_t type, int dx, int dy) {
     recomp_context ctx{};
     ctx.r29 = addr(kScratchStack);
     ctx.r4 = static_cast<gpr>(slot);
-    func_8001E2D0(rdram, &ctx);
+    func_8001E2D0(rdram, &ctx);                  // clears +0x110
+    if (param != 0) {
+        // Stage spawners hand an item's parameter (colour, variant) to the
+        // type's first update as a float at +0x110 (the clanball setup,
+        // func_80039724, turns it into +0x150 and picks its colour from it).
+        const float f = static_cast<float>(param);
+        uint32_t bits;
+        std::memcpy(&bits, &f, sizeof bits);
+        MEM_W(0x110, a) = static_cast<int32_t>(bits);
+    }
 
     const gpr marina = slot_addr(0);
     MEM_W(0x88, a) = MEM_W(0x88, marina) + static_cast<int32_t>(dx * 65536);
@@ -132,7 +146,7 @@ void tick(uint8_t* rdram) {
         g_generation = generation;
     }
 
-    std::vector<uint16_t> queue;
+    std::vector<Request> queue;
     bool clear = false;
     {
         std::lock_guard lock{g_mutex};
@@ -154,7 +168,8 @@ void tick(uint8_t* rdram) {
         g_owned.clear();
     }
 
-    for (uint16_t type : queue) {
+    for (const Request& request : queue) {
+        const uint16_t type = request.type;
         char text[96];
         if (!gameplay) {
             set_result("Spawning works only during a stage");
@@ -167,7 +182,7 @@ void tick(uint8_t* rdram) {
         }
         // In front of Marina (flag 0x20 at +0x80 = facing left), a little above.
         const int facing = (MEM_W(0x80, slot_addr(0)) & 0x20) != 0 ? -1 : 1;
-        const int slot = spawn_now(rdram, type, 40 * facing, 24);
+        const int slot = spawn_now(rdram, type, 40 * facing, 24, request.param);
         if (slot < 0) {
             set_result("No free actor slot right now");
             break;

@@ -281,7 +281,8 @@ void activate_selection() {
         } else if (g_spawn_show_all.load(std::memory_order_relaxed)) {
             mm::actors::request_spawn(mm::spawn_catalog::kSafeTypes[selected]);
         } else {
-            mm::actors::request_spawn(mm::spawn_catalog::kCatalog[selected].type);
+            mm::actors::request_spawn(mm::spawn_catalog::kCatalog[selected].type,
+                                      mm::spawn_catalog::kCatalog[selected].param);
         }
         return;
     }

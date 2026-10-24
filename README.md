@@ -307,8 +307,8 @@ have it. The hints are condensed from the community
 [Mischief Makers Wiki](https://mischiefmakers.fandom.com) (text CC BY-SA 3.0)
 and cover all 52 campaign levels. The overlay's **Spawn** page drops an
 object in front of Marina during a stage: a short list of identified objects
-(the pot, a gem, clancers, a clanball, a bomb ball, a block you can stand
-on and throw), or, with **Show all**, every shared object type that can be spawned
+(the pot, a gem, clancers, a clanball, the desert stage's face clanball,
+a bomb ball, a block you can stand on and throw), or, with **Show all**, every shared object type that can be spawned
 without crashing (many do nothing visible on their own). At most 8 spawned
 objects exist at once; **Remove spawned objects** clears them, and they are
 forgotten when the stage, area or save state changes. The **Inspect** page

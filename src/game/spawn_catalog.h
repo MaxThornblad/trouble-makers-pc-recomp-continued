@@ -15,6 +15,7 @@ struct Entry {
     uint16_t type;
     const char* name;
     const char* note;    // shown under the list for the selected entry
+    uint32_t param = 0;  // stage item parameter (colour / variant); see actors.h
 };
 
 // Curated list: types identified on screen, plus custom types (bank 0x7F).

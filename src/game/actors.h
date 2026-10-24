@@ -22,7 +22,10 @@ namespace mm::actors {
 constexpr int kMaxSpawned = 8;
 
 // Any thread. Queue a spawn of `type` a short step in front of Marina.
-void request_spawn(uint16_t type);
+// `param` is the stage item parameter (colour, variant) the type's setup
+// reads: stored as a float at +0x110 before the setup runs, as the game's
+// spawners do.
+void request_spawn(uint16_t type, uint32_t param = 0);
 // Any thread. Remove every object spawned through this module.
 void request_clear();
 
@@ -36,6 +39,6 @@ void tick(uint8_t* rdram);
 
 // Game thread. Spawn now; returns the slot or -1. World offsets are pixels
 // relative to Marina (+y up).
-int spawn_now(uint8_t* rdram, uint16_t type, int dx, int dy);
+int spawn_now(uint8_t* rdram, uint16_t type, int dx, int dy, uint32_t param = 0);
 
 } // namespace mm::actors

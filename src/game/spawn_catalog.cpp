@@ -48,6 +48,7 @@ const Entry kCatalog[] = {
     {0x18, "Pot", "The pot from Clanpot Shake. Grab and throw it."},
     {0x08, "Red gem", "A loose gem; touch it to collect it."},
     {0x1C, "Clanball", "An orange clanball."},
+    {0x3F, "Face clanball", "The big clanball with a face from the desert stage (stage 7, scene 67). Grab it, shake it, throw it.", 0x403},
     {0x48, "Clancer", "A small clancer."},
     {0x49, "Bomb clanball", "A purple bomb ball."},
     {0x54, "Blue clancer", "A blue clancer that walks about."},
