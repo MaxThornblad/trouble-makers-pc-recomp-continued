@@ -31,7 +31,7 @@ constexpr int kSlots = 208;
 
 constexpr int kShowFrames = 4 * 60;              // a bar lingers this long after a hit
 constexpr int kFadeFrames = 40;
-constexpr int kBossHealth = 30;                  // at least this much: keep the bar up
+constexpr int kBossHealth = 100;                 // at least this much: keep the bar up
 constexpr int kTimerRun = 3;                     // drops in a row = a countdown, not a hit
 constexpr int kResetBurst = 4;                   // this many actors at once = a reset
 
