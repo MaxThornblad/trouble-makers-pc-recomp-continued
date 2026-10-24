@@ -41,9 +41,13 @@ constexpr std::array<CheatInfo, kCheatCount> kCheats{{
       "golden gems placed in the stage as well as gems knocked out of "
       "enemies." },
     { "grab_blocks", "Grabbable blocks",
-      "Marina can grab plain stage blocks like any other object: carry them, "
-      "throw them or set them down. A block comes to rest on the 32-pixel "
-      "block grid and is solid again. Breakable (red) blocks are left alone." },
+      "Marina can grab stage blocks (square, wall, small, big cylinder and slope "
+      "blocks) like any other object: carry them, throw them or set them down "
+      "anywhere; they stay solid to stand on and stack. Red blocks still shatter." },
+    { "mortal_npcs", "Mortal NPCs",
+      "Characters the game keeps from dying (the hopping Clancers in 1-2 and "
+      "1-3 and others like them) can be beaten like enemies: hits and throws "
+      "take their health, and they go down when it runs out." },
 }};
 
 std::array<std::atomic<bool>, kCheatCount> g_enabled{};
@@ -328,6 +332,21 @@ void gem_magnet(uint8_t* rdram, uint32_t list) {
 
 } // namespace mm::cheats
 
+// --- Mortal NPCs ------------------------------------------------------------
+//
+// func_8006C1AC is the common update for Clancer-like characters (called
+// through func_8007325C by many stage types). Once their health is 0 or less
+// (state >= 0x51) it sets it back to 0x4000 if bit 0x80 is set in +0x150:
+// that bit is what makes a character immortal (the 1-3 hoppers have 1 health
+// and the bit). Clearing it before the check lets them die normally.
+extern "C" void mm_mortal_hook(uint8_t* rdram, uint32_t slot) {
+    if (!mm::cheats::g_active_for_hooks() || !mm::cheats::enabled(mm::cheats::Cheat::MortalNpcs)) return;
+    slot &= 0xFFFF;
+    if (slot == 0 || slot >= 208) return;
+    const gpr a = static_cast<gpr>(static_cast<int32_t>(0x800EF510u + slot * 0x198u));
+    MEM_W(0x150, a) = MEM_W(0x150, a) & ~0x80;
+}
+
 extern "C" void mm_item_list_hook(uint8_t* rdram, uint32_t list) {
     mm::gem_compass::scan_items(rdram, list);
     mm::grab_blocks::on_item_list(rdram, list);
@@ -341,6 +360,10 @@ extern "C" int mm_cheat_skip_terrain(uint8_t* rdram, uint32_t actor_index) {
     return (actor_index & 0xFFFF) == 0 && g_active.load(std::memory_order_relaxed) &&
            enabled(Cheat::NoClip) &&
            MEM_HU(0, addr(kGameState)) == 6;
+}
+
+bool g_active_for_hooks() {
+    return g_active.load(std::memory_order_relaxed);
 }
 
 bool grab_blocks_live() {

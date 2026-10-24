@@ -14,6 +14,7 @@ enum class Cheat : int {
     NoClip,
     GemMagnet,
     GrabBlocks,
+    MortalNpcs,
     Count,
 };
 
@@ -81,5 +82,8 @@ void set_active(bool active);
 // Grabbable blocks (src/game/grab_blocks.cpp): the cheat is on and cheats are
 // live this frame (debug menu enabled).
 bool grab_blocks_live();
+
+// Cheats are live this frame (debug menu enabled).
+bool g_active_for_hooks();
 
 } // namespace mm::cheats

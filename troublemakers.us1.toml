@@ -270,6 +270,9 @@ hook = [
     # Custom actor table (src/game/custom_actors.cpp): bank 0x7F types run in
     # C++; every other type falls through to the game's bank switch.
     { func = "func_80016E70", text = '{ extern int mm_custom_actor_dispatch(uint8_t*, recomp_context*); if (mm_custom_actor_dispatch(rdram, ctx)) return; }' },
+    # func_8006C1AC: common NPC update; refills health to 0x4000 when it runs
+    # out on actors with bit 0x80 in +0x150 (immortal). Mortal-NPC cheat.
+    { func = "func_8006C1AC", text = '{ extern void mm_mortal_hook(uint8_t*, uint32_t); mm_mortal_hook(rdram, (uint32_t)ctx->r4); }' },
     # Rumble (src/game/rumble.cpp): every sound effect goes through
     # Sound_AddSfx(id in $a0, ..., volume at 0x10($sp)); explosions rumble.
     { func = "Sound_AddSfx", text = '{ extern void mm_rumble_sfx(uint8_t*, uint32_t, uint32_t); mm_rumble_sfx(rdram, (uint32_t)ctx->r4, (uint32_t)MEM_W(0x10, ctx->r29)); }' },

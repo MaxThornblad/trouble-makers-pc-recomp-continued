@@ -16,7 +16,9 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
+#include <string_view>
 
 #include "librecomp/game.hpp"
 #include "mm_audio_input.hpp"
@@ -421,6 +423,16 @@ extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
     g_current_scene.store(current_scene, std::memory_order_relaxed);
     g_game_ready.store(game_state != 0, std::memory_order_release);
 
+    // Headless harness: MM_TEST_WARP=1-3 warps there once the title is up
+    // (about 300 frames in).
+    if (static const char* test_warp = std::getenv("MM_TEST_WARP"); test_warp != nullptr) {
+        static int frames = 0;
+        if (++frames == 300) {
+            for (int i = 0; i < static_cast<int>(kWarps.size()); ++i) {
+                if (std::string_view{kWarps[i].label} == test_warp) g_pending_warp.store(i);
+            }
+        }
+    }
     const int selected = g_pending_warp.exchange(-1, std::memory_order_acq_rel);
     if (selected >= 0 && selected < static_cast<int>(kWarps.size())) {
         const WarpEntry& warp = kWarps[selected];

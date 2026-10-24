@@ -66,6 +66,20 @@ Marina getting hurt, take its health). Marina's set-down is B while holding stil
 (the held actor sees the `0x200` bit stop without a `0x400`). Brown carry
 blocks also get `+0x98 |= 0x00080000` while held.
 
+### Damage and immortal characters
+
+`func_8001EC1C` overlaps attack boxes (flag `0x80`) with hit boxes (flag
+`0x400`) for slots `0x00-0x8F`: the attacker gets `+0x98 |= 1`, the victim
+`+0x98 |= 2`, `+0xD6` = attacker and `+0xE2 += attacker +0xE4` (damage), then
+health `+0xE0 -= +0xE2` unless the victim has flag `0x8000` (the pot has it).
+Class bytes `+0xDA/+0xDB/+0xDF` filter who can hit whom. Setting health to 0
+directly does not kill: death follows a hit (hurt states `0x?51` and up).
+`func_8006C1AC` (common Clancer-like update, via `func_8007325C`) refills
+health to `0x4000` once it is 0 or less in a hurt state if bit `0x80` is set
+in `+0x150`: that is what keeps the 1-2 / 1-3 hoppers (types `0x1818`,
+`0x181A`, health 1) alive. Without it a thrown hopper goes to `0x1C1` and
+turns into a drop (`0x0063`).
+
 ### Collision
 
 - **Terrain map**: one byte per 16x16 cell at `0x8010CDF0`, index
