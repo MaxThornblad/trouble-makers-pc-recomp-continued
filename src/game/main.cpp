@@ -49,6 +49,7 @@
 #include "cheats.h"
 #include "rank_timer.h"
 #include "enemy_bars.h"
+#include "inspector.h"
 #include "gem_compass.h"
 #include "gem_hints.h"
 #include "session_log.h"
@@ -565,6 +566,7 @@ static void draw_overlays_with_debug_menu() {
     mm::gem_compass::draw_overlay();
     mm::rank_timer::draw_overlay();
     mm::gem_hints::draw_overlay();
+    mm::inspector::draw_overlay();
     mm::debug_menu::draw_overlay();
     mm::savestate::draw_overlay();
 }

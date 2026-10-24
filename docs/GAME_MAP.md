@@ -6,7 +6,9 @@ game, so nobody has to rediscover it. Addresses are N64 virtual addresses
 Each entry says how it was established; anything marked *(guess)* is not yet
 confirmed. Keep this file up to date when new things are found.
 
-Related: `docs/README.md` (engine internals, widescreen, rendering).
+Related: `docs/README.md` (engine internals, widescreen, rendering). In game, the
+debug menu's Inspect page and the F2 collision view (src/game/inspector.cpp) show
+most of the fields below live.
 
 ## Actors
 

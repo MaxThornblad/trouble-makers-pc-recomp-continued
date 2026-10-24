@@ -11,6 +11,7 @@
 
 #include "gem_compass.h"
 #include "grab_blocks.h"
+#include "inspector.h"
 #include "mm_audio_input.hpp"
 #include "recomp.h"
 
@@ -297,6 +298,7 @@ void gem_magnet(uint8_t* rdram, uint32_t list) {
 extern "C" void mm_item_list_hook(uint8_t* rdram, uint32_t list) {
     mm::gem_compass::scan_items(rdram, list);
     mm::grab_blocks::on_item_list(rdram, list);
+    mm::inspector::note_item_list(list);
     mm::cheats::gem_magnet(rdram, list);
 }
 

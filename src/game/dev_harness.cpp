@@ -10,6 +10,7 @@
 //   MM_TEST_POKE="DF=40"               bytes to set on slots MM_TEST_SPAWN makes
 //   MM_TEST_WORDS=121@60               print all of a slot's words on a frame
 //   MM_TEST_PEEK=800C8040              print 8 words on frame 1
+//   MM_TEST_INSPECT=121                collision view on, that slot highlighted
 // With MM_TEST_SCRIPT, "[clock] t<frame> <unix time>" lines every 10 frames
 // line screenshots up with frames (Wine runs far slower than 60 fps).
 #include "dev_harness.h"
@@ -21,6 +22,7 @@
 
 #include "recomp.h"
 #include "actors.h"
+#include "inspector.h"
 #include "savestate.h"
 
 namespace mm::dev_harness {
@@ -97,7 +99,8 @@ void tick(uint8_t* rdram) {
     static const char* spawn = std::getenv("MM_TEST_SPAWN");
     static const char* peek = std::getenv("MM_TEST_PEEK");
     static const char* words = std::getenv("MM_TEST_WORDS");   // slot@frame: all words
-    if (!script && !dump && !trace && !diff && !spawn && !peek && !words) return;
+    static const char* inspect = std::getenv("MM_TEST_INSPECT");   // =slot: collision view on, slot selected
+    if (!script && !dump && !trace && !diff && !spawn && !peek && !words && !inspect) return;
     static uint32_t generation = 0;
     static long t = 0;
     static uint16_t prev = 0;
@@ -123,6 +126,10 @@ void tick(uint8_t* rdram) {
         MEM_H(0, addr(0x801225F0u)) = in;
         MEM_H(0, addr(0x8011DD70u)) = press;
         prev = in;
+    }
+    if (inspect && t == 1) {
+        if (!mm::inspector::overlay_enabled()) mm::inspector::toggle_overlay();
+        mm::inspector::set_selected_slot(std::atoi(inspect));
     }
     if (spawn) {                                 // several specs separated by ';'
         for (const char* p = spawn; p && *p;) {

@@ -7,6 +7,7 @@
 #include "dev_harness.h"
 #include "enemy_bars.h"
 #include "gem_hints.h"
+#include "inspector.h"
 #include "rumble.h"
 
 #include <algorithm>
@@ -117,11 +118,17 @@ std::atomic_bool g_waiting_for_release{false};
 std::atomic<int> g_page{0};
 std::atomic<int> g_selected_warp{0};
 std::atomic<int> g_selected_cheat{0};
-// Pages: 0 Level Warp, 1 Cheats, 2 Spawn, 3 Session.
+// Pages: 0 Level Warp, 1 Cheats, 2 Spawn, 3 Inspect, 4 Session.
 constexpr int kPageWarp = 0;
 constexpr int kPageCheats = 1;
 constexpr int kPageSpawn = 2;
-constexpr int kPageCount = 4;
+constexpr int kPageInspect = 3;
+constexpr int kPageCount = 5;
+// Inspect page rows: the overlay and label toggles, then the active actors
+// (nearest to Marina first, from the last snapshot).
+constexpr int kInspectToggles = 2;
+std::atomic<int> g_selected_inspect{0};
+std::atomic<int> g_inspect_rows{kInspectToggles};
 std::atomic<int> g_selected_spawn{0};
 std::atomic<bool> g_spawn_show_all{false};
 
@@ -206,6 +213,13 @@ void move_selection(int delta) {
         g_selected_cheat.store(selected, std::memory_order_relaxed);
         return;
     }
+    if (page == kPageInspect) {
+        const int count = std::max(1, g_inspect_rows.load(std::memory_order_relaxed));
+        int selected = g_selected_inspect.load(std::memory_order_relaxed);
+        selected = (selected + delta + count) % count;
+        g_selected_inspect.store(selected, std::memory_order_relaxed);
+        return;
+    }
     if (page == kPageSpawn) {
         const int count = spawn_row_count();
         int selected = g_selected_spawn.load(std::memory_order_relaxed);
@@ -243,6 +257,12 @@ void activate_selection() {
         } else {
             mm::cheats::toggle(static_cast<mm::cheats::Cheat>(selected));
         }
+        return;
+    }
+    if (page == kPageInspect) {
+        const int selected = g_selected_inspect.load(std::memory_order_relaxed);
+        if (selected == 0) mm::inspector::toggle_overlay();
+        if (selected == 1) mm::inspector::toggle_labels();
         return;
     }
     if (page == kPageSpawn) {
@@ -338,6 +358,10 @@ bool handle_event(const SDL_Event& event) {
             toggle_overlay();
             return true;
         }
+        if (event.key.keysym.scancode == SDL_SCANCODE_F2) {
+            mm::inspector::toggle_overlay();     // collision view, also with the menu closed
+            return true;
+        }
         if (g_open.load(std::memory_order_acquire)) {
             handle_navigation_key(event.key.keysym.scancode);
             return true;
@@ -380,6 +404,7 @@ extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
     mm::dev_harness::tick(rdram);
     mm::enemy_bars::publish(rdram);
     mm::cheats::set_active(g_enabled.load(std::memory_order_acquire));
+    if (g_enabled.load(std::memory_order_acquire)) mm::inspector::publish(rdram);
 
     if (!g_enabled.load(std::memory_order_acquire)) {
         return;
@@ -450,10 +475,11 @@ void draw_overlay() {
 
     const int page = g_page.load(std::memory_order_relaxed);
     static const char* const kPageTitles[kPageCount] = {
-        "[ Level Warp ]   Cheats     Spawn     Session  ",
-        "  Level Warp   [ Cheats ]   Spawn     Session  ",
-        "  Level Warp     Cheats   [ Spawn ]   Session  ",
-        "  Level Warp     Cheats     Spawn   [ Session ]",
+        "[ Level Warp ]   Cheats     Spawn     Inspect     Session  ",
+        "  Level Warp   [ Cheats ]   Spawn     Inspect     Session  ",
+        "  Level Warp     Cheats   [ Spawn ]   Inspect     Session  ",
+        "  Level Warp     Cheats     Spawn   [ Inspect ]   Session  ",
+        "  Level Warp     Cheats     Spawn     Inspect   [ Session ]",
     };
     ImGui::TextUnformatted(kPageTitles[page]);
     ImGui::SameLine();
@@ -710,6 +736,73 @@ void draw_overlay() {
         if (selected == rows - 1) ImGui::SetScrollHereY(0.5f);
         ImGui::EndChild();
         ImGui::TextDisabled("Up/Down: select   Enter/A: spawn   Esc/B: close");
+    }
+    else if (page == kPageInspect) {
+        const auto actors = mm::inspector::actors();
+        const int rows = kInspectToggles + static_cast<int>(actors.size());
+        g_inspect_rows.store(rows, std::memory_order_relaxed);
+        int selected = std::min(g_selected_inspect.load(std::memory_order_relaxed), rows - 1);
+        const int selected_actor = selected - kInspectToggles;
+        mm::inspector::set_selected_slot(selected_actor >= 0 ? actors[selected_actor].slot : -1);
+        ImGui::TextWrapped(
+            "Every active object, nearest to Marina first. The collision view "
+            "(F2 toggles it any time, menu open or closed) outlines terrain "
+            "cells, hit / attack boxes and solid objects; the selected object "
+            "stays highlighted after you close the menu.");
+        ImGui::Spacing();
+        ImGui::BeginChild("##inspect", ImVec2(0.0f, -34.0f), true);
+        {
+            char row[96];
+            std::snprintf(row, sizeof row, "%-5s Collision view (F2)",
+                          mm::inspector::overlay_enabled() ? "[ON]" : "[  ]");
+            ImGui::Selectable(row, selected == 0);
+            if (selected == 0) {
+                ImGui::SetScrollHereY(0.5f);
+                ImGui::Indent();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::TextWrapped(
+                    "Terrain: red = solid, cyan top = stand-on only. Objects: green = hit "
+                    "box (faint when off), red = attack box, orange fill = solid object, "
+                    "yellow top = stand-on object, white = Marina. Purple = gems and blocks "
+                    "of the stage.");
+                ImGui::PopStyleColor();
+                ImGui::Unindent();
+            }
+            std::snprintf(row, sizeof row, "%-5s Labels (slot:type)",
+                          mm::inspector::labels_enabled() ? "[ON]" : "[  ]");
+            ImGui::Selectable(row, selected == 1);
+            if (selected == 1) ImGui::SetScrollHereY(0.5f);
+        }
+        ImGui::Separator();
+        ImGui::TextDisabled("slot  type  name                  state  hp     flags     dist");
+        for (int i = 0; i < static_cast<int>(actors.size()); ++i) {
+            const auto& a = actors[i];
+            const std::string name = mm::inspector::type_name(a.type);
+            char row[160];
+            std::snprintf(row, sizeof row, "%4d  %04X  %-20.20s  %04X  %-5d  %08X  %d",
+                          a.slot, a.type, name.empty() ? "-" : name.c_str(), a.state, a.hp,
+                          a.flags, a.distance);
+            const bool is_selected = selected == kInspectToggles + i;
+            ImGui::Selectable(row, is_selected);
+            if (is_selected) {
+                ImGui::SetScrollHereY(0.5f);
+                ImGui::Indent();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::Text("pos %d,%d  vel %.2f,%.2f px/frame  image %04X  draw %04X",
+                            a.x, a.y, a.vx / 16.0, a.vy / 16.0, a.image, a.draw);
+                ImGui::Text("hit box L%d R%d T%d B%d%s   attack box L%d R%d T%d B%d%s",
+                            a.hit[0], a.hit[1], a.hit[2], a.hit[3], (a.flags & 0x400u) ? "" : " (off)",
+                            a.attack[0], a.attack[1], a.attack[2], a.attack[3], (a.flags & 0x80u) ? "" : " (off)");
+                ImGui::Text("signals +98 %08X  +D6 %d  stands on %s%d%s%s",
+                            a.signals, a.held, (a.stand_on & 0x8000u) ? "slot " : "",
+                            (a.stand_on & 0x8000u) ? (a.stand_on & 0x7FFF) : 0,
+                            (a.flags & 0x00040000u) ? "  [solid]" : "", (a.flags & 0x2000u) ? "  [platform]" : "");
+                ImGui::PopStyleColor();
+                ImGui::Unindent();
+            }
+        }
+        ImGui::EndChild();
+        ImGui::TextDisabled("Up/Down: select   Enter/A: toggle   F2: collision view   Esc/B: close");
     }
     else {
         ImGui::TextUnformatted("Debug session status");

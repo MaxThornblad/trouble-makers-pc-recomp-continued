@@ -300,7 +300,14 @@ object in front of Marina during a stage: a short list of identified objects
 on and throw), or, with **Show all**, every shared object type that can be spawned
 without crashing (many do nothing visible on their own). At most 8 spawned
 objects exist at once; **Remove spawned objects** clears them, and they are
-forgotten when the stage, area or save state changes. The first debug warp
+forgotten when the stage, area or save state changes. The **Inspect** page
+lists every active object, nearest to Marina first, with its slot, type,
+state, health and flags; the selected one shows its position, velocity and
+hit / attack boxes. **F2** (or the page's first row) toggles a collision view
+over the game, menu open or closed: solid terrain cells in red, stand-on-only
+ledges as a cyan top edge, object hit boxes in green, attack boxes in red,
+solid objects filled orange, stand-on objects with a yellow top, the stage's
+gems and blocks in purple, and the selected object in magenta. The first debug warp
 disables all save-buffer mutations
 until the process exits, while reads continue to use the save loaded at
 startup, so debug progression cannot overwrite the player's save file.
