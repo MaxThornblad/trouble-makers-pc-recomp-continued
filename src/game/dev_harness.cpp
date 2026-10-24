@@ -9,7 +9,7 @@
 //   MM_TEST_SPAWN=18@20@40@0[@flags]   spawn a type on a frame at dx,dy from Marina
 //   MM_TEST_POKE="DF=40"               bytes to set on slots MM_TEST_SPAWN makes
 //   MM_TEST_WORDS=121@60               print all of a slot's words on a frame
-//   MM_TEST_PEEK=800C8040              print 8 words on frame 1
+//   MM_TEST_PEEK=800C8040[:n]          print 8 (or n) words on frame 1
 //   MM_TEST_INSPECT=121                collision view on, that slot highlighted
 // With MM_TEST_SCRIPT, "[clock] t<frame> <unix time>" lines every 10 frames
 // line screenshots up with frames (Wine runs far slower than 60 fps).
@@ -127,6 +127,44 @@ void tick(uint8_t* rdram) {
         MEM_H(0, addr(0x8011DD70u)) = press;
         prev = in;
     }
+    if (const char* items = std::getenv("MM_TEST_ITEMS"); items && t == std::atol(items)) {
+        // Item records within 200 px of the camera: kind, handler, position.
+        const uint32_t list = mm::inspector::item_list();
+        const int cx = MEM_H(0, addr(0x800BE558u)), cy = MEM_H(0, addr(0x800BE55Cu));
+        std::fprintf(stderr, "[items] list %08X cam %d,%d marina %d,%d\n", list, cx, cy,
+                     cx + MEM_H(0x88, slot_addr(0)), cy + MEM_H(0x8C, slot_addr(0)));
+        for (uint32_t l = list; list != 0 && l < list + 6 * 1024; l += 6) {
+            const uint16_t kind = MEM_HU(0, addr(l));
+            if (kind == 0) break;
+            const int x = MEM_HU(2, addr(l)), y = MEM_HU(4, addr(l));
+            if (std::abs(x - cx) > 200 || std::abs(y - cy) > 150) continue;
+            std::fprintf(stderr, "[items] %08X kind %04X handler %08X at %d,%d\n", l, kind,
+                         static_cast<uint32_t>(MEM_W(((kind & 0x3FF0u) >> 4) * 4, addr(0x800D37BCu))), x, y);
+        }
+    }
+    if (const char* tm = std::getenv("MM_TEST_TERRAIN"); tm && t == 3) {
+        // "x,y;x,y": terrain bytes every 8 px within 40 px of each world point.
+        for (const char* p = tm; p && *p;) {
+            int wx = 0, wy = 0;
+            if (std::sscanf(p, "%d,%d", &wx, &wy) == 2) {
+                const int h = MEM_HU(0, addr(0x800BE648u));
+                std::fprintf(stderr, "[terrain] around %d,%d\n", wx, wy);
+                for (int dy = 40; dy >= -40; dy -= 8) {
+                    std::fprintf(stderr, "[terrain] y%4d:", wy + dy);
+                    for (int dx = -40; dx <= 40; dx += 8) {
+                        const uint32_t col = (static_cast<uint32_t>(wx + dx) & 0xFFFF) >> 4;
+                        const uint32_t row = static_cast<uint32_t>(h - (wy + dy) - 1) & 0xFFFF;
+                        const uint32_t cell = 0x8010CDF0u + (col & MEM_HU(0, addr(0x800BE658u))) +
+                                              ((row << MEM_HU(0, addr(0x800BE660u))) & MEM_HU(0, addr(0x800BE65Cu)));
+                        std::fprintf(stderr, " %02X", MEM_BU(0, addr(cell)));
+                    }
+                    std::fprintf(stderr, "\n");
+                }
+            }
+            p = std::strchr(p, ';');
+            if (p) ++p;
+        }
+    }
     if (inspect && t == 1) {
         if (!mm::inspector::overlay_enabled()) mm::inspector::toggle_overlay();
         mm::inspector::set_selected_slot(std::atoi(inspect));
@@ -170,8 +208,10 @@ void tick(uint8_t* rdram) {
         }
     }
     if (peek && t == 1) {
-        const uint32_t va = static_cast<uint32_t>(std::strtoul(peek, nullptr, 16));
-        for (int i = 0; i < 8; ++i) {
+        char* end = nullptr;
+        const uint32_t va = static_cast<uint32_t>(std::strtoul(peek, &end, 16));
+        const int count = (end && *end == ':') ? std::atoi(end + 1) : 8;
+        for (int i = 0; i < count; ++i) {
             std::fprintf(stderr, "[peek] %08X: %08X\n", va + 4 * i, MEM_W(4 * i, addr(va)));
         }
     }

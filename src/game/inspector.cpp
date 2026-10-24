@@ -170,6 +170,10 @@ void note_item_list(uint32_t list) {
     g_item_list.store(list, std::memory_order_relaxed);
 }
 
+uint32_t item_list() {
+    return g_item_list.load(std::memory_order_relaxed);
+}
+
 bool overlay_enabled() { return g_overlay.load(std::memory_order_relaxed); }
 void toggle_overlay() {
     g_overlay.store(!g_overlay.load());
@@ -247,6 +251,11 @@ void draw_overlay() {
         const float x = static_cast<float>(it.x - s.cam_x), y = static_cast<float>(it.y - s.cam_y);
         rect(x - it.half, x + it.half, y + it.half, y - it.half, p0, p1);
         dl->AddRect(p0, p1, IM_COL32(200, 120, 255, 200), 0.0f, 0, thin);
+        if (g_labels.load(std::memory_order_relaxed)) {
+            char t[8];
+            std::snprintf(t, sizeof t, "%03X", it.kind & 0x3FFF);
+            dl->AddText(ImVec2(p0.x + 2, p1.y - ImGui::GetFontSize() - 1), IM_COL32(220, 170, 255, 230), t);
+        }
     }
 
     const int selected = g_selected.load(std::memory_order_relaxed);

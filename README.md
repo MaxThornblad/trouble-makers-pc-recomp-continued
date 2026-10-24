@@ -261,8 +261,9 @@ steered freely with the D-pad (Up/Down to rise and sink); while it is on, it
 takes over movement, so Endless jet and Moon jump pause. **Gem magnet** pulls
 gems within about 96 pixels of Marina to her so they are collected: red, blue,
 green and golden gems placed in the stage, and gems knocked out of enemies.
-**Grabbable blocks** lets Marina grab plain stage blocks like any other
-object: the block leaves the stage (with its collision) and becomes a block
+**Grabbable blocks** lets Marina grab stage blocks (square blocks, wide and
+tall wall blocks, small blocks, the dark cylinder blocks and slope blocks)
+like any other object: the block leaves the stage (with its collision) and becomes a block
 object in her hands that she can carry, throw or set down anywhere. Like the
 pot it can be stood on, and it is solid from the sides too, so blocks can be
 stacked; grab it again to move it. Breakable red blocks are left to the game.

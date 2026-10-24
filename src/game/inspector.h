@@ -43,6 +43,7 @@ void publish(uint8_t* rdram);
 
 // Item-list hook: remember the stage's item list for the overlay.
 void note_item_list(uint32_t list);
+uint32_t item_list();               // last one seen (0 = none)
 
 // Settings (menu thread).
 bool overlay_enabled();

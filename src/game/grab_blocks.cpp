@@ -20,8 +20,6 @@ constexpr uint32_t kMarinaPress = 0x801370CEu;
 constexpr uint16_t kGrabButton = 0x4000;         // N64 B
 constexpr uint32_t kHoldingFlag = 0x02000000u;   // Marina +0x80 while holding
 constexpr uint32_t kFacingLeftFlag = 0x20u;      // Marina +0x80 when facing left
-constexpr uint32_t kItemHandlers = 0x800D37BCu;
-constexpr uint32_t kBlockHandler = 0x80044390u;  // item handler type 1: blocks
 constexpr uint32_t kBlockSprites = 0x800D1968u;  // sprite per colour
 constexpr uint16_t kGone = 0x8000;               // item "gone" bit (as a broken block)
 constexpr int kMaxItems = 512;
@@ -50,11 +48,50 @@ gpr slot_addr(int slot) {
     return addr(kActors + static_cast<uint32_t>(slot) * kActorStride);
 }
 
-bool is_block(uint8_t* rdram, uint16_t kind) {
-    if (kind == 0) return false;
-    const uint32_t handler = static_cast<uint32_t>(
-        MEM_W(((kind & 0x3FF0u) >> 4) * 4, addr(kItemHandlers)));
-    return handler == kBlockHandler;
+// Stage block kinds that can be picked up. Every block-like item handler
+// (table 0x800D37BC, indexed by (kind & 0x3FF0) >> 4) stores a shape number
+// in its draw slot (+0x80), taken from a 4-frame table at 0x800D3740 + 8 * n
+// (frame counter 0x800D37A4, or 0x800D37A8 for the cylinder kinds), and the
+// sprite 0x800D1968[colour] (+0x8C). The actor image for shape s is
+// 0x44 + 2 * s: the game's own break pieces (func_800441F4) use 0x46 / 0x4C /
+// 0x52 / 0x58 / 0x5E / 0x64 for shapes 1 / 4 / 7 / 10 / 13 / 16. Size comes
+// from the terrain cells each kind fills (16 px cells).
+struct Shape {
+    uint16_t table;              // low half of the 0x800D37xx shape table entry
+    int w, h;                    // px
+    bool breaks_red;             // colour 1 shatters in the game's handler: leave it
+    const char* what;
+};
+
+const Shape* shape_of(uint8_t* rdram, uint16_t kind) {
+    static const Shape kBlock{0x3740, 32, 32, true, "block"};
+    static const Shape kWide{0x3748, 32, 16, true, "wall block (wide)"};
+    static const Shape kTall{0x3750, 16, 32, true, "wall block (tall)"};
+    static const Shape kSmall{0x3758, 16, 16, true, "small block"};
+    static const Shape kCylBlock{0x3740, 32, 32, false, "cylinder block"};
+    static const Shape kCylWide{0x3748, 32, 16, false, "cylinder (wide)"};
+    static const Shape kCylTall{0x3750, 16, 32, false, "cylinder (tall)"};
+    static const Shape kCylSmall{0x3758, 16, 16, false, "cylinder (small)"};
+    static const Shape kSlope0{0x3780, 32, 16, false, "slope block"};
+    static const Shape kSlope1{0x3788, 32, 16, false, "slope block"};
+    static const Shape kSlope2{0x3790, 32, 16, false, "slope block"};
+    static const Shape kSlope3{0x3798, 32, 16, false, "slope block"};
+    switch ((kind & 0x3FF0u) >> 4) {
+        case 0x01: return &kBlock;
+        case 0x02: return &kWide;
+        case 0x03: return &kTall;
+        case 0x04: return &kSmall;
+        case 0x11: return &kCylBlock;
+        case 0x12: return &kCylWide;
+        case 0x13: return &kCylTall;
+        case 0x14: return &kCylSmall;
+        case 0x2B: case 0x2F: return &kSlope0;
+        case 0x2C: case 0x30: return &kSlope1;
+        case 0x2D: case 0x31: return &kSlope2;
+        case 0x2E: case 0x32: return &kSlope3;
+        default: return nullptr;
+    }
+    (void)rdram;
 }
 
 uint32_t terrain_cell(uint8_t* rdram, int x, int y) {
@@ -64,13 +101,20 @@ uint32_t terrain_cell(uint8_t* rdram, int x, int y) {
            ((row << MEM_HU(0, addr(kTerrainShift))) & MEM_HU(0, addr(kTerrainRowMask)));
 }
 
-// The four cells a 32x32 block centred near (x, y) covers. Block records sit
-// on cell borders (1-9: x 3440, y 334 covers x 3424-3455, y 320-351).
-void block_cells(uint8_t* rdram, int x, int y, uint32_t out[4]) {
-    out[0] = terrain_cell(rdram, x - 8, y - 8);
-    out[1] = terrain_cell(rdram, x + 8, y - 8);
-    out[2] = terrain_cell(rdram, x - 8, y + 8);
-    out[3] = terrain_cell(rdram, x + 8, y + 8);
+// The terrain cells (16 px) a block of w x h centred on its record (x, y)
+// fills: 1-9 block at 3440,334 covers x 3424-3455, y 320-351; a 16-wide wall
+// block at 1032 covers 1024-1039; a 16-tall one at y 869 covers 864-879.
+int block_cells(uint8_t* rdram, int x, int y, int w, int h, uint32_t out[4]) {
+    int n = 0;
+    for (int dy : {0, 16}) {
+        if (dy != 0 && h < 32) break;
+        for (int dx : {-8, 8}) {
+            const int px = w >= 32 ? x + dx : x;
+            out[n++] = terrain_cell(rdram, px, y + dy);
+            if (w < 32) break;
+        }
+    }
+    return n;
 }
 
 // Is a block object already within Marina's reach? Then her grab takes that.
@@ -121,8 +165,10 @@ void on_item_list(uint8_t* rdram, uint32_t list) {
     for (int i = 0; i < kMaxItems; ++i, l += 6) {
         const uint16_t kind = MEM_HU(0, addr(l));
         if (kind == 0) break;
-        if ((kind & 0xC000u) != 0 || !is_block(rdram, kind)) continue;
-        if ((kind & 0xF) == 1) continue;                // colour 1 breaks: leave it to the game
+        if ((kind & 0xC000u) != 0) continue;
+        const Shape* shape = shape_of(rdram, kind);
+        if (shape == nullptr) continue;
+        if (shape->breaks_red && (kind & 0xF) == 1) continue;   // red ones shatter: leave them to the game
         const int dx = MEM_HU(2, addr(l)) - fx, dy = MEM_HU(4, addr(l)) - my;
         if (std::abs(dx) > kReachTolerance || std::abs(dy) > kReachTolerance) continue;
         const int d = dx * dx + dy * dy;
@@ -139,13 +185,24 @@ void on_item_list(uint8_t* rdram, uint32_t list) {
     const int slot = mm::actors::spawn_now(rdram, mm::custom_actors::type_id(mm::custom_actors::kBlock),
                                            bx - mx, by - marina_y);
     if (slot < 0) return;
-    MEM_W(0x18C, slot_addr(slot)) = MEM_W((kind & 0xF) * 4, addr(kBlockSprites));  // keep its colour
+    const Shape* shape = shape_of(rdram, kind);
+    const gpr a = slot_addr(slot);
+    // Look like the stage block: its shape's image, its colour's sprite.
+    const uint16_t first_frame = MEM_HU(0, addr(0x800D0000u | shape->table));
+    MEM_H(0x84, a) = static_cast<int16_t>(0x44 + 2 * first_frame);
+    MEM_W(0x18C, a) = MEM_W((kind & 0xF) * 4, addr(kBlockSprites));
+    // Same size for collision, standing on it and landing.
+    MEM_H(0xAA, a) = static_cast<int16_t>(-shape->w / 2);
+    MEM_H(0xAC, a) = static_cast<int16_t>(shape->w / 2);
+    MEM_H(0xAE, a) = static_cast<int16_t>(shape->h / 2);
+    MEM_H(0xB0, a) = static_cast<int16_t>(-shape->h / 2);
     // Take the stage block out for good: no drawing, no collision.
     uint32_t cells[4];
-    block_cells(rdram, bx, by, cells);
-    for (uint32_t cell : cells) MEM_B(0, addr(cell)) = 0;
+    const int count = block_cells(rdram, bx, by, shape->w, shape->h, cells);
+    for (int i = 0; i < count; ++i) MEM_B(0, addr(cells[i])) = 0;
     MEM_H(0, addr(best)) = static_cast<int16_t>(kind | kGone);
-    std::fprintf(stderr, "[grab-blocks] block at %d,%d is now an object (slot %d)\n", bx, by, slot);
+    std::fprintf(stderr, "[grab-blocks] %s %03X at %d,%d is now an object (slot %d, image %02X)\n",
+                 shape->what, kind & 0x3FFF, bx, by, slot, 0x44 + 2 * first_frame);
 }
 
 } // namespace mm::grab_blocks

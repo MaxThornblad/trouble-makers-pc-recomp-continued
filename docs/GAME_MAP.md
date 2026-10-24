@@ -145,6 +145,19 @@ stages seen), ending at kind 0.
 | `(kind & 0xFFF0) >> 4` | handler index into `0x800D37BC` |
 | `kind & 0xF` | colour (copied to `0x801782BE`) |
 
+Block-like handlers write a shape number to the draw slot's `+0x80` from a
+4-frame table at `0x800D3740 + 8 * n` (frame counter `0x800D37A4`; `0x800D37A8`
+for the dark cylinder kinds) and the sprite `0x800D1968[colour]` to `+0x8C`.
+An actor draws shape s as image `0x44 + 2 * s` (with draw mode `0x208` and the
+sprite at `+0x18C`). Handler index → shape table, size (from the terrain cells
+they fill): `0x01` block `0x3740` 32x32, `0x02` wide wall block `0x3748`
+32x16, `0x03` tall wall block `0x3750` 16x32, `0x04` small `0x3758` 16x16
+(all four shatter in colour 1), `0x06`/`0x07` `0x3760`/`0x3768` *(unknown)*,
+`0x11-0x14` cylinder versions of `0x01-0x04` (seen without terrain cells in
+3-7), `0x2B-0x2E` and `0x2F-0x32` slopes `0x3780-0x3798` 32x16 (terrain values
+`0x41/0x45/0x49/0x4D`), `0x17-0x2A` fixed shapes `0x2F-` with sprites from
+`0x800D19B8`, `0x05` gems, `0x00/0x09-0x0B/0x10` empty.
+
 Handlers: `0x800446F0` gems (colour `& 3`: 2 = golden), `0x80044390` blocks
 (type 1; sprite `0x800D1968[colour]`; colour 1 breaks when `func_80012AB4(x, y)`
 reports no `0xC0` bits and spawns its flying piece through `func_800441F4`).
