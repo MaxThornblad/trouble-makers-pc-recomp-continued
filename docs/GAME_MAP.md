@@ -80,7 +80,9 @@ blocks also get `+0x98 |= 0x00080000` while held.
   tests a point against them (skipping itself and its holder), returns `0xC0`
   or `0x40` and leaves the hit slot in `0x800BE4DC`. Every actor's terrain
   collision (`func_80015B28`, part of `func_800160EC`) uses it, so Marina,
-  enemies and blocks stand on such actors; standing sets `+0xCC`.
+  enemies and blocks stand on such actors; standing sets `+0xCC`. The lists
+  hold boxes from before actors are shifted for camera movement, so they lag
+  by the camera's motion that frame (several px while Marina jumps).
 - The pot (`0x18`, flags `0x0001B003`) is a platform; the brown carry blocks
   (`0x2605`, flags `0x00001402`) are neither.
 

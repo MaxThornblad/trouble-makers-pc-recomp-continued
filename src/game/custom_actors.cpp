@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstdlib>
 
+extern "C" void func_80012AB4(uint8_t* rdram, recomp_context* ctx);
+
 namespace mm::custom_actors {
 namespace {
 
@@ -22,11 +24,15 @@ constexpr uint16_t kDrawSprite = 0x208;
 // lists every frame from slots 0x00-0x8F; func_8001FA78 tests a point
 // against them for every actor's terrain collision, Marina's included):
 constexpr uint32_t kSolid = 0x00040000u;         // solid box on all sides (hit box AA..AC, B0..AE)
-[[maybe_unused]] constexpr uint32_t kPlatform = 0x00002000u;     // stand-on-top only, 8 px thick (the pot)
+constexpr uint32_t kPlatform = 0x00002000u;     // stand-on-top only, 8 px thick (the pot)
 // Grabbable object states, as the game's own objects use them:
 constexpr uint32_t kRestFlags = 0x00011403u | kSolid;  // lying still, can be grabbed and stood on
 constexpr uint32_t kHeldFlags = 0x00020503u;           // a held brown carry block's flags
 constexpr uint32_t kFlyingFlags = 0x00021483u;         // a thrown enemy's flags
+
+// Scratch stack for calling the game's leaf collision tests from the host
+// (host-only expansion memory, as mm::actors uses for func_8001E2D0).
+constexpr uint32_t kScratchStack = 0x8045FF00u;
 
 constexpr int32_t kGravity = 0x6000;             // Q16.16 per frame
 constexpr int32_t kMaxFall = -0x60000;
@@ -72,6 +78,39 @@ void test_block_update(uint8_t* rdram, recomp_context* /*ctx*/, int slot) {
 // stand on it and bump into it, and blocks stack. Held or flying it is not
 // solid, so it never shoves Marina. Its own terrain collision (flag bit 0x2,
 // func_80016CB4) stops it at floors, walls and other solid actors.
+
+// Is there terrain or a solid actor just under the block's bottom edge?
+// Terrain: the game's func_80012AB4(x, y) (camera-relative point, returns the
+// cell byte: 0xC0 solid, 0x40 platform). Actors: the solid / platform boxes
+// of slots 0x00-0x8F, read from their current positions. (The game's own list
+// test, func_8001FA78, uses boxes rebuilt earlier in the frame, before actors
+// are shifted for camera movement, so while the camera moved - when Marina
+// jumped - stacked blocks lost their support and poured down.)
+bool supported(uint8_t* rdram, int slot) {
+    const gpr a = slot_addr(slot);
+    const int x = MEM_H(0x88, a), y = MEM_H(0x8C, a);
+    const int left = x + MEM_H(0xAA, a) + 2, right = x + MEM_H(0xAC, a) - 2;
+    const int bottom = y + MEM_H(0xB0, a);
+    for (int px : {left, x, right}) {
+        recomp_context ctx{};
+        ctx.r29 = addr(kScratchStack);
+        ctx.r4 = static_cast<gpr>(static_cast<int16_t>(px));
+        ctx.r5 = static_cast<gpr>(static_cast<int16_t>(bottom - 1));
+        func_80012AB4(rdram, &ctx);
+        if ((ctx.r2 & 0xC0) != 0) return true;
+    }
+    for (int s = 0; s < 0x90; ++s) {
+        if (s == slot) continue;
+        const gpr o = slot_addr(s);
+        const uint32_t flags = static_cast<uint32_t>(MEM_W(0x80, o));
+        if ((flags & (kSolid | kPlatform)) == 0) continue;
+        const int ox = MEM_H(0x88, o), oy = MEM_H(0x8C, o);
+        const int top = oy + MEM_H(0xAE, o);
+        if (right < ox + MEM_H(0xAA, o) || left > ox + MEM_H(0xAC, o)) continue;
+        if (bottom - top <= 2 && top - bottom <= 3) return true;  // resting on its top
+    }
+    return false;
+}
 
 void block_setup(uint8_t* rdram, int slot) {
     const gpr a = slot_addr(slot);
@@ -124,24 +163,36 @@ void block_update(uint8_t* rdram, recomp_context* /*ctx*/, int slot) {
         return;
     }
 
-    // Resting or flying: move by the velocity under gravity. The terrain
-    // collision that runs after this update pushes the block back out of
-    // anything solid, so a blocked axis shows up as no movement next frame.
+    // At rest the block does not move at all while something holds it up:
+    // nudging it down by gravity every frame would sink it into what it
+    // stands on, and the terrain collision then pushes it out sideways too,
+    // which made stacks and rows of blocks slide apart.
     Scratch& sc = g_scratch[slot];
+    if ((MEM_HU(0xD0, a) & 0xFF) == 0x01) {
+        MEM_W(0xEC, a) = 0;
+        MEM_W(0xF0, a) = 0;
+        if (supported(rdram, slot)) return;
+        MEM_H(0xD0, a) = 0x0171;                 // support gone: fall (not solid meanwhile)
+        MEM_W(0x80, a) = static_cast<int32_t>(kFlyingFlags);
+        sc.frames = 0;
+    }
+
+    // Flying or falling: move by the velocity under gravity. The terrain
+    // collision that runs after this update pushes the block back out of
+    // anything solid, so landing shows up as no vertical movement next frame.
     const int32_t x = MEM_W(0x88, a), y = MEM_W(0x8C, a);
     const bool blocked_y = sc.frames > 0 && std::abs(y - sc.base_y) < 0x4000 && MEM_W(0xF0, a) < 0;
     ++sc.frames;
     sc.base_y = y;
     int32_t vx = MEM_W(0xEC, a), vy = MEM_W(0xF0, a);
-    if (blocked_y) {
-        vy = 0;                                  // on the ground: stop falling, slide to a halt
-        vx = vx / 2;
-        if (std::abs(vx) < 0x4000) vx = 0;
-        if ((MEM_HU(0xD0, a) & 0xFF) != 0x01 && vx == 0) {
-            MEM_H(0xD0, a) = 0x0001;             // landed: solid again
-            MEM_W(0x80, a) = static_cast<int32_t>(kRestFlags);
-        }
+    if (blocked_y && supported(rdram, slot)) {
+        MEM_W(0xEC, a) = 0;                      // landed: rest, solid again
+        MEM_W(0xF0, a) = 0;
+        MEM_H(0xD0, a) = 0x0001;
+        MEM_W(0x80, a) = static_cast<int32_t>(kRestFlags);
+        return;
     }
+    if (blocked_y) vx /= 2;                      // scraping along: slow down
     vy = std::max(vy - kGravity, kMaxFall);
     MEM_W(0x88, a) = x + vx;
     MEM_W(0x8C, a) = y + vy;
