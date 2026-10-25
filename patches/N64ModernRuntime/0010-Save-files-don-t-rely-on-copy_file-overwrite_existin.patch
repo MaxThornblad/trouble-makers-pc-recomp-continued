@@ -1,0 +1,54 @@
+From 9fcade4d5102f3334b1ba737b97b129e9168ff5d Mon Sep 17 00:00:00 2001
+From: Max Thornblad <max.thornblad@hotmail.com>
+Date: Sun, 25 Oct 2026 12:19:54 +0100
+Subject: [PATCH] Save files: don't rely on copy_file overwrite_existing
+
+libstdc++ on Windows (MinGW) fails copy_file with overwrite_existing whenever
+the target exists, so every save write failed after the first. Copy the
+backup to a fresh file and rename the temp file over the save instead.
+---
+ librecomp/src/files.cpp | 21 +++++++++++++++++----
+ 1 file changed, 17 insertions(+), 4 deletions(-)
+
+diff --git a/librecomp/src/files.cpp b/librecomp/src/files.cpp
+index af6f18d..5328aab 100644
+--- a/librecomp/src/files.cpp
++++ b/librecomp/src/files.cpp
+@@ -35,17 +35,30 @@ bool recomp::finalize_output_file_with_backup(const std::filesystem::path& filep
+     std::filesystem::path temp_path{filepath};
+     temp_path += temp_suffix;
+ 
++    // Not copy_file(..., overwrite_existing): libstdc++ on Windows (MinGW)
++    // reports "File exists" whenever the target exists (st_ino is always 0
++    // there, so it can't tell the files apart), which made every save fail.
++    // Copy to a fresh backup, then rename the temp file over the target
++    // (rename replaces an existing file on every platform).
+     std::error_code ec;
+     if (std::filesystem::exists(filepath, ec)) {
+-        std::filesystem::copy_file(filepath, backup_path, std::filesystem::copy_options::overwrite_existing, ec);
++        std::filesystem::remove(backup_path, ec);
++        ec.clear();
++        std::filesystem::copy_file(filepath, backup_path, ec);
+         if (ec) {
+             return false;
+         }
+     }
+-    std::filesystem::copy_file(temp_path, filepath, std::filesystem::copy_options::overwrite_existing, ec);
++    std::filesystem::rename(temp_path, filepath, ec);
+     if (ec) {
+-        return false;
++        // Some filesystems refuse to rename over a file: replace it instead.
++        ec.clear();
++        std::filesystem::remove(filepath, ec);
++        ec.clear();
++        std::filesystem::rename(temp_path, filepath, ec);
++        if (ec) {
++            return false;
++        }
+     }
+-    std::filesystem::remove(temp_path, ec);
+     return true;
+ }
+-- 
+2.43.0
+
