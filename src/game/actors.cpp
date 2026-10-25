@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -103,7 +104,20 @@ int spawn_now(uint8_t* rdram, uint16_t type, int dx, int dy, uint32_t param) {
         }
     }
     if (slot < 0) return -1;
+    spawn_in(rdram, slot, type, dx, dy, param);
+    return slot;
+}
 
+int free_run(uint8_t* rdram, int count, int last) {
+    for (int first = last - count + 1; first >= kFirstSlot; --first) {
+        bool all_free = true;
+        for (int i = first; i < first + count && all_free; ++i) all_free = MEM_W(0x80, slot_addr(i)) == 0;
+        if (all_free) return first;
+    }
+    return -1;
+}
+
+void spawn_in(uint8_t* rdram, int slot, uint16_t type, int dx, int dy, uint32_t param) {
     const gpr a = slot_addr(slot);
     for (uint32_t off = 0x80; off < kActorStride; off += 4) {
         MEM_W(off, a) = 0;                       // 0x00-0x7F are renderer matrices
@@ -130,7 +144,70 @@ int spawn_now(uint8_t* rdram, uint16_t type, int dx, int dy, uint32_t param) {
     if (const auto* custom = mm::custom_actors::info(type); custom != nullptr && custom->setup) {
         custom->setup(rdram, slot);
     }
-    return slot;
+}
+
+bool clanball_machine_loaded(uint8_t* rdram) {
+    // Bank 0x18's type table (0x801A6800) points type 0x1D at the
+    // controller's update, whose first instruction is addiu sp, sp, -0x58.
+    return static_cast<uint32_t>(MEM_W(0, addr(0x801A6874u))) == 0x801AE1B4u &&
+           static_cast<uint32_t>(MEM_W(0, addr(0x801AE1B4u))) == 0x27BDFFA8u &&
+           static_cast<uint32_t>(MEM_W(0, addr(0x801AE1B8u))) == 0xAFB20030u;
+}
+
+// When the controller takes the held clanball as the machine's body (its
+// state 0x11) it remakes it as a type 0x1C clanball whose item parameter is
+// the float at 0x801AFB6C, 0xE431 in stage 7: bit 0x8000 = pass Marina's grab
+// signals on to the slot in the low byte, which is the stage's own
+// controller, slot 0x31. A controller elsewhere would get no grab signal and
+// fall apart at once, so while a spawned machine's clanball is held the low
+// byte names that controller instead; the stage's value is put back after.
+constexpr uint32_t kBodyParam = 0x801AFB6Cu;
+uint32_t g_saved_body_param = 0;                 // float bits; 0: not overridden
+
+uint32_t float_bits(float f) {
+    uint32_t bits;
+    std::memcpy(&bits, &f, sizeof bits);
+    return bits;
+}
+
+void link_machine_bodies(uint8_t* rdram, const std::vector<Owned>& owned) {
+    if (!clanball_machine_loaded(rdram)) {
+        g_saved_body_param = 0;                  // another stage's package
+        return;
+    }
+    const uint32_t current = static_cast<uint32_t>(MEM_W(0, addr(kBodyParam)));
+    const int held = MEM_HU(0xD6, slot_addr(0));   // Marina's held slot
+    int controller = -1;
+    for (const Owned& o : owned) {
+        if (o.type != 0x181D || !alive(rdram, o)) continue;
+        const int state = MEM_HU(0xD0, slot_addr(o.slot));
+        if ((state == 0x10 || state == 0x11) && held == o.slot - 1) controller = o.slot;
+    }
+    if (controller >= 0) {
+        if (g_saved_body_param == 0) g_saved_body_param = current;
+        float stage_value;
+        std::memcpy(&stage_value, &g_saved_body_param, sizeof stage_value);
+        const uint32_t param = (static_cast<uint32_t>(stage_value) & ~0xFFu) | static_cast<uint32_t>(controller);
+        MEM_W(0, addr(kBodyParam)) = static_cast<int32_t>(float_bits(static_cast<float>(param)));
+        } else if (g_saved_body_param != 0) {
+        MEM_W(0, addr(kBodyParam)) = static_cast<int32_t>(g_saved_body_param);
+        g_saved_body_param = 0;
+    }
+}
+
+const char* spawn_clanball_machine(uint8_t* rdram, int dx, int dy, int* slot) {
+    if (!clanball_machine_loaded(rdram)) return "The clanball machine only works in the desert stages";
+    // The controller reads the clanball from the slot before its own
+    // (func_801AE1B4: state 0x10 waits for it to be held, 0x11 makes it the
+    // machine's body) and fills the 12 slots after it with the machine.
+    // Slots below 0x90 take part in collisions (a clanball above can't be
+    // grabbed), and the machine's parts collide too: all 14 go below 0x90.
+    int first = free_run(rdram, 14, 0x8F);
+    if (first < 0) return "Not enough free actor slots right now";
+    spawn_in(rdram, first, 0x3F, dx, dy, 0x403);
+    spawn_in(rdram, first + 1, 0x181D, dx, dy + 46);   // as placed in stage 7: 46 px above the ball
+    if (slot) *slot = first;
+    return nullptr;
 }
 
 void tick(uint8_t* rdram) {
@@ -141,6 +218,7 @@ void tick(uint8_t* rdram) {
     const uint32_t generation = mm::savestate::load_generation();
     if (stage != g_stage || scene != g_scene || generation != g_generation || !gameplay) {
         g_owned.clear();                         // the game reuses or clears those slots
+        g_saved_body_param = 0;                  // the stage package was reloaded with the state
         g_stage = stage;
         g_scene = scene;
         g_generation = generation;
@@ -182,6 +260,20 @@ void tick(uint8_t* rdram) {
         }
         // In front of Marina (flag 0x20 at +0x80 = facing left), a little above.
         const int facing = (MEM_W(0x80, slot_addr(0)) & 0x20) != 0 ? -1 : 1;
+        if (type == kClanballMachine) {
+            // At Marina's height, as stage 7 places it: the clanball hovers where it starts.
+            int slot = -1;
+            if (const char* error = spawn_clanball_machine(rdram, 36 * facing, 0, &slot)) {
+                set_result(error);
+                break;
+            }
+            g_owned.push_back({slot, 0x3F});
+            g_owned.push_back({slot + 1, 0x181D});
+            std::snprintf(text, sizeof text, "Spawned the clanball machine in slots %d-%d", slot, slot + 1);
+            set_result(text);
+            std::fprintf(stderr, "[actors] clanball machine in slots %d-%d\n", slot, slot + 1);
+            continue;
+        }
         const int slot = spawn_now(rdram, type, 40 * facing, 24, request.param);
         if (slot < 0) {
             set_result("No free actor slot right now");
@@ -193,6 +285,7 @@ void tick(uint8_t* rdram) {
         std::fprintf(stderr, "[actors] spawned type 0x%02X in slot %d\n", type, slot);
     }
     g_count.store(static_cast<int>(g_owned.size()), std::memory_order_relaxed);
+    if (gameplay) link_machine_bodies(rdram, g_owned);
 
 }
 

@@ -136,7 +136,7 @@ frame, then 5 again.
 | `0x09` | particle (images, debris, the flying piece of a broken block) | SpawnParticle_Image |
 | `0x16` | Marina | slot 0 |
 | `0x1C`, `0x3F`, `0x40` | orange clanball (image `0x026E`) | Wine catalogue |
-| `0x3F` with item parameter `0x403` | the pale face clanball of stage 7 scene 67 (colour 4 = sprite `0x800E0048`); see below | save state, spawn test |
+| `0x3F` with item parameter `0x403` | the pale face clanball of stage 7 scene 67 (colour 4 = sprite `0x800E0048`); Blockman's head, see below | save state, spawn test |
 | `0x48` | small clancer | Wine catalogue |
 | `0x49-0x52` | purple bomb balls (image `0x0272`) | Wine catalogue |
 | `0x54`, `0x55`, `0x56`, `0x5B`, `0x77` | blue clancers | Wine catalogue |
@@ -151,6 +151,19 @@ Spawn-catalogue results for every shared type are listed in `src/game/spawn_cata
 Stage-specific types seen: `0x2605` brown carry block in 1-9 (image `0x0084`, draw `0x0109`; shrinks while held, breaks when thrown), `0x0515` Sea of Lava floor block (3D), `0x0508`/`0x0509`
 Migen's Shrine rotating wall/platform, `0x180F` 1-9 enemy with 50 health, `0x2604`
 health 10000 helpers in 1-9 *(guess: scenery)*.
+
+Blockman (1-6, stage 7 scene 67) is a face clanball `0x3F` (item parameter `0x403`) in slot N-1 and its
+controller `0x181D` in slot N (stage 7: 48 and 49), 46 px above it. The controller's code is in the
+world-1 package (bank `0x18` table `0x801A6800`, overlay `.overlay_766080` at `0x801A6900`, loaded in
+1-1 to 1-10 and nowhere else); `0x181D` -> `func_801AE1B4_76D9C4`. Setup (state 0) prepares slots
+N+1..N+12; state `0x10` waits for the clanball to be held (state 2, `+0x188` set); `0x11` remakes it as
+a type `0x1C` body with the item parameter at `0x801AFB6C` (float, 0xE431 = forward Marina's grab
+signals (`+0x150` bit `0x8000`) to the slot in the low byte, `0x31`: the stage's controller slot is
+hard-coded), then `0x110`/`0x120`/`0x130` build and run the machine as long as the controller gets the
+held signal (`+0x98` bit `0x200`, forwarded by the body in `func_8003A120`), else back to `0x10`.
+The 12 parts are type `0x21`. Marina's held slot is `+0xD6`. The Spawn page builds it anywhere in world 1
+(src/game/actors.cpp `spawn_clanball_machine`: 14 free slots below `0x90`, and the low byte of
+`0x801AFB6C` pointed at the spawned controller while its clanball is held).
 
 Custom types (bank `0x7F`, src/game/custom_actors.cpp): `0x7F00` bobbing test block,
 `0x7F01` block object (solid, grabbable, throwable; src/game/grab_blocks.cpp turns stage blocks into it).

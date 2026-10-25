@@ -12,6 +12,9 @@
 //   MM_TEST_WORDS=121@60               print all of a slot's words on a frame
 //   MM_TEST_PEEK=800C8040[:n]          print 8 (or n) words on frame 1
 //   MM_TEST_SETW=121:D0=2003F@30         set a slot's word on a frame (';' for more)
+//   MM_TEST_MACHINE=frame              request the clanball machine (Blockman) as the Spawn page does
+//   MM_TEST_WATCH=800F43C0@40          SIGTRAP with mm_watch_ptr at that word (gdb: watch -l *mm_watch_ptr)
+//   MM_TEST_PKG=1                      with MM_TEST_WARP: print whether the machine's code is loaded
 //   MM_TEST_FIND=800E0048              list RDRAM words equal to a value (frame 2)
 //   MM_TEST_CRASH=frame                null write on that frame (crash report test)
 //   MM_TEST_FFWD=from-to[:speed]       fast-forward between frames
@@ -24,6 +27,7 @@
 #include "dev_harness.h"
 
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -37,6 +41,8 @@
 #include "savestate.h"
 
 extern "C" void func_8006CFDC(uint8_t* rdram, recomp_context* ctx);
+
+extern "C" { volatile uint32_t* mm_watch_ptr = nullptr; }
 
 namespace mm::dev_harness {
 namespace {
@@ -113,7 +119,13 @@ void tick(uint8_t* rdram) {
     static const char* peek = std::getenv("MM_TEST_PEEK");
     static const char* words = std::getenv("MM_TEST_WORDS");   // slot@frame: all words
     static const char* inspect = std::getenv("MM_TEST_INSPECT");   // =slot: collision view on, slot selected
-    if (!std::getenv("MM_TEST_KILL") && !std::getenv("MM_TEST_SETHP") && !std::getenv("MM_TEST_FFWD") && !std::getenv("MM_TEST_CRASH") && !script && !dump && !trace && !diff && !spawn && !peek && !words && !inspect && !std::getenv("MM_TEST_FIND") && !std::getenv("MM_TEST_SETW")) return;
+    if (!std::getenv("MM_TEST_KILL") && !std::getenv("MM_TEST_SETHP") && !std::getenv("MM_TEST_FFWD") && !std::getenv("MM_TEST_CRASH") && !script && !dump && !trace && !diff && !spawn && !peek && !words && !inspect && !std::getenv("MM_TEST_FIND") && !std::getenv("MM_TEST_SETW") && !std::getenv("MM_TEST_MACHINE") && !std::getenv("MM_TEST_WATCH") && !std::getenv("MM_TEST_PKG")) return;
+    if (std::getenv("MM_TEST_PKG")) {             // with MM_TEST_WARP: is the clanball machine's code loaded?
+        static long frames = 0;
+        if (++frames % 120 == 0 && MEM_HU(0, addr(0x800BE4F0u)) == 6) {
+            std::fprintf(stderr, "[pkg] machine %d\n", mm::actors::clanball_machine_loaded(rdram) ? 1 : 0);
+        }
+    }
     static uint32_t generation = 0;
     static long t = 0;
     static uint16_t prev = 0;
@@ -261,6 +273,21 @@ void tick(uint8_t* rdram) {
             }
             p = std::strchr(p, ';');
             if (p) ++p;
+        }
+    }
+    if (const char* kit = std::getenv("MM_TEST_MACHINE"); kit && t == std::atol(kit)) {   // =frame[@dx@dy]
+        mm::actors::request_spawn(mm::actors::kClanballMachine);   // as the Spawn page does
+        std::fprintf(stderr, "[harness] clanball machine requested\n");
+    }
+    if (const char* w = std::getenv("MM_TEST_WATCH")) {   // vaddr@frame: SIGTRAP with mm_watch_ptr set (for gdb)
+        unsigned va = 0;
+        long at = 0;
+        if (std::sscanf(w, "%x@%ld", &va, &at) == 2 && t == at) {
+            mm_watch_ptr = reinterpret_cast<volatile uint32_t*>(rdram + (va - 0x80000000u));
+            std::fprintf(stderr, "[harness] watch %08X at %p\n", va, static_cast<const void*>(const_cast<uint32_t*>(mm_watch_ptr)));
+#ifdef SIGTRAP
+            std::raise(SIGTRAP);
+#endif
         }
     }
     if (words) {
