@@ -88,11 +88,12 @@ long g_global_frame = 0;
 // Synthetic pad script (recording only).
 struct PadStep { long frames; uint16_t buttons; float x, y; };
 std::vector<PadStep> g_pad;
+std::vector<PadStep> g_pad2;    // controller 2 (player 2)
 
 constexpr uint16_t kA = 0x8000, kB = 0x4000, kZ = 0x2000, kStart = 0x1000;
 constexpr uint16_t kDUp = 0x0800, kDDown = 0x0400, kDLeft = 0x0200, kDRight = 0x0100;
 
-void parse_pad(const char* script) {
+void parse_pad(const char* script, std::vector<PadStep>& g_pad) {
     g_pad.clear();
     for (const char* p = script; p && *p;) {
         PadStep step{0, 0, 0.0f, 0.0f};
@@ -120,9 +121,9 @@ void parse_pad(const char* script) {
     }
 }
 
-bool pad_input(long frame, uint16_t* buttons, float* x, float* y) {
+bool pad_input(const std::vector<PadStep>& pad, long frame, uint16_t* buttons, float* x, float* y) {
     long at = 0;
-    for (const PadStep& s : g_pad) {
+    for (const PadStep& s : pad) {
         if (frame < at + s.frames) {
             *buttons = s.buttons;
             *x = s.x;
@@ -142,7 +143,8 @@ bool filter(int controller, uint16_t* buttons, float* x, float* y) {
     const Mode mode = g_mode.load(std::memory_order_relaxed);
     if (mode == Mode::Recording) {
         bool connected = controller == 0;
-        if (controller == 0 && !g_pad.empty()) connected = pad_input(frame, buttons, x, y);
+        if (controller == 0 && !g_pad.empty()) connected = pad_input(g_pad, frame, buttons, x, y);
+        if (controller == 1 && !g_pad2.empty()) connected = pad_input(g_pad2, frame, buttons, x, y);
         if (!connected) {
             *buttons = 0;
             *x = *y = 0.0f;
@@ -290,7 +292,8 @@ bool start_recording(uint8_t* rdram, recomp_context* ctx, const std::filesystem:
     g_hash_out.open(dir / "hashes.bin", std::ios::binary | std::ios::trunc);
     g_input_out.open(dir / "input.bin", std::ios::binary | std::ios::trunc);
     g_recorded = 0;
-    if (const char* pad = std::getenv("MM_REPLAY_PAD")) parse_pad(pad);
+    if (const char* pad = std::getenv("MM_REPLAY_PAD")) parse_pad(pad, g_pad);
+    if (const char* pad = std::getenv("MM_REPLAY_PAD2")) parse_pad(pad, g_pad2);
     mm_virtual_audio_clock(true);
     g_mode.store(Mode::Recording);
     mm_audio_input::set_input_filter(filter);
@@ -510,9 +513,3 @@ void on_frame(uint8_t* rdram, recomp_context* ctx) {
 
 } // namespace mm::replay
 
-// Translated Thread_MainProc, right before it blocks on its VI queue
-// (troublemakers.us1.toml): in deterministic event mode, this frame's VI
-// message, at its real time.
-extern "C" void mm_deterministic_vi(uint8_t* rdram) {
-    ultramodern::deterministic_frame(rdram);
-}

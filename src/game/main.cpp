@@ -47,6 +47,7 @@
 #include "debug_menu.h"
 #include "savestate.h"
 #include "replay.h"
+#include "player2.h"
 #include "cheats.h"
 #include "rank_timer.h"
 #include "enemy_bars.h"
@@ -556,6 +557,7 @@ static std::vector<recomp::GameEntry> supported_games() {
 
 #ifdef MM_HAS_GRAPHICS
 static void draw_overlays() {
+    mm::player2::draw_overlay();
     mm::enemy_bars::draw_overlay();
     mm::gem_compass::draw_overlay();
     mm::rank_timer::draw_overlay();
@@ -564,6 +566,7 @@ static void draw_overlays() {
 }
 
 static void draw_overlays_with_debug_menu() {
+    mm::player2::draw_overlay();
     mm::enemy_bars::draw_overlay();
     mm::gem_compass::draw_overlay();
     mm::rank_timer::draw_overlay();

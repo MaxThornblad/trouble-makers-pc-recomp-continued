@@ -18,6 +18,7 @@
 //   MM_REPLAY_PAD="20:,30:R,5:RA"    synthetic controller 0 input while
 //                                    recording (frames:keys; keys A B Z S
 //                                    (start), U D L R (stick), u d l r (d-pad))
+//   MM_REPLAY_PAD2="..."             the same for controller 2 (player 2)
 //   MM_REPLAY_SPEED=<n>              run n times faster (tests; results must not change)
 //   MM_REPLAY_DUMP=<frame>[,<frame>] also write all game memory and RSP DMEM
 //                                    at those replay frames (dump_/dmem_<frame>.bin)

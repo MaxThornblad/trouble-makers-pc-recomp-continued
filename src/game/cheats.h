@@ -59,6 +59,9 @@ void toggle_damage_numbers();
 // Hold to dash (a setting, not a cheat; on by default; works without the
 // debug menu): after a double-tap jet, holding that direction keeps the jet
 // going at full speed, as if double-tapping again and again.
+// Co-op: player 2 (player2.cpp) joins on controller 2. A setting, saved.
+bool coop_enabled();
+void toggle_coop();
 bool hold_dash_enabled();
 void toggle_hold_dash();
 void apply_settings(uint8_t* rdram);   // every frame, debug menu or not

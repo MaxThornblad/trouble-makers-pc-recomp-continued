@@ -82,13 +82,72 @@ void open_first_controller() {
     }
 }
 
+// Player 2 (co-op): the second game controller, with a fixed N64-style
+// layout, plus keyboard keys that don't clash with player 1's defaults.
+SDL_GameController* g_controller2 = nullptr;
+std::atomic_bool g_player2_input{false};
+
+void open_second_controller() {
+    if (g_controller2 != nullptr || g_controller == nullptr) return;
+    SDL_Joystick* first = SDL_GameControllerGetJoystick(g_controller);
+    const SDL_JoystickID first_id = first != nullptr ? SDL_JoystickInstanceID(first) : -1;
+    for (int i = 0; i < SDL_NumJoysticks(); ++i) {
+        if (!SDL_IsGameController(i) || SDL_JoystickGetDeviceInstanceID(i) == first_id) continue;
+        g_controller2 = SDL_GameControllerOpen(i);
+        if (g_controller2 != nullptr) {
+            const char* name = SDL_GameControllerName(g_controller2);
+            std::fprintf(stderr, "[input] Player 2 controller: %s\n", name != nullptr ? name : "Unknown controller");
+            return;
+        }
+    }
+}
+
 void refresh_controller_internal() {
     if (g_controller != nullptr && !SDL_GameControllerGetAttached(g_controller)) {
         std::fprintf(stderr, "[input] Controller disconnected.\n");
         SDL_GameControllerClose(g_controller);
         g_controller = nullptr;
     }
+    if (g_controller2 != nullptr && !SDL_GameControllerGetAttached(g_controller2)) {
+        std::fprintf(stderr, "[input] Player 2 controller disconnected.\n");
+        SDL_GameControllerClose(g_controller2);
+        g_controller2 = nullptr;
+    }
     open_first_controller();
+    if (g_player2_input.load(std::memory_order_relaxed)) open_second_controller();
+}
+
+// Controller 2's buttons (N64 bits). The game reads only buttons (never the
+// stick), so the left stick also drives the D-pad bits.
+uint16_t player2_buttons() {
+    uint16_t b = 0;
+    if (SDL_GameController* c = g_controller2) {
+        auto button = [c](SDL_GameControllerButton x) { return SDL_GameControllerGetButton(c, x) != 0; };
+        const float lx = axis_norm(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTX));
+        const float ly = axis_norm(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTY));
+        if (button(SDL_CONTROLLER_BUTTON_A)) b |= BTN_A;
+        if (button(SDL_CONTROLLER_BUTTON_B) || button(SDL_CONTROLLER_BUTTON_X)) b |= BTN_B;
+        if (button(SDL_CONTROLLER_BUTTON_Y)) b |= BTN_CU;
+        if (button(SDL_CONTROLLER_BUTTON_START)) b |= BTN_START;
+        if (button(SDL_CONTROLLER_BUTTON_LEFTSHOULDER)) b |= BTN_L;
+        if (button(SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) b |= BTN_R;
+        if (SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > 16000 ||
+            SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > 16000) b |= BTN_Z;
+        if (button(SDL_CONTROLLER_BUTTON_DPAD_UP) || ly < -kDigitalAxisThreshold) b |= BTN_UP;
+        if (button(SDL_CONTROLLER_BUTTON_DPAD_DOWN) || ly > kDigitalAxisThreshold) b |= BTN_DOWN;
+        if (button(SDL_CONTROLLER_BUTTON_DPAD_LEFT) || lx < -kDigitalAxisThreshold) b |= BTN_LEFT;
+        if (button(SDL_CONTROLLER_BUTTON_DPAD_RIGHT) || lx > kDigitalAxisThreshold) b |= BTN_RIGHT;
+    }
+    // Keyboard: T F G H or the numpad to move, Y / numpad 0 jump (A),
+    // U / numpad . grab (B), numpad Enter start.
+    if (key(SDL_SCANCODE_T) || key(SDL_SCANCODE_KP_8)) b |= BTN_UP;
+    if (key(SDL_SCANCODE_G) || key(SDL_SCANCODE_KP_5) || key(SDL_SCANCODE_KP_2)) b |= BTN_DOWN;
+    if (key(SDL_SCANCODE_F) || key(SDL_SCANCODE_KP_4)) b |= BTN_LEFT;
+    if (key(SDL_SCANCODE_H) || key(SDL_SCANCODE_KP_6)) b |= BTN_RIGHT;
+    if (key(SDL_SCANCODE_Y) || key(SDL_SCANCODE_KP_0)) b |= BTN_A;
+    if (key(SDL_SCANCODE_U) || key(SDL_SCANCODE_KP_PERIOD)) b |= BTN_B;
+    if (key(SDL_SCANCODE_KP_ENTER)) b |= BTN_START;
+    return b;
 }
 
 float binding_strength(InputBinding binding) {
@@ -161,6 +220,13 @@ bool get_input(int controller_num, uint16_t* buttons, float* x, float* y) {
 }
 
 bool live_input(int controller_num, uint16_t* buttons, float* x, float* y) {
+    if (controller_num == 1 && g_player2_input.load(std::memory_order_relaxed)) {
+        // While the menu holds input, player 2 is held too.
+        *buttons = g_input_blocked.load(std::memory_order_relaxed) ? 0 : player2_buttons();
+        *x = 0.0f;
+        *y = 0.0f;
+        return true;
+    }
     if (controller_num != 0) {
         return false;
     }
@@ -244,6 +310,10 @@ void request_rumble(uint16_t low, uint16_t high, uint32_t ms) {
 
 void refresh_controllers() {
     refresh_controller_internal();
+}
+
+void set_player2_input(bool on) {
+    g_player2_input.store(on, std::memory_order_relaxed);
 }
 
 void set_input_filter(InputFilter filter) {

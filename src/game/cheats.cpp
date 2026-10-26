@@ -60,6 +60,7 @@ std::atomic<int> g_rumble_level{2};
 std::atomic<bool> g_enemy_bars{true};
 std::atomic<bool> g_damage_numbers{true};
 std::atomic<bool> g_hold_dash{true};
+std::atomic<bool> g_coop{false};
 std::atomic<bool> g_active{false};
 std::filesystem::path g_path;
 std::mutex g_file_mutex;
@@ -87,6 +88,7 @@ void save() {
     f << "enemy_bars=" << (g_enemy_bars.load() ? 1 : 0) << '\n';
     f << "damage_numbers=" << (g_damage_numbers.load() ? 1 : 0) << '\n';
     f << "hold_dash=" << (g_hold_dash.load() ? 1 : 0) << '\n';
+    f << "coop=" << (g_coop.load() ? 1 : 0) << '\n';
 }
 
 // --- Endless jet -----------------------------------------------------------
@@ -486,6 +488,11 @@ void configure(const std::filesystem::path& folder) {
             g_hold_dash.store(on);
             continue;
         }
+        if (key == "coop") {
+            g_coop.store(on);
+            mm_audio_input::set_player2_input(on);
+            continue;
+        }
         if (key == "damage_numbers") {
             g_damage_numbers.store(on);
             continue;
@@ -583,6 +590,18 @@ void toggle_enemy_bars() {
     const bool now = !g_enemy_bars.load();
     g_enemy_bars.store(now, std::memory_order_release);
     std::fprintf(stderr, "[cheats] enemy health bars %s\n", now ? "on" : "off");
+    save();
+}
+
+bool coop_enabled() {
+    return g_coop.load(std::memory_order_acquire);
+}
+
+void toggle_coop() {
+    const bool now = !g_coop.load();
+    g_coop.store(now, std::memory_order_release);
+    mm_audio_input::set_player2_input(now);
+    std::fprintf(stderr, "[cheats] co-op %s\n", now ? "on" : "off");
     save();
 }
 

@@ -31,6 +31,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
+#include <vector>
 
 #include "recomp.h"
 #include "actors.h"
@@ -41,6 +43,7 @@
 #include "savestate.h"
 
 extern "C" void func_8006CFDC(uint8_t* rdram, recomp_context* ctx);
+extern "C" void func_8004ED10(uint8_t* rdram, recomp_context* ctx);   // Marina's update(slot)
 
 extern "C" { volatile uint32_t* mm_watch_ptr = nullptr; }
 
@@ -119,7 +122,7 @@ void tick(uint8_t* rdram) {
     static const char* peek = std::getenv("MM_TEST_PEEK");
     static const char* words = std::getenv("MM_TEST_WORDS");   // slot@frame: all words
     static const char* inspect = std::getenv("MM_TEST_INSPECT");   // =slot: collision view on, slot selected
-    if (!std::getenv("MM_TEST_KILL") && !std::getenv("MM_TEST_SETHP") && !std::getenv("MM_TEST_FFWD") && !std::getenv("MM_TEST_CRASH") && !script && !dump && !trace && !diff && !spawn && !peek && !words && !inspect && !std::getenv("MM_TEST_FIND") && !std::getenv("MM_TEST_SETW") && !std::getenv("MM_TEST_MACHINE") && !std::getenv("MM_TEST_WATCH") && !std::getenv("MM_TEST_PKG")) return;
+    if (!std::getenv("MM_TEST_KILL") && !std::getenv("MM_TEST_SETHP") && !std::getenv("MM_TEST_FFWD") && !std::getenv("MM_TEST_CRASH") && !script && !dump && !trace && !diff && !spawn && !peek && !words && !inspect && !std::getenv("MM_TEST_FIND") && !std::getenv("MM_TEST_SETW") && !std::getenv("MM_TEST_MACHINE") && !std::getenv("MM_TEST_WATCH") && !std::getenv("MM_TEST_PKG") && !std::getenv("MM_TEST_P2PROBE")) return;
     if (std::getenv("MM_TEST_PKG")) {             // with MM_TEST_WARP: is the clanball machine's code loaded?
         static long frames = 0;
         if (++frames % 120 == 0 && MEM_HU(0, addr(0x800BE4F0u)) == 6) {
@@ -239,13 +242,16 @@ void tick(uint8_t* rdram) {
         if (!mm::inspector::overlay_enabled()) mm::inspector::toggle_overlay();
         mm::inspector::set_selected_slot(std::atoi(inspect));
     }
-    if (spawn) {                                 // several specs separated by ';'
+    if (spawn) {                                 // several specs separated by ';', each once per run
+        static std::vector<const char*> done;
         for (const char* p = spawn; p && *p;) {
             unsigned type = 0;
             long at = 0;
             int dx = 40, dy = 0;
             unsigned flags = 0, param = 0;
-            if (std::sscanf(p, "%x@%ld@%d@%d@%x@%x", &type, &at, &dx, &dy, &flags, &param) >= 2 && t == at) {
+            if (std::sscanf(p, "%x@%ld@%d@%d@%x@%x", &type, &at, &dx, &dy, &flags, &param) >= 2 && t == at &&
+                std::find(done.begin(), done.end(), p) == done.end()) {
+                done.push_back(p);
                 const int slot = mm::actors::spawn_now(rdram, static_cast<uint16_t>(type), dx, dy, param);
                 if (slot >= 0 && flags != 0) MEM_W(0x80, slot_addr(slot)) = static_cast<int32_t>(flags);
                 // MM_TEST_POKE="DF=40,A0=E0": bytes to set on spawned slots
@@ -288,6 +294,42 @@ void tick(uint8_t* rdram) {
 #ifdef SIGTRAP
             std::raise(SIGTRAP);
 #endif
+        }
+    }
+    if (const char* probe = std::getenv("MM_TEST_P2PROBE")) {   // from,to: words Marina's update writes
+        // Each frame in range: snapshot game memory, run Marina's update once
+        // more, note every word it changed outside her own slot (and the
+        // scratch stack), then put memory back exactly. At the end, print the
+        // written words grouped into ranges with how many frames wrote them.
+        long from = 0, to = 0;
+        std::sscanf(probe, "%ld,%ld", &from, &to);
+        static std::vector<uint8_t> before;
+        static std::vector<uint32_t> hits;
+        constexpr uint32_t kSize = 0x810000;
+        if (t >= from && t <= to) {
+            if (hits.empty()) hits.assign(kSize / 4, 0);
+            before.assign(rdram, rdram + kSize);
+            recomp_context c{};
+            c.r29 = static_cast<gpr>(static_cast<int32_t>(0x8045FF00u));
+            c.r4 = 0;
+            c.f_odd = &c.f0.u32h;          // float register pairing, as run_thread_function sets it
+            func_8004ED10(rdram, &c);
+            for (uint32_t w = 0; w < kSize / 4; ++w) {
+                if (reinterpret_cast<const uint32_t*>(rdram)[w] != reinterpret_cast<const uint32_t*>(before.data())[w]) ++hits[w];
+            }
+            std::memcpy(rdram, before.data(), kSize);
+        }
+        if (t == to + 1 && !hits.empty()) {
+            const uint32_t slot0 = 0xEF510, slot0_end = slot0 + 0x198;
+            for (uint32_t w = 0; w < kSize / 4;) {
+                const uint32_t a = w * 4;
+                if (hits[w] == 0 || (a >= slot0 && a < slot0_end) || (a >= 0x45F000 && a < 0x460000)) { ++w; continue; }
+                uint32_t e = w, most = 0;
+                while (e < kSize / 4 && hits[e] != 0) { most = std::max(most, hits[e]); ++e; }
+                std::fprintf(stderr, "[p2probe] %08X-%08X (%u bytes) written in up to %u frames\n",
+                             0x80000000u + a, 0x80000000u + e * 4, (e - w) * 4, most);
+                w = e;
+            }
         }
     }
     if (words) {

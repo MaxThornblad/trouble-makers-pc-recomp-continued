@@ -1,4 +1,5 @@
 #include "custom_actors.h"
+#include "player2.h"
 
 #include <algorithm>
 #include <array>
@@ -322,6 +323,7 @@ std::array<TypeInfo, 256> make_table() {
     std::array<TypeInfo, 256> t{};
     t[kTestBlock] = {"Bobbing block", test_block_update, test_block_setup};
     t[kBlock] = {"Block", block_update, block_setup};
+    t[kPlayer2] = {"Player 2", mm::player2::update, mm::player2::setup};
     return t;
 }
 const std::array<TypeInfo, 256> kTable = make_table();

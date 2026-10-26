@@ -29,6 +29,10 @@ namespace mm_audio_input {
 // the input. Null (the default) = live input, controller 0 only.
 using InputFilter = bool (*)(int controller, uint16_t* buttons, float* x, float* y);
 void set_input_filter(InputFilter filter);
+// Co-op: report controller 2 to the game (second game controller, or the
+// keyboard's T F G H / numpad, Y jump, U grab). Off = only controller 1, as
+// the game always had.
+void set_player2_input(bool on);
 
 // The same typed, two-slot binding model used by the modern N64 recomp
 // frontends, kept game-local so the launcher can stay on Dear ImGui.

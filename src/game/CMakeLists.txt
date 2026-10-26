@@ -39,6 +39,7 @@ add_executable(troublemakers
     rumble.cpp
     savestate.cpp
     replay.cpp
+    player2.cpp
     widescreen.cpp
 )
 

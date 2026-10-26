@@ -277,6 +277,12 @@ enemies: the hopping Clancers in 1-2 and 1-3 die like any 1-health enemy,
 scripted characters that are held at 10000 health (the 1-1 cast and the
 like) go down after about three throws, and the 3-11 cats, which the game
 puts back to full health after every hit, go down after one throw.
+**Co-op: player 2** (Cheats page) adds a second Marina, tinted blue with a
+"2P" tag and her own health over her head, for a second controller or the
+keyboard (T F G H or the numpad to move, Y jump, U grab). She joins a moment
+into every scene, the camera frames you both, and if she is defeated or left
+far behind she comes back next to player 1. This is local co-op on one screen;
+online co-op with a screen each is being built (docs/NETPLAY.md).
 **Golden gem compass**
 (a setting on the same page, off by default, and working with the debug menu
 turned off) puts a gold arrow at the edge of the screen pointing to the

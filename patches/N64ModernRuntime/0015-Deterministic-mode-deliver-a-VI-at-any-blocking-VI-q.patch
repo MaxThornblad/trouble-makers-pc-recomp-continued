@@ -1,0 +1,93 @@
+From 64b83e84e8dc97196c8842f6bb9060a17c8007c6 Mon Sep 17 00:00:00 2001
+From: Max Thornblad <max.thornblad@hotmail.com>
+Date: Mon, 26 Oct 2026 18:13:00 +0100
+Subject: [PATCH] Deterministic mode: deliver a VI at any blocking VI-queue
+ wait
+
+The game thread gets its next VI whenever it blocks on the VI queue, not only
+at the main loop's hook, and the VI registration is read from the next VI
+state (the current one lags a VI-thread tick behind osViSetEvent, which hung
+fast-forward boots).
+---
+ ultramodern/include/ultramodern/ultramodern.hpp |  9 ++++++---
+ ultramodern/src/events.cpp                      | 11 ++++++++++-
+ ultramodern/src/mesgqueue.cpp                   |  8 ++++++++
+ 3 files changed, 24 insertions(+), 4 deletions(-)
+
+diff --git a/ultramodern/include/ultramodern/ultramodern.hpp b/ultramodern/include/ultramodern/ultramodern.hpp
+index 3e0d3e8..c77ca31 100644
+--- a/ultramodern/include/ultramodern/ultramodern.hpp
++++ b/ultramodern/include/ultramodern/ultramodern.hpp
+@@ -108,15 +108,18 @@ void submit_rsp_task(RDRAM_ARG PTR(OSTask) task);
+ bool wait_for_rsp_idle(std::chrono::milliseconds timeout);
+ 
+ // Deterministic event mode (replays, netplay). While on, the VI thread stops
+-// sending VI/AI messages; instead the game thread calls deterministic_frame()
+-// once per game frame, which waits for the next real VI time(s) and delivers
+-// exactly the VI (and AI) messages for one VI message period. Every RSP/RDP
++// sending VI/AI messages; instead, when the game thread blocks on its VI
++// queue, osRecvMesg calls deterministic_frame(), which waits for the next
++// real VI time(s) and delivers exactly the VI (and AI) messages for one VI
++// message period. Every RSP/RDP
+ // task the game submits is waited for and its completion delivered before
+ // osSpTaskStartGo returns. Together this makes what the game finds in its
+ // queues depend only on its own progress, never on host thread timing.
+ void set_deterministic_events(bool on);
+ bool deterministic_events();
+ void deterministic_frame(RDRAM_ARG1);
++// The queue the game registered for VI messages (osViSetEvent), or 0.
++PTR(OSMesgQueue) deterministic_vi_queue();
+ // Delivers every queued host event (VI/SI/SP/DP...) into its N64 queue now.
+ void deliver_pending_external_messages(RDRAM_ARG1);
+ struct PendingExternalMessage {
+diff --git a/ultramodern/src/events.cpp b/ultramodern/src/events.cpp
+index e41ec48..7fcc95b 100644
+--- a/ultramodern/src/events.cpp
++++ b/ultramodern/src/events.cpp
+@@ -280,6 +280,15 @@ void ultramodern::set_deterministic_events(bool on) {
+     std::lock_guard lock{ events_context.message_mutex };
+ }
+ 
++// Deterministic mode reads the VI registration from the *next* VI state:
++// osViSetEvent writes it there and the VI thread copies it into the current
++// state only at its next tick, so right after the game registers (at boot)
++// the current state can still lack it; next always holds the latest.
++PTR(OSMesgQueue) ultramodern::deterministic_vi_queue() {
++    std::lock_guard lock{ events_context.message_mutex };
++    return events_context.vi.get_next_state()->mq;
++}
++
+ bool ultramodern::deterministic_events() {
+     return deterministic_mode.load(std::memory_order_acquire);
+ }
+@@ -303,7 +312,7 @@ void ultramodern::deterministic_frame(RDRAM_ARG1) {
+         }
+         ultramodern::sleep_until(next);
+         std::lock_guard lock{ events_context.message_mutex };
+-        ViState* cur_state = events_context.vi.get_cur_state();
++        ViState* cur_state = events_context.vi.get_next_state();   // the latest registration, see deterministic_vi_queue
+         if (events_context.ai.mq != NULLPTR) {
+             ultramodern::enqueue_external_message_src(events_context.ai.mq, events_context.ai.msg, false, ultramodern::EventMessageSource::Ai);
+         }
+diff --git a/ultramodern/src/mesgqueue.cpp b/ultramodern/src/mesgqueue.cpp
+index 5db9234..fd3280b 100644
+--- a/ultramodern/src/mesgqueue.cpp
++++ b/ultramodern/src/mesgqueue.cpp
+@@ -279,6 +279,14 @@ extern "C" s32 osRecvMesg(RDRAM_ARG PTR(OSMesgQueue) mq_, PTR(OSMesg) msg_, s32
+     // Handle any messages that have been received from an external thread.
+     dequeue_external_messages(PASS_RDRAM1);
+ 
++    // Deterministic event mode: a game thread about to wait on the VI queue
++    // gets its next VI now (at the VI's real time), wherever in the game the
++    // wait is, instead of from the VI thread.
++    if (flags == OS_MESG_BLOCK && ultramodern::deterministic_events() &&
++        mq_ == ultramodern::deterministic_vi_queue() && mq->validCount == 0) {
++        ultramodern::deterministic_frame(PASS_RDRAM1);
++    }
++
+     // Try to receive a message.
+     bool received = do_recv(PASS_RDRAM mq_, msg_, flags == OS_MESG_BLOCK);
+ 
+-- 
+2.43.0
+
