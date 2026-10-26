@@ -47,6 +47,7 @@
 #include "debug_menu.h"
 #include "savestate.h"
 #include "replay.h"
+#include "netplay.h"
 #include "player2.h"
 #include "cheats.h"
 #include "rank_timer.h"
@@ -121,6 +122,8 @@ static int g_window_w = 1280;
 static int g_window_h = 960;
 static bool g_fullscreen = false;
 static bool g_widescreen = false;
+static int g_net_host_port = 0;          // --host [port]
+static std::string g_net_join;           // --join address[:port]
 static int g_ssaa = 1;
 static int g_msaa = 0;
 static bool g_debug_menu = false;
@@ -563,6 +566,7 @@ static void draw_overlays() {
     mm::rank_timer::draw_overlay();
     mm::gem_hints::draw_overlay();
     mm::savestate::draw_overlay();
+    mm::netplay::draw_overlay();
 }
 
 static void draw_overlays_with_debug_menu() {
@@ -574,6 +578,7 @@ static void draw_overlays_with_debug_menu() {
     mm::inspector::draw_overlay();
     mm::debug_menu::draw_overlay();
     mm::savestate::draw_overlay();
+    mm::netplay::draw_overlay();
 }
 #endif
 
@@ -602,6 +607,8 @@ static void print_usage(const char* argv0) {
         "  --widescreen        expand the rendered field to the window aspect\n"
         "                      (opt-in: can reveal off-stage areas in a 2D game)\n"
         "  --no-widescreen     force the original 4:3 presentation\n"
+        "  --host [port]       host an online co-op game (default port 7845)\n"
+        "  --join addr[:port]  join an online co-op game\n"
         "  --debug-menu        enable the in-game debug overlay\n"
         "  --no-debug-menu     disable the in-game debug overlay\n"
         "settings persist in the app config folder (display.cfg, controls.json)\n"
@@ -709,6 +716,12 @@ int main(int argc, char** argv) {
             g_vsync = true;
         } else if (arg == "--no-vsync") {
             g_vsync = false;
+        } else if (arg == "--host") {
+            int port = mm::netplay::kDefaultPort;
+            if (i + 1 < argc && argv[i + 1][0] != '-' && std::atoi(argv[i + 1]) > 0) port = std::atoi(argv[++i]);
+            g_net_host_port = port;
+        } else if (arg == "--join" && i + 1 < argc) {
+            g_net_join = argv[++i];
         } else if (arg == "--debug-menu") {
             g_debug_menu = true;
         } else if (arg == "--no-debug-menu") {
@@ -839,6 +852,9 @@ int main(int argc, char** argv) {
     mm::debug_menu::configure(g_debug_menu);
     mm::savestate::configure(config_dir / "savestates");
     mm::replay::configure(config_dir / "replays");
+    mm::netplay::configure(config_dir / "netplay");
+    if (g_net_host_port > 0) mm::netplay::request_host(g_net_host_port);
+    if (!g_net_join.empty()) mm::netplay::request_join(g_net_join);
     mm::cheats::configure(config_dir);
 #ifdef MM_HAS_GRAPHICS
     mm::graphics::set_overlay_draw_callback(

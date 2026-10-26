@@ -11,6 +11,7 @@
 #include "crash_handler.h"
 #include "rumble.h"
 #include "replay.h"
+#include "netplay.h"
 #include "player2.h"
 
 #include <algorithm>
@@ -20,6 +21,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <mutex>
 #include <string_view>
 
 #include "librecomp/game.hpp"
@@ -130,7 +132,14 @@ constexpr int kPageSpawn = 2;
 constexpr int kPageInspect = 3;
 constexpr int kPageSession = 4;
 constexpr int kPageCount = 5;
-constexpr int kSessionRows = 3;   // record, play latest, stop
+constexpr int kSessionRows = 7;   // record, play latest, stop; host, join address, join, leave
+
+// Session page: the netplay join address being typed (row 4; Enter starts
+// and ends editing, text comes from SDL text input).
+std::mutex g_address_mutex;
+std::string g_address;
+bool g_address_loaded = false;
+std::atomic<bool> g_editing_address{false};
 // Inspect page rows: the overlay and label toggles, then the active actors
 // (nearest to Marina first, from the last snapshot).
 constexpr int kInspectToggles = 2;
@@ -287,7 +296,25 @@ void activate_selection() {
         switch (g_selected_session.load(std::memory_order_relaxed)) {
             case 0: mm::replay::request_record(); close_overlay(); break;
             case 1: mm::replay::request_play_latest(); close_overlay(); break;
-            default: mm::replay::request_stop(); break;
+            case 2: mm::replay::request_stop(); break;
+            case 3: mm::netplay::request_host(); break;
+            case 4: {
+                const bool now = !g_editing_address.load();
+                g_editing_address.store(now);
+                if (now) SDL_StartTextInput();
+                else SDL_StopTextInput();
+                break;
+            }
+            case 5: {
+                std::string a;
+                {
+                    std::lock_guard lock{g_address_mutex};
+                    a = g_address;
+                }
+                if (!a.empty()) mm::netplay::request_join(a);
+                break;
+            }
+            default: mm::netplay::request_leave(); break;
         }
         return;
     }
@@ -380,6 +407,37 @@ bool handle_event(const SDL_Event& event) {
                event.type == SDL_CONTROLLERBUTTONUP;
     }
 
+    // Typing the netplay address: text and Backspace go to it; Enter / Esc finish.
+    if (g_editing_address.load(std::memory_order_acquire) && g_open.load(std::memory_order_acquire)) {
+        if (event.type == SDL_TEXTINPUT) {
+            std::lock_guard lock{g_address_mutex};
+            for (const char* c = event.text.text; *c; ++c) {
+                if (g_address.size() < 64 && *c > ' ' && *c < 127) g_address.push_back(*c);
+            }
+            return true;
+        }
+        if (event.type == SDL_KEYDOWN) {
+            const SDL_Scancode sc = event.key.keysym.scancode;
+            if (sc == SDL_SCANCODE_BACKSPACE) {
+                std::lock_guard lock{g_address_mutex};
+                if (!g_address.empty()) g_address.pop_back();
+            } else if (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER || sc == SDL_SCANCODE_ESCAPE) {
+                g_editing_address.store(false);
+                SDL_StopTextInput();
+            } else if (sc == SDL_SCANCODE_V && (SDL_GetModState() & KMOD_CTRL)) {
+                if (char* clip = SDL_GetClipboardText()) {
+                    std::lock_guard lock{g_address_mutex};
+                    for (const char* c = clip; *c; ++c) {
+                        if (g_address.size() < 64 && *c > ' ' && *c < 127) g_address.push_back(*c);
+                    }
+                    SDL_free(clip);
+                }
+            }
+            return true;
+        }
+        if (event.type == SDL_KEYUP) return true;
+    }
+
     if (event.type == SDL_KEYDOWN && event.key.repeat == 0) {
         if (event.key.keysym.scancode == SDL_SCANCODE_F1) {
             toggle_overlay();
@@ -436,10 +494,13 @@ extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
     mm::cheats::set_active(g_enabled.load(std::memory_order_acquire));
     if (g_enabled.load(std::memory_order_acquire)) mm::inspector::publish(rdram);
 
+    // Cheats run while they are live: this player's debug menu is enabled,
+    // or a netplay host's is (cheats.h, SessionSettings).
     if (!g_enabled.load(std::memory_order_acquire)) {
+        if (mm::cheats::g_active_for_hooks()) mm::cheats::apply(rdram);
         return;
     }
-    mm::cheats::apply(rdram);
+    if (mm::cheats::g_active_for_hooks()) mm::cheats::apply(rdram);
 
     g_current_game_state.store(game_state, std::memory_order_relaxed);
     g_current_stage.store(current_stage, std::memory_order_relaxed);
@@ -907,6 +968,33 @@ void draw_overlay() {
         ImGui::Selectable("      Record a replay from here", selected == 0);
         ImGui::Selectable("      Play the latest replay", selected == 1);
         ImGui::Selectable("      Stop recording / playback", selected == 2);
+        ImGui::Separator();
+        ImGui::TextUnformatted("Online co-op (netplay)");
+        ImGui::TextWrapped(
+            "The host plays Marina, the other player joins as player 2 from the host's "
+            "game. Both need the same build. The host's port (UDP 7845) must be reachable: "
+            "on the same network use the host's local address; over the internet a VPN "
+            "like Tailscale is easiest (use the host's Tailscale address).");
+        {
+            std::string address;
+            {
+                std::lock_guard lock{g_address_mutex};
+                if (!g_address_loaded) {
+                    g_address = mm::netplay::last_address();
+                    g_address_loaded = true;
+                }
+                address = g_address;
+            }
+            const bool editing = g_editing_address.load();
+            ImGui::Selectable("      Host a game (port 7845)", selected == 3);
+            const std::string row = std::string("      Address: ") + (address.empty() ? "(none)" : address) +
+                                    (editing ? "_   (type, Enter to finish)" : "   (Enter to edit)");
+            ImGui::Selectable(row.c_str(), selected == 4);
+            ImGui::Selectable("      Join that address", selected == 5);
+            ImGui::Selectable("      Leave the online game", selected == 6);
+            const std::string net = mm::netplay::status_text();
+            ImGui::BulletText("%s", net.empty() ? "Not connected" : net.c_str());
+        }
         if (mode == mm::replay::Mode::Recording) {
             ImGui::BulletText("Recording: frame %ld", mm::replay::frame());
         } else if (mode == mm::replay::Mode::Playing) {

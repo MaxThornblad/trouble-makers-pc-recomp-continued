@@ -65,6 +65,19 @@ std::atomic<bool> g_active{false};
 std::filesystem::path g_path;
 std::mutex g_file_mutex;
 
+// Netplay session settings (set_session_settings): while present they stand
+// in for this player's own choices, so both machines run the same rules.
+std::atomic<bool> g_session{false};
+std::atomic<uint32_t> g_session_cheats{0};
+std::atomic<bool> g_session_active{false};
+std::atomic<bool> g_session_hold_dash{true};
+std::atomic<bool> g_session_gem_hints{true};
+
+bool active_now() {
+    return g_session.load(std::memory_order_acquire) ? g_session_active.load(std::memory_order_relaxed)
+                                                     : g_active.load(std::memory_order_relaxed);
+}
+
 gpr addr(uint32_t vaddr) {
     return static_cast<gpr>(static_cast<int32_t>(vaddr));
 }
@@ -267,7 +280,7 @@ constexpr int kMagnetRadius = 96;              // px
 constexpr int kMaxItems = 512;                 // safety bound on the list walk
 
 bool magnet_live(uint8_t* rdram) {
-    return g_active.load(std::memory_order_relaxed) && enabled(Cheat::GemMagnet) && MEM_HU(0, addr(kGameState)) == 6 &&
+    return active_now() && enabled(Cheat::GemMagnet) && MEM_HU(0, addr(kGameState)) == 6 &&
            MEM_W(0x80, addr(kMarina)) != 0;
 }
 
@@ -447,23 +460,26 @@ extern "C" void mm_item_list_hook(uint8_t* rdram, uint32_t list) {
 namespace mm::cheats {
 
 extern "C" int mm_cheat_skip_terrain(uint8_t* rdram, uint32_t actor_index) {
-    return (actor_index & 0xFFFF) == 0 && g_active.load(std::memory_order_relaxed) &&
+    return (actor_index & 0xFFFF) == 0 && active_now() &&
            enabled(Cheat::NoClip) &&
            MEM_HU(0, addr(kGameState)) == 6;
 }
 
 bool g_active_for_hooks() {
-    return g_active.load(std::memory_order_relaxed);
+    return active_now();
 }
 
 bool grab_blocks_live() {
-    return g_active.load(std::memory_order_relaxed) && enabled(Cheat::GrabBlocks);
+    return active_now() && enabled(Cheat::GrabBlocks);
 }
 
 const char* name(Cheat cheat) { return kCheats[static_cast<int>(cheat)].name; }
 const char* description(Cheat cheat) { return kCheats[static_cast<int>(cheat)].description; }
 
 bool enabled(Cheat cheat) {
+    if (g_session.load(std::memory_order_acquire)) {
+        return (g_session_cheats.load(std::memory_order_relaxed) >> static_cast<int>(cheat)) & 1u;
+    }
     return g_enabled[static_cast<int>(cheat)].load(std::memory_order_acquire);
 }
 
@@ -561,6 +577,7 @@ void toggle_rank_timer() {
 }
 
 bool gem_hints_enabled() {
+    if (g_session.load(std::memory_order_acquire)) return g_session_gem_hints.load(std::memory_order_relaxed);
     return g_gem_hints.load(std::memory_order_acquire);
 }
 
@@ -594,6 +611,7 @@ void toggle_enemy_bars() {
 }
 
 bool coop_enabled() {
+    if (g_session.load(std::memory_order_acquire)) return true;   // netplay is co-op
     return g_coop.load(std::memory_order_acquire);
 }
 
@@ -606,6 +624,7 @@ void toggle_coop() {
 }
 
 bool hold_dash_enabled() {
+    if (g_session.load(std::memory_order_acquire)) return g_session_hold_dash.load(std::memory_order_relaxed);
     return g_hold_dash.load(std::memory_order_acquire);
 }
 
@@ -618,8 +637,8 @@ void toggle_hold_dash() {
 
 void apply_settings(uint8_t* rdram) {
     // Endless jet (a cheat) already covers this, and adds flight.
-    if (g_active.load(std::memory_order_relaxed) && (enabled(Cheat::EndlessJet) || enabled(Cheat::NoClip))) return;
-    if (g_hold_dash.load(std::memory_order_relaxed)) apply_hold_dash(rdram);
+    if (active_now() && (enabled(Cheat::EndlessJet) || enabled(Cheat::NoClip))) return;
+    if (hold_dash_enabled()) apply_hold_dash(rdram);
 }
 
 bool damage_numbers_enabled() {
@@ -653,6 +672,33 @@ void cycle_rumble_level() {
         const auto v = static_cast<uint16_t>(kScale[next] * 65535.0f);
         mm_audio_input::request_rumble(v, v, 250);
     }
+}
+
+SessionSettings capture_session_settings() {
+    SessionSettings out;
+    for (int i = 0; i < kCheatCount; ++i) {
+        if (g_enabled[i].load()) out.cheats |= 1u << i;
+    }
+    out.active = g_active.load() ? 1 : 0;
+    out.hold_dash = g_hold_dash.load() ? 1 : 0;
+    out.gem_hints = g_gem_hints.load() ? 1 : 0;
+    return out;
+}
+
+void set_session_settings(const SessionSettings* settings) {
+    if (settings == nullptr) {
+        g_session.store(false, std::memory_order_release);
+        return;
+    }
+    g_session_cheats.store(settings->cheats, std::memory_order_relaxed);
+    g_session_active.store(settings->active != 0, std::memory_order_relaxed);
+    g_session_hold_dash.store(settings->hold_dash != 0, std::memory_order_relaxed);
+    g_session_gem_hints.store(settings->gem_hints != 0, std::memory_order_relaxed);
+    g_session.store(true, std::memory_order_release);
+}
+
+bool session_settings_active() {
+    return g_session.load(std::memory_order_acquire);
 }
 
 void set_active(bool active) {

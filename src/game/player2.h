@@ -26,6 +26,11 @@ constexpr uint8_t kCustomIndex = 0x02;
 void setup(uint8_t* rdram, int slot);
 void update(uint8_t* rdram, recomp_context* ctx, int slot);
 
+// The picture's offset from the game camera (px, +y up) while netplay shows
+// each player their own view; overlays drawn at camera positions subtract it.
+// Any thread.
+void view_offset(float& x, float& y);
+
 // Slot of the live player 2, or -1.
 int slot(uint8_t* rdram);
 

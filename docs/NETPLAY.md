@@ -7,8 +7,8 @@ controller input each frame; a second Marina (player 2, recoloured, with a
 | Phase | What | Status |
 |---|---|---|
 | 0 | Identical replays: record input, play it back, and prove game memory matches frame for frame | done |
-| 1 | Player 2 locally: a second controller drives a second Marina (context swap), shared camera, co-op rules | working; polishing |
-| 2 | Lockstep netplay over UDP (ENet): input delay of a few frames, session start from the host's state, desync check and automatic resync | |
+| 1 | Player 2 locally: a second controller drives a second Marina (context swap), shared camera, co-op rules | done |
+| 2 | Lockstep netplay over UDP (ENet): input delay of a few frames, session start from the host's state, desync check and automatic resync, a screen per player | working |
 | 3 | Connecting over the internet: Tailscale/ZeroTier first, join-by-code later | |
 | 4 | Rollback (optional) | |
 
@@ -112,3 +112,43 @@ Deterministic mode delivers a VI whenever a game thread blocks on the VI queue
 Not yet covered, for phase 2: host-side settings that change the game (cheats,
 grab blocks, hold to dash, spawns, warps) must be synced or disabled in a
 session; the debug menu and save states must be host-only while connected.
+
+## Phase 2: netplay
+
+`src/game/netplay.cpp` (header comment for the details and the test
+environment variables). Start with `--host [port]` / `--join addr[:port]` or
+from the overlay's Session page.
+
+- **Transport**: ENet 1.3.18 (fetched by CMake), one connection, two
+  channels (control: hello / start / desync; input and fingerprints), all
+  reliable and ordered. Serviced on the game thread at the frame point.
+- **Start**: the guest sends a hello with the build's commit (mismatch:
+  refused). The host takes a save state, loads it back (as a replay recording
+  does), and sends it with its cartridge save and its game-changing settings
+  (`cheats::SessionSettings`: cheats and whether they are live, hold to dash,
+  gem hints, widescreen). The guest plays in a save sandbox (its own save file
+  untouched), adopts the settings for the session and loads the state.
+- **Lockstep**: each frame point, each side sends its own input for frame
+  f + delay (default 4) and waits until the other side's input for f is in.
+  The game's controller polls in frame f are answered with those two inputs
+  (host = controller 1 = Marina, guest = controller 2 = player 2).
+- **Checks**: every 60 frames both send a memory fingerprint (the replay
+  fingerprint folded to 64 bits). A mismatch, or the host loading a state,
+  makes the host send a fresh start (a resync, at most every 2 s). The guest
+  cannot load states.
+- **A screen each**: the game camera stays the shared midpoint (it drives the
+  simulation). After `LookAt_Update` builds the view matrices (0x804600C0 /
+  0x804700C0), their translation moves by half the distance from the other
+  player to this machine's player, so each picture centres on its own player.
+  Those two matrices are the only memory that differs between the machines and
+  are left out of fingerprints. (A first version moved the eye and target
+  before the call instead; the call's stack leftovers then differed too.)
+  Overlays drawn at camera positions (the 2P tag, enemy bars, damage numbers)
+  follow the same offset.
+- **Widescreen tracking** restarts on every state load (`g_ws_tracking_gen`),
+  because its gameplay/cinema state machine decides the expanded cull bounds
+  the game logic sees, and two processes must track it identically after a load.
+- Verified: two Linux processes over localhost, and a Windows build (Wine,
+  rendering, own view on) against a Linux build: fingerprints identical every
+  second for whole sessions; a forced difference and a host state load each
+  resync within a second.

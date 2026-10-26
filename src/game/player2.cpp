@@ -1,6 +1,8 @@
 #include "player2.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <array>
 #include <cfloat>
 #include <mutex>
@@ -11,6 +13,7 @@
 #include "actors.h"
 #include "cheats.h"
 #include "custom_actors.h"
+#include "netplay.h"
 
 #ifdef MM_HAS_GRAPHICS
 #include "imgui.h"
@@ -297,7 +300,9 @@ void draw_overlay() {
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     const float scale = io.DisplaySize.y / 240.0f;
     const ImVec2 centre(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
-    const ImVec2 head(centre.x + m.x * scale, centre.y - (m.top + 6.0f) * scale);
+    float vx, vy;
+    view_offset(vx, vy);
+    const ImVec2 head(centre.x + (m.x - vx) * scale, centre.y - (m.top - vy + 6.0f) * scale);
     const char* text = "2P";
     ImFont* font = ImGui::GetFont();
     const float size = std::max(10.0f, 6.0f * scale);
@@ -439,6 +444,76 @@ extern "C" void mm_p2_draw_end(uint8_t* rdram, recomp_context*) {
         const gpr table = static_cast<gpr>(MEM_W(0, static_cast<gpr>(static_cast<int32_t>(kDlTable))));
         for (int f = 0; f < 2; ++f) MEM_W((2 + 2 * g_draw_k + f) * 4, table) = static_cast<int32_t>(g_draw_lists[f]);
         g_draw_k = -1;
+    }
+}
+
+// Each player's own view (netplay). The game has one camera, shared by both
+// players and by the simulation (actor positions are camera-relative and the
+// camera decides what is active), so it stays as it is: the players'
+// midpoint. Only the picture moves. LookAt_Update builds the view matrix
+// (eye (0, 0, 448) looking at the origin) into 0x804600C0 and 0x804700C0;
+// afterwards its translation is moved by half the distance from the other
+// player to this machine's player, so the view centres on this player the
+// way the camera centres on the midpoint (same dead zone and easing). The
+// players stay within 144 px of the midpoint across (Marina's screen clamp),
+// well inside what the game draws in widescreen. Only those two matrices
+// differ between the machines (the netplay memory check leaves them out);
+// the game's own computation, stack leftovers included, is untouched.
+namespace {
+std::atomic<float> g_view_x{0.0f}, g_view_y{0.0f};   // render thread reads
+float g_smooth_x = 0.0f, g_smooth_y = 0.0f;
+
+// Adds `delta` (px) to element [3][col] (translation) of an N64 Mtx.
+void shift_translation(uint8_t* rdram, uint32_t mtx, int col, float delta) {
+    const gpr m = static_cast<gpr>(static_cast<int32_t>(mtx));
+    const int idx = 3 * 4 + col;
+    const int32_t whole = MEM_H(idx * 2, m);
+    const uint32_t frac = MEM_HU(32 + idx * 2, m);
+    int32_t v = static_cast<int32_t>((static_cast<uint32_t>(whole) << 16) | frac);
+    v += static_cast<int32_t>(std::lround(delta * 65536.0f));
+    MEM_H(idx * 2, m) = static_cast<int16_t>(v >> 16);
+    MEM_H(32 + idx * 2, m) = static_cast<int16_t>(v & 0xFFFF);
+}
+} // namespace
+
+namespace mm::player2 {
+void view_offset(float& x, float& y) {
+    x = g_view_x.load(std::memory_order_relaxed);
+    y = g_view_y.load(std::memory_order_relaxed);
+}
+} // namespace mm::player2
+
+extern "C" void mm_view_begin(uint8_t*) {}
+
+extern "C" void mm_view_end(uint8_t* rdram) {
+    using namespace mm::player2;
+    const int own = mm::netplay::active() ? mm::netplay::player() : 0;
+    const int p2 = own != 0 ? slot(rdram) : -1;
+    float tx = 0.0f, ty = 0.0f;
+    if (p2 > 0) {
+        const gpr a1 = static_cast<gpr>(static_cast<int32_t>(0x800EF510u));
+        const gpr a2 = static_cast<gpr>(static_cast<int32_t>(0x800EF510u + static_cast<uint32_t>(p2) * 0x198u));
+        const float x1 = MEM_W(0x88, a1) / 65536.0f, y1 = MEM_W(0x8C, a1) / 65536.0f;
+        const float x2 = MEM_W(0x88, a2) / 65536.0f, y2 = MEM_W(0x8C, a2) / 65536.0f;
+        tx = std::clamp((own == 1 ? x1 - x2 : x2 - x1) * 0.5f, -160.0f, 160.0f);
+        ty = std::clamp((own == 1 ? y1 - y2 : y2 - y1) * 0.5f, -100.0f, 100.0f);
+    }
+    if (const char* t = std::getenv("MM_VIEW_TEST")) {   // test: a fixed offset "x,y"
+        tx = static_cast<float>(std::atof(t));
+        if (const char* c = std::strchr(t, ',')) ty = static_cast<float>(std::atof(c + 1));
+    }
+    // Eased, so a rejoin (a jump of up to 250 px) glides instead of cutting.
+    g_smooth_x += (tx - g_smooth_x) * 0.25f;
+    g_smooth_y += (ty - g_smooth_y) * 0.25f;
+    if (tx == 0.0f && ty == 0.0f && std::abs(g_smooth_x) < 0.05f && std::abs(g_smooth_y) < 0.05f) {
+        g_smooth_x = g_smooth_y = 0.0f;
+    }
+    g_view_x.store(g_smooth_x, std::memory_order_relaxed);
+    g_view_y.store(g_smooth_y, std::memory_order_relaxed);
+    if (g_smooth_x == 0.0f && g_smooth_y == 0.0f) return;
+    for (uint32_t mtx : {0x804600C0u, 0x804700C0u}) {
+        shift_translation(rdram, mtx, 0, -g_smooth_x);
+        shift_translation(rdram, mtx, 1, -g_smooth_y);
     }
 }
 

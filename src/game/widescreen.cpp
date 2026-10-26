@@ -163,6 +163,11 @@ bool valid_rdram_ptr(uint32_t ptr) {
 }
 
 int g_gameplay_wide_active = 0;
+// Bumped on every state load: the gameplay/cinema tracking below restarts
+// from scratch, so two processes that load the same state (a replay and its
+// recording, two netplay peers) track identically from there. The widescreen
+// state decides the expanded cull bounds, which the game logic sees.
+int g_ws_tracking_gen = 0;
 float g_backdrop_stretch = 0.0f;
 
 // These gameplay scenes transform or composite an authored 320x240 canvas
@@ -241,6 +246,16 @@ int raw_gameplay_active(uint8_t* rdram) {
     static int gameplay_cinema_state = -1;
     static int cinema_candidate = -1;
     static int cinema_candidate_frames = 0;
+    static int gen = 0;
+    if (gen != g_ws_tracking_gen) {
+        gen = g_ws_tracking_gen;
+        previous_stage_time = -1;
+        frames_since_stage_time_changed = 1000;
+        tracked_scene = -1;
+        gameplay_cinema_state = -1;
+        cinema_candidate = -1;
+        cinema_candidate_frames = 0;
+    }
     if (!env_enabled("MM_WIDESCREEN_ACTIVE")) {
         tracked_scene = -1;
         gameplay_cinema_state = -1;
@@ -674,6 +689,14 @@ extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
     static int candidate_active = -1;
     static int candidate_frames = 0;
     static bool was_paused = false;
+    static int gen = 0;
+    if (gen != g_ws_tracking_gen) {
+        gen = g_ws_tracking_gen;
+        previous_active = -1;
+        candidate_active = -1;
+        candidate_frames = 0;
+        was_paused = false;
+    }
     bool mode_changed = false;
     const int scene = static_cast<int16_t>(MEM_HU(
         0, static_cast<gpr>(static_cast<int32_t>(kCurrentScene))));
@@ -2218,4 +2241,5 @@ extern "C" void mm_ws_set_host_bank_end(uint32_t value) {
 
 extern "C" void mm_ws_after_state_load() {
     g_layer_fill_state.valid = false;
+    ++g_ws_tracking_gen;
 }

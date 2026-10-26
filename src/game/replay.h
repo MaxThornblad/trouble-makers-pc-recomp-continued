@@ -52,4 +52,8 @@ long first_mismatch();
 // Game thread, from mm_savestate_frame_hook.
 void on_frame(uint8_t* rdram, recomp_context* ctx);
 
+// Game thread: one 64-bit fingerprint of game memory (the replay block hashes
+// folded together, with the same words left out). Netplay compares these.
+uint64_t memory_fingerprint(uint8_t* rdram);
+
 } // namespace mm::replay

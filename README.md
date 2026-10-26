@@ -281,8 +281,19 @@ puts back to full health after every hit, go down after one throw.
 "2P" tag and her own health over her head, for a second controller or the
 keyboard (T F G H or the numpad to move, Y jump, U grab). She joins a moment
 into every scene, the camera frames you both, and if she is defeated or left
-far behind she comes back next to player 1. This is local co-op on one screen;
-online co-op with a screen each is being built (docs/NETPLAY.md).
+far behind she comes back next to player 1. That is local co-op on one screen.
+**Online co-op**: one player hosts (`--host`, or the Session page's
+**Host a game**) and plays Marina; the other joins with the host's address
+(`--join 100.64.1.2`, or type it on the Session page and pick **Join**) and
+plays player 2 on their own keyboard or controller, from the host's game.
+Each player gets their own screen, centred on their own Marina (the game
+still has one camera, so the two of you stay within a screen of each other).
+Both need the same build, and the host's UDP port 7845 must be reachable:
+on the same network use the host's local address; over the internet a VPN
+such as Tailscale is the simple way (use the host's Tailscale address). The
+host's cheats and settings apply to both; once a second the two games are
+compared and, if they ever differ, the host's is sent again (a "resync").
+See [docs/NETPLAY.md](docs/NETPLAY.md).
 **Golden gem compass**
 (a setting on the same page, off by default, and working with the debug menu
 turned off) puts a gold arrow at the edge of the screen pointing to the

@@ -89,4 +89,20 @@ bool grab_blocks_live();
 // Cheats are live this frame (debug menu enabled).
 bool g_active_for_hooks();
 
+// Netplay: the host's game-changing settings, sent to the guest. While a
+// session's settings are set they replace this player's own (cheats and
+// whether they are live, hold to dash, gem hints; co-op is always on), so
+// both machines play by the same rules; menus still show and save the
+// player's own choices. Null ends the override.
+struct SessionSettings {
+    uint32_t cheats = 0;      // bit per Cheat
+    uint8_t active = 0;       // cheats live (host's debug menu enabled)
+    uint8_t hold_dash = 1;
+    uint8_t gem_hints = 1;
+    uint8_t widescreen = 0;   // filled by netplay (not a cheats.cfg setting)
+};
+SessionSettings capture_session_settings();
+void set_session_settings(const SessionSettings* settings);
+bool session_settings_active();
+
 } // namespace mm::cheats

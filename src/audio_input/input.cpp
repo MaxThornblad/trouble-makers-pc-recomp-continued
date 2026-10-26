@@ -316,6 +316,10 @@ void set_player2_input(bool on) {
     g_player2_input.store(on, std::memory_order_relaxed);
 }
 
+bool sample_local_input(uint16_t* buttons, float* x, float* y) {
+    return live_input(0, buttons, x, y);
+}
+
 void set_input_filter(InputFilter filter) {
     g_input_filter.store(filter, std::memory_order_release);
 }

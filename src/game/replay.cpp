@@ -18,6 +18,7 @@
 
 #include "librecomp/game.hpp"
 #include "mm_audio_input.hpp"
+#include "netplay.h"
 #include "savestate.h"
 #include "ultramodern/ultra64.h"
 #include "ultramodern/ultramodern.hpp"
@@ -49,9 +50,14 @@ constexpr std::array<uint32_t, 2> kClockWords{0x801374DCu, 0x80182018u};
 // renderer (RT64 writes pixels back, a headless build draws nothing), not on
 // the game, so they are left out of the fingerprint.
 struct Range { uint32_t start, end; };
-constexpr std::array<Range, 2> kRendererRanges{{
+// Also the two view matrices LookAt_Update writes (0x804600C0 / 0x804700C0,
+// the matrix pool moved to expansion memory): netplay builds them from each
+// player's own view (player2.cpp, mm_view_begin), and only the renderer reads them.
+constexpr std::array<Range, 4> kRendererRanges{{
     {0x801DA800u, 0x801DA800u + 320u * 240u * 2u},
     {0x803DA800u, 0x803DA800u + 320u * 240u * 2u},
+    {0x804600C0u, 0x804600C0u + 0x40u},
+    {0x804700C0u, 0x804700C0u + 0x40u},
 }};
 
 struct Poll {
@@ -402,6 +408,17 @@ bool env_at(const char* name, std::filesystem::path& dir, long& at) {
 
 } // namespace
 
+uint64_t memory_fingerprint(uint8_t* rdram) {
+    std::array<uint64_t, kBlocks> hashes;
+    fingerprint(rdram, hashes);
+    uint64_t h = 0xCBF29CE484222325ull;
+    for (uint64_t b : hashes) {
+        h = (h ^ b) * 0x100000001B3ull;
+        h ^= h >> 31;
+    }
+    return h;
+}
+
 void configure(const std::filesystem::path& folder) {
     g_folder = folder;
 }
@@ -477,7 +494,8 @@ void on_frame(uint8_t* rdram, recomp_context* ctx) {
     // thread it runs extra audio updates per frame, and at several times
     // normal speed that exhausts its audio DMA buffers (the game's own
     // "dmaPtr" assertion in music.c) or corrupts the audio command list.
-    const bool want_deterministic = mode != Mode::Idle || ultramodern::get_speed_multiplier() > 1;
+    const bool want_deterministic =
+        mode != Mode::Idle || mm::netplay::active() || ultramodern::get_speed_multiplier() > 1;
     if (want_deterministic != ultramodern::deterministic_events()) {
         ultramodern::set_deterministic_events(want_deterministic);
     }

@@ -40,6 +40,7 @@ add_executable(troublemakers
     savestate.cpp
     replay.cpp
     player2.cpp
+    netplay.cpp
     widescreen.cpp
 )
 
@@ -71,6 +72,21 @@ target_include_directories(troublemakers PRIVATE
 # whole-archive (data-driven function tables, see above). The LINK_LIBRARY
 # generator expression emits --whole-archive / /WHOLEARCHIVE / -force_load
 # per linker (needs CMake 3.24; set at the top-level CMakeLists).
+# Netplay transport (netplay.cpp): ENet, reliable ordered UDP, built from source.
+include(FetchContent)
+FetchContent_Declare(
+    enet
+    GIT_REPOSITORY https://github.com/lsalzman/enet.git
+    GIT_TAG v1.3.18
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(enet)
+target_include_directories(troublemakers PRIVATE ${enet_SOURCE_DIR}/include)
+target_link_libraries(troublemakers PRIVATE enet)
+if(WIN32)
+    target_link_libraries(troublemakers PRIVATE ws2_32 winmm)
+endif()
+
 target_link_libraries(troublemakers PRIVATE
     "$<LINK_LIBRARY:WHOLE_ARCHIVE,mm_recompiled,librecomp,ultramodern>"
     mm_rsp

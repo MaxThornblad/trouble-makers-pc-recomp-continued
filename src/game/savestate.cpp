@@ -1,4 +1,5 @@
 #include "savestate.h"
+#include "netplay.h"
 
 #include <algorithm>
 #include <array>
@@ -495,6 +496,12 @@ void request_save(int slot) {
 }
 
 void request_load(int slot) {
+    // Online the host's game is the one both machines play: the guest
+    // cannot load (the host can; netplay then resyncs the guest to it).
+    if (mm::netplay::is_guest()) {
+        toast("Only the host can load a state while playing online");
+        return;
+    }
     bool expected = false;
     if (!g_busy.compare_exchange_strong(expected, true)) return;
     // Read and decompress off the game and event threads; the game thread only
@@ -766,6 +773,7 @@ extern "C" void mm_savestate_frame_hook(unsigned char* rdram, recomp_context* ct
     }
 
     mm::replay::on_frame(rdram, ctx);
+    mm::netplay::on_frame(rdram, ctx);
     const Op op = static_cast<Op>(g_pending_op.exchange(static_cast<int>(Op::None)));
     if (op == Op::None) return;
     const int slot = g_pending_slot.load();
