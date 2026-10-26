@@ -1,0 +1,176 @@
+From ce2c48d6691f719bd9ed4d33392eca76e415ddaa Mon Sep 17 00:00:00 2001
+From: Max Thornblad <max.thornblad@hotmail.com>
+Date: Mon, 26 Oct 2026 13:54:28 +0100
+Subject: [PATCH 11/14] Deterministic event mode for replays and netplay
+
+While on, VI/AI messages are sent by the game thread once per frame
+(deterministic_frame, paced to real VI times) instead of the VI thread, and
+every submitted RSP/RDP task is waited for and its completion delivered
+before submit returns. What the game sees in its queues then depends only on
+its own progress.
+---
+ .../include/ultramodern/ultramodern.hpp       | 11 +++
+ ultramodern/src/error_handling.cpp            |  2 +-
+ ultramodern/src/events.cpp                    | 79 ++++++++++++++++++-
+ 3 files changed, 87 insertions(+), 5 deletions(-)
+
+diff --git a/ultramodern/include/ultramodern/ultramodern.hpp b/ultramodern/include/ultramodern/ultramodern.hpp
+index 8d66fe4..3e0d3e8 100644
+--- a/ultramodern/include/ultramodern/ultramodern.hpp
++++ b/ultramodern/include/ultramodern/ultramodern.hpp
+@@ -106,6 +106,17 @@ void submit_rsp_task(RDRAM_ARG PTR(OSTask) task);
+ // Blocks until every submitted RSP/RDP task has posted its completion
+ // message, or the timeout passes (returns false).
+ bool wait_for_rsp_idle(std::chrono::milliseconds timeout);
++
++// Deterministic event mode (replays, netplay). While on, the VI thread stops
++// sending VI/AI messages; instead the game thread calls deterministic_frame()
++// once per game frame, which waits for the next real VI time(s) and delivers
++// exactly the VI (and AI) messages for one VI message period. Every RSP/RDP
++// task the game submits is waited for and its completion delivered before
++// osSpTaskStartGo returns. Together this makes what the game finds in its
++// queues depend only on its own progress, never on host thread timing.
++void set_deterministic_events(bool on);
++bool deterministic_events();
++void deterministic_frame(RDRAM_ARG1);
+ // Delivers every queued host event (VI/SI/SP/DP...) into its N64 queue now.
+ void deliver_pending_external_messages(RDRAM_ARG1);
+ struct PendingExternalMessage {
+diff --git a/ultramodern/src/error_handling.cpp b/ultramodern/src/error_handling.cpp
+index 8ca779e..e6537d7 100644
+--- a/ultramodern/src/error_handling.cpp
++++ b/ultramodern/src/error_handling.cpp
+@@ -21,7 +21,7 @@ void ultramodern::error_handling::message_box(const char* msg) {
+ void ultramodern::error_handling::quick_exit(const char* filename, int line, const char *func, int exit_status) {
+     fprintf(stderr, "Exiting with exit status '%i'. Function %s, at file %s:%i\n", exit_status, func, filename, line);
+ 
+-#ifdef __APPLE__
++#if defined(__APPLE__) || defined(__MINGW32__)
+     std::_Exit(exit_status);
+ #else
+     std::quick_exit(exit_status);
+diff --git a/ultramodern/src/events.cpp b/ultramodern/src/events.cpp
+index 6ff21bf..3d0c852 100644
+--- a/ultramodern/src/events.cpp
++++ b/ultramodern/src/events.cpp
+@@ -169,6 +169,12 @@ extern "C" void osViSetEvent(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, u32 ret
+ 
+ uint64_t total_vis = 0;
+ 
++static std::atomic<bool> deterministic_mode{false};
++// Game thread only (deterministic_frame).
++static std::chrono::high_resolution_clock::time_point det_start{};
++static uint64_t det_vis = 0;
++static int det_remaining_retraces = 1;
++
+ 
+ extern std::atomic_bool exited;
+ extern moodycamel::LightweightSemaphore graphics_shutdown_ready;
+@@ -223,13 +229,19 @@ void vi_thread_func() {
+         // Update VI registers and swap VI modes.
+         events_context.vi.update_vi();
+ 
+-        // If the game has started, handle sending VI and AI events.
+-        if (ultramodern::is_game_started()) {
++        // If the game has started, handle sending VI and AI events (the game
++        // thread does it in deterministic mode, see deterministic_frame).
++        if (ultramodern::is_game_started() && !deterministic_mode.load(std::memory_order_acquire)) {
+             remaining_retraces--;
+             
+             std::lock_guard lock{ events_context.message_mutex };
+             ViState* cur_state = events_context.vi.get_cur_state();
+-            if (remaining_retraces == 0) {
++            // Checked again under the lock: set_deterministic_events() takes
++            // it after setting the flag, so no send can start after that.
++            if (deterministic_mode.load(std::memory_order_acquire)) {
++                remaining_retraces = 1;
++            }
++            else if (remaining_retraces == 0) {
+                 if (cur_state->mq != NULLPTR) {
+                     // Send a message to the VI queue, and do not set it to be requeued if the queue was full.
+                     // The worst case scenario is that the game misses a VI message and has to wait a little longer for the next. 
+@@ -237,7 +249,7 @@ void vi_thread_func() {
+                 }
+                 remaining_retraces = cur_state->retrace_count;
+             }
+-            if (events_context.ai.mq != NULLPTR) {
++            if (events_context.ai.mq != NULLPTR && !deterministic_mode.load(std::memory_order_acquire)) {
+                 // Send a message to the VI queue, and do not set it to be requeued if the queue was full for the same reason as the VI message above.
+                 ultramodern::enqueue_external_message_src(events_context.ai.mq, events_context.ai.msg, false, ultramodern::EventMessageSource::Ai);
+             }
+@@ -255,6 +267,57 @@ void vi_thread_func() {
+ // dequeue_external_messages().
+ static std::atomic<int> tasks_in_flight{0};
+ 
++void dequeue_external_messages(RDRAM_ARG1);
++
++void ultramodern::set_deterministic_events(bool on) {
++    if (on) {
++        det_start = std::chrono::high_resolution_clock::now();
++        det_vis = 0;
++        det_remaining_retraces = 1;
++    }
++    deterministic_mode.store(on, std::memory_order_release);
++    // A VI send that read the flag before this has finished once we hold the lock.
++    std::lock_guard lock{ events_context.message_mutex };
++}
++
++bool ultramodern::deterministic_events() {
++    return deterministic_mode.load(std::memory_order_acquire);
++}
++
++void ultramodern::deterministic_frame(RDRAM_ARG1) {
++    using namespace std::chrono_literals;
++    if (!deterministic_mode.load(std::memory_order_acquire)) return;
++    // Advance real VIs until one VI message is due (retrace_count VIs per
++    // message), sleeping to each VI's wall-clock time so the game keeps its
++    // speed. A late frame is not caught up: the game just slows down, which
++    // keeps the message count per frame fixed.
++    while (true) {
++        ++det_vis;
++        auto next = det_start + (det_vis * 1000000us) / (60 * ultramodern::get_speed_multiplier());
++        const auto now = std::chrono::high_resolution_clock::now();
++        if (next < now - 100ms || next > now + 1s) {
++            // Fell far behind (a load, a stall) or the clock jumped: restart the pacing here.
++            det_start = now;
++            det_vis = 0;
++            next = now;
++        }
++        ultramodern::sleep_until(next);
++        std::lock_guard lock{ events_context.message_mutex };
++        ViState* cur_state = events_context.vi.get_cur_state();
++        if (events_context.ai.mq != NULLPTR) {
++            ultramodern::enqueue_external_message_src(events_context.ai.mq, events_context.ai.msg, false, ultramodern::EventMessageSource::Ai);
++        }
++        if (--det_remaining_retraces <= 0) {
++            det_remaining_retraces = cur_state->retrace_count > 0 ? cur_state->retrace_count : 1;
++            if (cur_state->mq != NULLPTR) {
++                ultramodern::enqueue_external_message_src(cur_state->mq, cur_state->msg, false, ultramodern::EventMessageSource::Vi);
++            }
++            break;
++        }
++    }
++    dequeue_external_messages(PASS_RDRAM1);
++}
++
+ bool ultramodern::wait_for_rsp_idle(std::chrono::milliseconds timeout) {
+     const auto deadline = std::chrono::steady_clock::now() + timeout;
+     while (tasks_in_flight.load(std::memory_order_acquire) != 0) {
+@@ -583,6 +646,14 @@ void ultramodern::submit_rsp_task(RDRAM_ARG PTR(OSTask) task_) {
+     else {
+         events_context.sp_task_queue.enqueue(task);
+     }
++    if (deterministic_mode.load(std::memory_order_acquire)) {
++        // Finish the task now and hand the game its completion here, at a
++        // fixed point in its own code.
++        while (tasks_in_flight.load(std::memory_order_acquire) != 0) {
++            std::this_thread::sleep_for(std::chrono::microseconds(50));
++        }
++        dequeue_external_messages(PASS_RDRAM1);
++    }
+ }
+ 
+ void ultramodern::send_si_message() {
+-- 
+2.43.0
+

@@ -29,6 +29,7 @@
 #include "../../RecompiledFuncs/recomp_overlays.inl"
 
 #include "librecomp/overlays.hpp"
+#include "ultramodern/ultramodern.hpp"
 #include "mm_audio_input.hpp"
 
 // Set by ultramodern::quit() (librecomp/src/recomp.cpp) and polled by the
@@ -37,6 +38,61 @@
 // after `exited` has been observed — so stopping the mirror on `exited`
 // guarantees it never writes to freed rdram during teardown.
 extern std::atomic_bool exited;
+
+namespace {
+// AI_LEN normally mirrors the host's real audio queue (below). That makes how
+// much audio the game mixes each frame depend on host timing, and with it the
+// game's audio state, which replays and netplay must reproduce exactly. In
+// virtual mode the mirror thread stays out and the game thread sets AI_LEN at
+// each frame point from a virtual DAC instead: it drains exactly one 60 Hz
+// frame of samples per game frame and fills by what the game submits.
+// Fast-forward uses it too: at several times normal speed the real queue
+// overflows and is cleared over and over, AI_LEN swings wildly and the game
+// can mix a corrupt audio command list (seen as an aspMain "unhandled jump
+// target" crash at 8x).
+std::atomic<bool> g_virtual_audio{false};
+volatile uint32_t* g_ai_len = nullptr;
+uint64_t g_virtual_drained = 0;      // bytes, game thread only
+uint32_t g_virtual_remainder = 0;
+bool g_virtual_requested = false;    // replays / netplay (game thread)
+
+// `restart`: begin again from the canonical two queued frames even if the
+// clock is already running (a replay or session start must not inherit
+// whatever fast-forward left).
+void set_virtual_audio(bool on, bool restart = false) {
+    if (on == g_virtual_audio.load(std::memory_order_relaxed) && !(on && restart)) return;
+    if (on) {
+        // Keep the mirror thread out first, and give a write it already began
+        // time to land before ours.
+        g_virtual_audio.store(true, std::memory_order_release);
+        std::this_thread::sleep_for(std::chrono::milliseconds(3));
+        // Start with two frames of audio queued, the same on every machine.
+        const uint64_t two_frames = static_cast<uint64_t>(mm_audio_input::game_sample_rate()) * 4u * 2u / 60u;
+        const uint64_t submitted = mm_audio_input::submitted_audio_bytes();
+        g_virtual_drained = submitted - two_frames;
+        g_virtual_remainder = 0;
+        if (g_ai_len) *g_ai_len = static_cast<uint32_t>(two_frames);
+    }
+    g_virtual_audio.store(on, std::memory_order_release);
+}
+} // namespace
+
+extern "C" void mm_virtual_audio_clock(bool on) {
+    g_virtual_requested = on;
+    set_virtual_audio(on || ultramodern::get_speed_multiplier() > 1, on);
+}
+
+// Game thread, once per frame point.
+extern "C" void mm_virtual_audio_frame() {
+    set_virtual_audio(g_virtual_requested || ultramodern::get_speed_multiplier() > 1);
+    if (!g_virtual_audio.load(std::memory_order_relaxed) || g_ai_len == nullptr) return;
+    const uint64_t step = static_cast<uint64_t>(mm_audio_input::game_sample_rate()) * 4u + g_virtual_remainder;
+    g_virtual_drained += (step / 60u) & ~3ull;
+    g_virtual_remainder = static_cast<uint32_t>(step - ((step / 60u) & ~3ull) * 60u);
+    const uint64_t submitted = mm_audio_input::submitted_audio_bytes();
+    if (g_virtual_drained > submitted) g_virtual_drained = submitted;   // underrun: the DAC ran dry
+    *g_ai_len = static_cast<uint32_t>(submitted - g_virtual_drained);
+}
 
 namespace {
 
@@ -135,6 +191,7 @@ void on_game_init(uint8_t* rdram, recomp_context* /*ctx*/) {
     // compiler, but volatile documents and guarantees the MMIO store semantic).
     constexpr uintptr_t kAiLenOffset = 0xA4500004u - 0x80000000u;
     volatile uint32_t* ai_len = reinterpret_cast<volatile uint32_t*>(rdram + kAiLenOffset);
+    g_ai_len = ai_len;
 
     // ~1ms cadence: the DAC drains continuously and the game samples AI_LEN
     // once per Sound_Update, so 1ms keeps the value fresh without busy-burning
@@ -144,7 +201,9 @@ void on_game_init(uint8_t* rdram, recomp_context* /*ctx*/) {
     // with the process).
     std::thread([ai_len]() {
         while (!exited.load(std::memory_order_relaxed)) {
-            *ai_len = static_cast<uint32_t>(mm_audio_input::get_frames_remaining()) * 4u;
+            if (!g_virtual_audio.load(std::memory_order_acquire)) {
+                *ai_len = static_cast<uint32_t>(mm_audio_input::get_frames_remaining()) * 4u;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }).detach();

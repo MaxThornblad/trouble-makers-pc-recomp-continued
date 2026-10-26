@@ -17,6 +17,8 @@
 #pragma once
 
 #include <filesystem>
+#include <string>
+#include <vector>
 
 #include <SDL2/SDL.h>
 
@@ -40,6 +42,16 @@ void cancel_fast_forward();
 // Increments every time a state is loaded, so per-frame watchers (rumble)
 // can tell a load's jump in game memory from something that happened in play.
 uint32_t load_generation();
+
+// Game thread, inside mm_savestate_frame_hook only (replays, netplay): take a
+// state into / restore it from a file synchronously. Return false and set
+// `error` on failure.
+bool save_now(unsigned char* rdram, recomp_context* ctx, const std::filesystem::path& path, std::string& error);
+// RDRAM addresses of the game's OSThreads. Each holds a host pointer
+// (OSThread::context, 8 bytes) that differs between processes.
+std::vector<uint32_t> game_thread_addresses();
+
+bool load_now(unsigned char* rdram, recomp_context* ctx, const std::filesystem::path& path, std::string& error);
 
 #ifdef MM_HAS_GRAPHICS
 // Draws the short "Saved slot 3" style notification (ImGui, post-present).

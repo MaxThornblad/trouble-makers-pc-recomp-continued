@@ -20,6 +20,7 @@
 
 #include "mm_audio_input.hpp"
 #include "cheats.h"
+#include "replay.h"
 
 #include "ultramodern/ultra64.h"
 #include "ultramodern/ultramodern.hpp"
@@ -35,8 +36,12 @@ extern "C" uint32_t mm_ws_get_host_bank_end();
 extern "C" void mm_ws_set_host_bank_end(uint32_t value);
 extern "C" void mm_ws_after_state_load();
 
+extern uint8_t dmem[];               // RSP DMEM (librecomp/src/rsp.cpp)
+
 namespace mm::savestate {
 namespace {
+
+constexpr uint32_t kDmemSize = 0x1000;
 
 // ---------------------------------------------------------------------------
 // What a state contains
@@ -49,13 +54,18 @@ struct RegionSpec {
     uint32_t vaddr;
     uint32_t size;
 };
-constexpr std::array<RegionSpec, 2> kRegions{{
+constexpr std::array<RegionSpec, 3> kRegions{{
     // 8 MiB (game + expansion-RAM host arenas, see docs/README.md 14.1) plus
     // the runtime's PI handles and patch data just above it.
     { 0x80000000u, 0x00810000u },
     // Widescreen scratch lists and grids (0x9FFFA000..0x9FFFFFFF).
     { 0x9FFF0000u, 0x00010000u },
+    // (version 3) The audio ucode keeps 16 bytes of state at 0x8083FF20 (the
+    // game hands it an address past the 8 MiB) and reads them back next task.
+    { 0x8083F000u, 0x00001000u },
 }};
+// Regions in states of version 1 and 2.
+constexpr size_t kRegionsV2 = 2;
 
 constexpr uint32_t kGameState = 0x800BE4F0u;
 constexpr uint32_t kCurrentScene = 0x800BE5D0u;
@@ -64,7 +74,9 @@ constexpr uint32_t kCurrentStage = 0x80178162u;
 constexpr char kMagic[8] = {'T', 'M', 'S', 'T', 'A', 'T', 'E', '\0'};
 // 1: original. 2: adds the renderer's persistent RDP state (version 1 states
 // still load; they simply keep whatever RDP state the session has).
-constexpr uint32_t kFormatVersion = 2;
+// 3: adds RSP DMEM: each task reloads only 0x000-0xF7F, so what is left in
+// 0xF80-0xFFF carries into the next audio task, and replays must restore it.
+constexpr uint32_t kFormatVersion = 3;
 constexpr const char* kExtension = ".tmstate";
 
 struct Snapshot {
@@ -84,6 +96,7 @@ struct Snapshot {
     uint16_t stage = 0;
     int64_t saved_at = 0;        // unix time, informational
     std::vector<uint8_t> rdp;    // mm::graphics RDP state; empty if none
+    std::vector<uint8_t> dmem;   // RSP DMEM (version 3); empty if none
 };
 
 // ---------------------------------------------------------------------------
@@ -174,15 +187,17 @@ std::vector<uint8_t> serialize(const Snapshot& s) {
     w.put(s.saved_at);
     w.put<uint32_t>(static_cast<uint32_t>(s.rdp.size()));
     w.out.insert(w.out.end(), s.rdp.begin(), s.rdp.end());
+    w.put<uint32_t>(static_cast<uint32_t>(s.dmem.size()));
+    w.out.insert(w.out.end(), s.dmem.begin(), s.dmem.end());
     return std::move(w.out);
 }
 
 bool deserialize(const std::vector<uint8_t>& payload, Snapshot& s, uint32_t version) {
     Reader r(payload);
     uint32_t region_count = 0;
-    if (!r.get(region_count) || region_count != kRegions.size()) return false;
+    if (!r.get(region_count) || region_count != (version >= 3 ? kRegions.size() : kRegionsV2)) return false;
     s.regions.resize(region_count);
-    for (size_t i = 0; i < kRegions.size(); ++i) {
+    for (size_t i = 0; i < region_count; ++i) {
         uint32_t vaddr = 0;
         if (!r.get(vaddr) || vaddr != kRegions[i].vaddr) return false;
         if (!r.bytes(s.regions[i], kRegions[i].size)) return false;
@@ -214,6 +229,10 @@ bool deserialize(const std::vector<uint8_t>& payload, Snapshot& s, uint32_t vers
     if (version >= 2) {
         uint32_t n = 0;
         if (!r.get(n) || n > (1u << 20) || !r.bytes_raw(s.rdp, n)) return false;
+    }
+    if (version >= 3) {
+        uint32_t n = 0;
+        if (!r.get(n) || n > kDmemSize || !r.bytes_raw(s.dmem, n)) return false;
     }
     return r.done();
 }
@@ -287,7 +306,7 @@ bool read_file(const std::filesystem::path& path, Snapshot& s, std::string& erro
         error = "not a Trouble Makers save state";
         return false;
     }
-    if (version != 1 && version != kFormatVersion) {
+    if (version < 1 || version > kFormatVersion) {
         error = "made by a different version";
         return false;
     }
@@ -367,6 +386,7 @@ bool capture(uint8_t* rdram, recomp_context* ctx, Snapshot& s, std::string& erro
 #ifdef MM_HAS_GRAPHICS
     s.rdp = mm::graphics::capture_rdp_state();
 #endif
+    s.dmem.assign(dmem, dmem + kDmemSize);
     return true;
 }
 
@@ -394,7 +414,7 @@ bool apply(uint8_t* rdram, recomp_context* ctx, const Snapshot& s, std::string& 
         }
     }
 
-    for (size_t i = 0; i < kRegions.size(); ++i) {
+    for (size_t i = 0; i < s.regions.size(); ++i) {   // older states: fewer regions
         std::memcpy(rdram_at(rdram, kRegions[i].vaddr), s.regions[i].data(), kRegions[i].size);
     }
     for (const auto& [t, context] : contexts) {
@@ -418,6 +438,7 @@ bool apply(uint8_t* rdram, recomp_context* ctx, const Snapshot& s, std::string& 
         std::abort();
     }
     ultramodern::set_deferred_external_messages(s.deferred);
+    if (s.dmem.size() == kDmemSize) std::memcpy(dmem, s.dmem.data(), kDmemSize);
     mm_ws_set_host_bank_end(s.ws_bank_end);
     mm_ws_after_state_load();
 #ifdef MM_HAS_GRAPHICS
@@ -665,6 +686,23 @@ bool handle_event(const SDL_Event& event) {
     return true;
 }
 
+bool save_now(unsigned char* rdram, recomp_context* ctx, const std::filesystem::path& path, std::string& error) {
+    Snapshot snapshot;
+    return capture(rdram, ctx, snapshot, error) && write_file(path, snapshot, error);
+}
+
+bool load_now(unsigned char* rdram, recomp_context* ctx, const std::filesystem::path& path, std::string& error) {
+    Snapshot snapshot;
+    return read_file(path, snapshot, error) && apply(rdram, ctx, snapshot, error);
+}
+
+std::vector<uint32_t> game_thread_addresses() {
+    std::lock_guard lock{g_threads_mutex};
+    std::vector<uint32_t> out;
+    for (int32_t t : g_game_threads) out.push_back(static_cast<uint32_t>(t));
+    return out;
+}
+
 uint32_t load_generation() {
     return g_load_generation.load(std::memory_order_relaxed);
 }
@@ -727,6 +765,7 @@ extern "C" void mm_savestate_frame_hook(unsigned char* rdram, recomp_context* ct
         }
     }
 
+    mm::replay::on_frame(rdram, ctx);
     const Op op = static_cast<Op>(g_pending_op.exchange(static_cast<int>(Op::None)));
     if (op == Op::None) return;
     const int slot = g_pending_slot.load();

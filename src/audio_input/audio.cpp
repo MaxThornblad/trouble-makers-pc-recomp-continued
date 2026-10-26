@@ -69,7 +69,10 @@ void rebuild_converter() {
 // ultramodern passes sample_count = number of int16 samples (i.e. 2 per stereo
 // frame). Swap each L/R pair to undo the N64 address-xor layout, resample to
 // the device rate, and queue.
+std::atomic<uint64_t> g_submitted_bytes{0};
+
 void queue_samples(int16_t* audio_data, size_t sample_count) {
+    g_submitted_bytes.fetch_add(sample_count * sizeof(int16_t), std::memory_order_relaxed);
     if (g_audio_device == 0 || sample_count < kInputChannels) return;
 
     uint32_t queued_before_bytes = SDL_GetQueuedAudioSize(g_audio_device);
@@ -156,6 +159,14 @@ void set_frequency(uint32_t freq) {
 // stays consistent. Back off ~1 VI of samples so transient underruns don't pop.
 // Declared in the public header so the host can mirror it into AI_LEN (see
 // src/game/register_overlays.cpp); it is also the audio_callbacks value.
+uint64_t submitted_audio_bytes() {
+    return g_submitted_bytes.load(std::memory_order_relaxed);
+}
+
+uint32_t game_sample_rate() {
+    return g_sample_rate.load(std::memory_order_relaxed);
+}
+
 size_t get_frames_remaining() {
     if (g_audio_device == 0) return 0;
     return queue_policy::remaining_game_frames(

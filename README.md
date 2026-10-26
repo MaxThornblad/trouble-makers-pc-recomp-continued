@@ -312,7 +312,12 @@ only: grab its clanball head to climb in), its face clanball on its own, a
 bomb ball, a block you can stand on and throw), or, with **Show all**, every shared object type that can be spawned
 without crashing (many do nothing visible on their own). At most 8 spawned
 objects exist at once; **Remove spawned objects** clears them, and they are
-forgotten when the stage, area or save state changes. The **Inspect** page
+forgotten when the stage, area or save state changes. The **Session** page
+records **replays**: a save state taken on the spot plus every controller
+input, played back exactly (replays live in a `replays` folder next to
+`savestates`); playback compares game memory with the recording every frame
+and says whether it still matches. This is the groundwork for netplay (see
+[docs/NETPLAY.md](docs/NETPLAY.md)). The **Inspect** page
 lists every active object, nearest to Marina first, with its slot, type,
 state, health and flags; the selected one shows its position, velocity and
 hit / attack boxes. **F2** (or the page's first row) toggles a collision view

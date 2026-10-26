@@ -38,6 +38,7 @@ add_executable(troublemakers
     rank_timer.cpp
     rumble.cpp
     savestate.cpp
+    replay.cpp
     widescreen.cpp
 )
 

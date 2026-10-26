@@ -10,6 +10,7 @@
 #include "inspector.h"
 #include "crash_handler.h"
 #include "rumble.h"
+#include "replay.h"
 
 #include <algorithm>
 #include <array>
@@ -126,11 +127,14 @@ constexpr int kPageWarp = 0;
 constexpr int kPageCheats = 1;
 constexpr int kPageSpawn = 2;
 constexpr int kPageInspect = 3;
+constexpr int kPageSession = 4;
 constexpr int kPageCount = 5;
+constexpr int kSessionRows = 3;   // record, play latest, stop
 // Inspect page rows: the overlay and label toggles, then the active actors
 // (nearest to Marina first, from the last snapshot).
 constexpr int kInspectToggles = 2;
 std::atomic<int> g_selected_inspect{0};
+std::atomic<int> g_selected_session{0};
 std::atomic<int> g_inspect_rows{kInspectToggles};
 std::atomic<int> g_selected_spawn{0};
 std::atomic<bool> g_spawn_show_all{false};
@@ -223,6 +227,12 @@ void move_selection(int delta) {
         g_selected_inspect.store(selected, std::memory_order_relaxed);
         return;
     }
+    if (page == kPageSession) {
+        int selected = g_selected_session.load(std::memory_order_relaxed);
+        selected = (selected + delta + kSessionRows) % kSessionRows;
+        g_selected_session.store(selected, std::memory_order_relaxed);
+        return;
+    }
     if (page == kPageSpawn) {
         const int count = spawn_row_count();
         int selected = g_selected_spawn.load(std::memory_order_relaxed);
@@ -268,6 +278,14 @@ void activate_selection() {
         const int selected = g_selected_inspect.load(std::memory_order_relaxed);
         if (selected == 0) mm::inspector::toggle_overlay();
         if (selected == 1) mm::inspector::toggle_labels();
+        return;
+    }
+    if (page == kPageSession) {
+        switch (g_selected_session.load(std::memory_order_relaxed)) {
+            case 0: mm::replay::request_record(); close_overlay(); break;
+            case 1: mm::replay::request_play_latest(); close_overlay(); break;
+            default: mm::replay::request_stop(); break;
+        }
         return;
     }
     if (page == kPageSpawn) {
@@ -847,6 +865,32 @@ void draw_overlay() {
         ImGui::TextDisabled("Up/Down: select   Enter/A: toggle   F2: collision view   Esc/B: close");
     }
     else {
+        ImGui::TextUnformatted("Replays");
+        ImGui::TextWrapped(
+            "A replay records the game from a save state taken now plus every "
+            "controller input, and plays it back exactly. Playback checks game "
+            "memory against the recording every frame: the groundwork for netplay. "
+            "Replays are saved in the replays folder next to savestates. Cheat or "
+            "menu changes made while recording are not part of the replay.");
+        const int selected = g_selected_session.load(std::memory_order_relaxed);
+        const mm::replay::Mode mode = mm::replay::mode();
+        ImGui::Selectable("      Record a replay from here", selected == 0);
+        ImGui::Selectable("      Play the latest replay", selected == 1);
+        ImGui::Selectable("      Stop recording / playback", selected == 2);
+        if (mode == mm::replay::Mode::Recording) {
+            ImGui::BulletText("Recording: frame %ld", mm::replay::frame());
+        } else if (mode == mm::replay::Mode::Playing) {
+            const long mismatch = mm::replay::first_mismatch();
+            if (mismatch < 0) {
+                ImGui::BulletText("Playing: frame %ld, identical to the recording so far", mm::replay::frame());
+            } else {
+                ImGui::BulletText("Playing: frame %ld, differed from the recording at frame %ld",
+                                  mm::replay::frame(), mismatch);
+            }
+        } else {
+            ImGui::BulletText("No replay running");
+        }
+        ImGui::Separator();
         ImGui::TextUnformatted("Debug session status");
         ImGui::Spacing();
         ImGui::BulletText("Current progression row: %d",

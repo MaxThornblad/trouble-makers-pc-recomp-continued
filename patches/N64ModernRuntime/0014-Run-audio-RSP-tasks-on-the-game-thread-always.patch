@@ -1,0 +1,38 @@
+From bcd927ae8bcf90b172a3fc3a969ae8195b5e4534 Mon Sep 17 00:00:00 2001
+From: Max Thornblad <max.thornblad@hotmail.com>
+Date: Mon, 26 Oct 2026 15:47:34 +0100
+Subject: [PATCH 14/14] Run audio RSP tasks on the game thread always
+
+On the SP task thread they raced the game: graphics tasks post their SP
+completion to the same queue, so at high fast-forward speeds the game could
+treat one as audio done and rewrite the command list and buffers the ucode
+was still reading (aspMain unhandled jump target exits).
+---
+ ultramodern/src/events.cpp | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/ultramodern/src/events.cpp b/ultramodern/src/events.cpp
+index eac6cf9..e41ec48 100644
+--- a/ultramodern/src/events.cpp
++++ b/ultramodern/src/events.cpp
+@@ -642,9 +642,14 @@ void ultramodern::submit_rsp_task(RDRAM_ARG PTR(OSTask) task_) {
+     if (task->t.type == M_GFXTASK) {
+         events_context.action_queue.enqueue(SpTaskAction{ *task });
+     }
+-    // Set all other tasks as the RSP task. In deterministic mode run it right
+-    // here on the game thread instead.
+-    else if (deterministic_mode.load(std::memory_order_acquire)) {
++    // Run all other (audio) tasks right here on the game thread. On a
++    // separate thread they raced the game: SP completions of graphics tasks
++    // land in the same queue, so at high fast-forward speeds the game could
++    // take one as "audio done" and rewrite the command list and buffers the
++    // audio ucode was still reading (aspMain "unhandled jump target" exits).
++    // The ucode takes well under a millisecond per frame. This also keeps
++    // replays and netplay reproducible.
++    else if (true) {
+         if (!ultramodern::rsp::run_task(PASS_RDRAM task)) {
+             fprintf(stderr, "Failed to execute task type: %" PRIu32 "\n", task->t.type);
+             ULTRAMODERN_QUICK_EXIT();
+-- 
+2.43.0
+

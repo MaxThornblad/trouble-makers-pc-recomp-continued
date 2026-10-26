@@ -277,6 +277,9 @@ hook = [
     # Sound_AddSfx(id in $a0, ..., volume at 0x10($sp)); explosions rumble.
     { func = "Sound_AddSfx", text = '{ extern void mm_rumble_sfx(uint8_t*, uint32_t, uint32_t); mm_rumble_sfx(rdram, (uint32_t)ctx->r4, (uint32_t)MEM_W(0x10, ctx->r29)); }' },
     { func = "Thread_MainProc", before_vram = 0x80000D70, text = '{ extern void mm_savestate_frame_hook(uint8_t*, recomp_context*); mm_savestate_frame_hook(rdram, ctx); }' },
+    # Just before the main loop's blocking wait for its VI message (queue 0x8012ABC0): in
+    # deterministic event mode (replays, netplay) this is where the frame's VI is delivered.
+    { func = "Thread_MainProc", before_vram = 0x80000F5C, text = '{ extern void mm_deterministic_vi(uint8_t*); mm_deterministic_vi(rdram); }' },
     { func = "func_80010A10", before_vram = 0x80010A30, text = '{ MEM_W(0, (gpr)(int32_t)0x801780F0u) = 0x80460000u; ctx->r15 = (gpr)(int32_t)0x80470000u; }' },
     { func = "LookAt_Update", before_vram = 0x800108B8, text = '{ MEM_W(0, (gpr)(int32_t)0x801780F0u) = 0x80460000u; ctx->r15 = (gpr)(int32_t)0x80470000u; }' },
     # Layer repacks: rebuild each 7x10 layer grid at stride 20 with real

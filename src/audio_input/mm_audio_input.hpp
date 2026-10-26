@@ -23,6 +23,13 @@
 
 namespace mm_audio_input {
 
+// Replays and netplay: called for every controller the game polls (game
+// thread), with the live input already filled in for controller 0 (zero for
+// the others). Returns whether that controller is connected; may replace
+// the input. Null (the default) = live input, controller 0 only.
+using InputFilter = bool (*)(int controller, uint16_t* buttons, float* x, float* y);
+void set_input_filter(InputFilter filter);
+
 // The same typed, two-slot binding model used by the modern N64 recomp
 // frontends, kept game-local so the launcher can stay on Dear ImGui.
 enum class ControlDevice : uint8_t {
@@ -130,6 +137,11 @@ ultramodern::audio_callbacks_t audio_callbacks();
 // same value ultramodern's audio callback uses). Exposed so the host can mirror
 // it into the N64 AI_LEN register for games that read AI_LEN directly instead
 // of through osAiGetLength (see src/game/register_overlays.cpp).
+// Bytes of audio the game has handed over so far (counted in the game's
+// osAiSetNextBuffer, on the game thread), and the game's AI sample rate.
+// Replays / netplay use them for a virtual audio clock (register_overlays.cpp).
+uint64_t submitted_audio_bytes();
+uint32_t game_sample_rate();
 size_t get_frames_remaining();
 
 // Filled input callback struct (poll_input / get_input / set_rumble /

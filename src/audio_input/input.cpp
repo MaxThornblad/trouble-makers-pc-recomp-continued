@@ -142,8 +142,26 @@ void poll_input() {
     }
 }
 
+std::atomic<InputFilter> g_input_filter{nullptr};
+
+bool live_input(int controller_num, uint16_t* buttons, float* x, float* y);
+
 bool get_input(int controller_num, uint16_t* buttons, float* x, float* y) {
-    if (controller_num != 0 || buttons == nullptr || x == nullptr || y == nullptr) {
+    if (buttons == nullptr || x == nullptr || y == nullptr) return false;
+    const bool connected = live_input(controller_num, buttons, x, y);
+    if (const InputFilter filter = g_input_filter.load(std::memory_order_acquire)) {
+        if (!connected) {
+            *buttons = 0;
+            *x = 0.0f;
+            *y = 0.0f;
+        }
+        return filter(controller_num, buttons, x, y);
+    }
+    return connected;
+}
+
+bool live_input(int controller_num, uint16_t* buttons, float* x, float* y) {
+    if (controller_num != 0) {
         return false;
     }
 
@@ -226,6 +244,10 @@ void request_rumble(uint16_t low, uint16_t high, uint32_t ms) {
 
 void refresh_controllers() {
     refresh_controller_internal();
+}
+
+void set_input_filter(InputFilter filter) {
+    g_input_filter.store(filter, std::memory_order_release);
 }
 
 void set_input_blocked(bool blocked) {

@@ -46,6 +46,7 @@
 #include "app_dirs.h"
 #include "debug_menu.h"
 #include "savestate.h"
+#include "replay.h"
 #include "cheats.h"
 #include "rank_timer.h"
 #include "enemy_bars.h"
@@ -834,6 +835,7 @@ int main(int argc, char** argv) {
 
     mm::debug_menu::configure(g_debug_menu);
     mm::savestate::configure(config_dir / "savestates");
+    mm::replay::configure(config_dir / "replays");
     mm::cheats::configure(config_dir);
 #ifdef MM_HAS_GRAPHICS
     mm::graphics::set_overlay_draw_callback(

@@ -1,0 +1,122 @@
+From 3ce467249dc192cfec0d63b3630ceb9d39b3bfbe Mon Sep 17 00:00:00 2001
+From: Max Thornblad <max.thornblad@hotmail.com>
+Date: Mon, 26 Oct 2026 14:33:08 +0100
+Subject: [PATCH 13/14] Save sandbox for replays and netplay
+
+The game reads and writes a session copy of the cartridge save while the
+player's own save file is left alone (a write pending at the start still
+lands).
+---
+ librecomp/include/librecomp/game.hpp |  7 +++++
+ librecomp/src/pi.cpp                 | 42 +++++++++++++++++++++++++---
+ 2 files changed, 45 insertions(+), 4 deletions(-)
+
+diff --git a/librecomp/include/librecomp/game.hpp b/librecomp/include/librecomp/game.hpp
+index f384da8..e6e3a55 100644
+--- a/librecomp/include/librecomp/game.hpp
++++ b/librecomp/include/librecomp/game.hpp
+@@ -114,6 +114,13 @@ namespace recomp {
+     // preserving reads from the original save buffer.
+     void set_save_writes_enabled(bool enabled);
+     bool save_writes_enabled();
++    // Replays and netplay. The cartridge save as the game currently sees it.
++    std::vector<uint8_t> get_save_data();
++    // Until end_save_sandbox(), the game reads and writes `data` (padded or
++    // cut to the save size) instead of the save file, and nothing it writes
++    // reaches the disk; the file keeps the real save, which comes back after.
++    void begin_save_sandbox(const std::vector<uint8_t>& data);
++    void end_save_sandbox();
+     bool eeprom_allowed();
+     bool sram_allowed();
+     bool flashram_allowed();
+diff --git a/librecomp/src/pi.cpp b/librecomp/src/pi.cpp
+index 6830277..0072da6 100644
+--- a/librecomp/src/pi.cpp
++++ b/librecomp/src/pi.cpp
+@@ -111,6 +111,12 @@ struct {
+ 
+ const std::u8string save_folder = u8"saves";
+ 
++// Save sandbox (replays, netplay): while active, save_buffer holds the
++// session's data and real_save_buffer the player's own, which is what goes to
++// disk (a write that was pending when the sandbox began still lands).
++static bool save_sandbox_active = false;
++static std::vector<char> real_save_buffer;
++
+ extern std::filesystem::path config_path;
+ 
+ std::filesystem::path ultramodern::get_save_file_path() {
+@@ -132,7 +138,8 @@ void update_save_file() {
+ 
+         if (save_file.good()) {
+             std::lock_guard lock{ save_context.save_buffer_mutex };
+-            save_file.write(save_context.save_buffer.data(), save_context.save_buffer.size());
++            const std::vector<char>& data = save_sandbox_active ? real_save_buffer : save_context.save_buffer;
++            save_file.write(data.data(), data.size());
+         }
+         else {
+             saving_failed = true;
+@@ -175,6 +182,33 @@ void saving_thread_func(RDRAM_ARG1) {
+     }
+ }
+ 
++std::vector<uint8_t> recomp::get_save_data() {
++    std::lock_guard lock { save_context.save_buffer_mutex };
++    return std::vector<uint8_t>(save_context.save_buffer.begin(), save_context.save_buffer.end());
++}
++
++void recomp::begin_save_sandbox(const std::vector<uint8_t>& data) {
++    std::lock_guard lock { save_context.save_buffer_mutex };
++    if (!save_sandbox_active) {
++        real_save_buffer = save_context.save_buffer;
++        save_sandbox_active = true;
++    }
++    std::fill(save_context.save_buffer.begin(), save_context.save_buffer.end(), 0);
++    std::copy_n(data.begin(), std::min(data.size(), save_context.save_buffer.size()), save_context.save_buffer.begin());
++}
++
++void recomp::end_save_sandbox() {
++    std::lock_guard lock { save_context.save_buffer_mutex };
++    if (!save_sandbox_active) return;
++    save_context.save_buffer = real_save_buffer;
++    save_sandbox_active = false;
++}
++
++static void signal_save_write() {
++    // Session writes stay in memory; nothing new goes to the file.
++    if (!save_sandbox_active) save_context.write_sempahore.signal();
++}
++
+ void save_write_ptr(const void* in, uint32_t offset, uint32_t count) {
+     if (!recomp::save_writes_enabled()) {
+         return;
+@@ -186,7 +220,7 @@ void save_write_ptr(const void* in, uint32_t offset, uint32_t count) {
+         memcpy(&save_context.save_buffer[offset], in, count);
+     }
+     
+-    save_context.write_sempahore.signal();
++    signal_save_write();
+ }
+ 
+ void save_write(RDRAM_ARG PTR(void) rdram_address, uint32_t offset, uint32_t count) {
+@@ -202,7 +236,7 @@ void save_write(RDRAM_ARG PTR(void) rdram_address, uint32_t offset, uint32_t cou
+         }
+     }
+ 
+-    save_context.write_sempahore.signal();
++    signal_save_write();
+ }
+ 
+ void save_read(RDRAM_ARG PTR(void) rdram_address, uint32_t offset, uint32_t count) {
+@@ -225,7 +259,7 @@ void save_clear(uint32_t start, uint32_t size, char value) {
+         std::fill_n(save_context.save_buffer.begin() + start, size, value);
+     }
+ 
+-    save_context.write_sempahore.signal();
++    signal_save_write();
+ }
+ 
+ size_t get_save_size(recomp::SaveType save_type) {
+-- 
+2.43.0
+
