@@ -396,3 +396,37 @@ void tick(uint8_t* rdram) {
 }
 
 } // namespace mm::dev_harness
+
+// MM_TEST_P1DIFF=from,to (harness frames): every word Marina's real update
+// (func_80020024's call, hooked in troublemakers.us1.toml) changes outside
+// her slot, per frame. Finds her globals the P2 probe can't (a flag she sets
+// and clears again a frame later).
+namespace {
+std::vector<uint8_t> g_p1diff_before;
+long g_p1diff_frame = 0;
+}
+extern "C" void mm_test_p1diff_begin(uint8_t* rdram) {
+    static const char* env = std::getenv("MM_TEST_P1DIFF");
+    if (!env) return;
+    static uint32_t gen = 0;
+    static long t = 0;
+    if (mm::savestate::load_generation() != gen) { gen = mm::savestate::load_generation(); t = 0; }
+    ++t;
+    long from = 0, to = 0;
+    std::sscanf(env, "%ld,%ld", &from, &to);
+    g_p1diff_before.clear();
+    if (t < from || t > to) return;
+    g_p1diff_frame = t;
+    g_p1diff_before.assign(rdram, rdram + 0x800000);
+}
+extern "C" void mm_test_p1diff_end(uint8_t* rdram) {
+    if (g_p1diff_before.empty()) return;
+    const uint32_t* a = reinterpret_cast<const uint32_t*>(g_p1diff_before.data());
+    const uint32_t* b = reinterpret_cast<const uint32_t*>(rdram);
+    for (uint32_t w = 0; w < 0x800000 / 4; ++w) {
+        const uint32_t va = 0x80000000u + w * 4;
+        if (a[w] == b[w] || (va >= 0x800EF510u && va < 0x800EF510u + 0x198u) || (va >= 0x80120000u && va < 0x80129000u)) continue;
+        std::fprintf(stderr, "[p1diff] t%ld %08X %08X -> %08X\n", g_p1diff_frame, va, a[w], b[w]);
+    }
+    g_p1diff_before.clear();
+}

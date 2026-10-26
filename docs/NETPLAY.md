@@ -152,3 +152,28 @@ from the overlay's Session page.
   rendering, own view on) against a Linux build: fingerprints identical every
   second for whole sessions; a forced difference and a host state load each
   resync within a second.
+
+## Co-op fixes after the first real session
+
+Found with scripted two-player runs and `MM_P2_TRACE=1` (both players'
+positions, states and flags every frame) plus `MM_P2_BISECT` (the first time
+player 2 starts a grab without input, rerun her update with parts of memory put
+back to the frame before, to find what made her do it):
+
+- **Player 2 copied player 1's buffered actions.** Marina's update reads an
+  input history (func_800122B0: the last 64 frames of masked hold / press at
+  0x801225F0 / 0x8011DD70) that only player 1's input feeds. When player 1
+  pressed grab, player 2 grabbed too, held "slot 0" (herself, in her own
+  update) and slid off shaking. She now has her own history, shifted with her
+  own input each frame, and starts with an empty one.
+- **The players could grab each other.** Marina's grab takes actors flagged
+  0x1000 at +0x80. Player 2's slot no longer carries it; while player 2
+  reaches out, player 1's flag is off for func_8001EC1C (the contact pass).
+- **Leash**: player 2 is pulled back only when she has been out of the camera's
+  view for 2.5 s (not when far from player 1: the screen clamp lets them stand
+  288 px apart, and the old 250 px leash pulled her back from there).
+- `MM_TEST_P1DIFF=from,to` lists every word Marina's real update changes
+  outside her slot (catches a flag set and cleared again, which the P2 probe
+  cannot).
+- Random two-player sessions (3000 frames each, six of them) show no position
+  jumps other than leash rejoins and the game's own scripted moves.
