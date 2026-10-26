@@ -19,3 +19,6 @@ AppDir/
 deploy/
 linuxdeploy*
 *.AppImage
+
+# Python bytecode (tools/*.py)
+__pycache__/
