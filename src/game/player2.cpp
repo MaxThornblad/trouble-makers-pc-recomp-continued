@@ -17,6 +17,9 @@
 #endif
 
 extern "C" void func_8004ED10(uint8_t* rdram, recomp_context* ctx);   // Marina's update(slot)
+extern "C" void Trouble_RLE_Type2(uint8_t* rdram, recomp_context* ctx);   // (src, dst, size) unpack
+
+#include "librecomp/game.hpp"
 
 namespace mm::player2 {
 namespace {
@@ -322,6 +325,121 @@ void draw_overlay() {
 namespace {
 bool g_camera_swapped = false;
 int32_t g_saved_x, g_saved_y, g_saved_wx, g_saved_wy, g_mid_x, g_mid_y;
+}
+
+// Her own look. Marina's pose is one of ~800 compressed 64x64 frames that
+// the game streams into a single texture: func_800821B0 / func_800822B8
+// (main loop) DMA slot 0's frame (+0x84, image class 0x5800) and unpack it
+// to 0x8027AEE8 or 0x8027BEE8 (double buffered, index = 0x800BE6A4 +
+// 0x800BE700), and the draw builder's class-0x5800 branch (func_80009BE8 at
+// 0x8000A474) draws whoever has a Marina image as image 2..5 (the display
+// lists in table [0x801376DC] that sample that buffer), with offsets and
+// flags read from slot 0, not the actor being drawn. So without help player
+// 2 is drawn in player 1's pose. Around her entry in the draw builder
+// (0x8000A474 to the loop step at 0x8000DD18) her record stands in for slot
+// 0, her own frame is unpacked into her own buffer and images 2..5 point at
+// copies of their display lists that sample it. Everything lives in game
+// memory at 0x807F1000.. so it is the same on every machine.
+namespace {
+constexpr uint32_t kDlTable = 0x801376DCu;        // -> display list per class-0 image
+constexpr uint32_t kSlotImages = 0x80137480u;     // image per streamed buffer (afterimages)
+constexpr uint32_t kStreamIndex = 0x800BE6A4u, kStreamParity = 0x800BE700u;
+constexpr uint32_t kGameTexture = 0x8027AEE8u;    // the game's two 0x1000 buffers
+constexpr uint32_t kP2Lists = 0x807F1000u;        // 4 display lists, 0x100 each
+constexpr uint32_t kP2Texture = 0x807F2000u;      // her two 0x1000 buffers
+constexpr uint32_t kP2Packed = 0x807F4000u;       // compressed frame (DMA target)
+constexpr uint32_t kP2Header = 0x807F0420u;       // 8-byte frame header
+constexpr uint32_t kP2Loaded = 0x807F0410u;       // frame unpacked in each of her buffers
+constexpr uint32_t kFrameTable = 0x004A0918u;     // ROM: frame offsets (func_800821B0)
+constexpr uint32_t kFrameData = 0x0040AC80u - 0x05000000u;
+
+bool g_draw_swapped = false;
+std::array<uint8_t, 0x198> g_draw_p1;
+std::array<uint8_t, 8> g_draw_slot_images;
+uint32_t g_draw_lists[2];
+int g_draw_k = -1;
+
+void unpack_frame(uint8_t* rdram, recomp_context* ctx, uint16_t image, uint32_t dst) {
+    const uint32_t idx = static_cast<uint32_t>(image & 0x7FF) % 0x322u;
+    const uint32_t header = idx == 0 ? kFrameTable : kFrameTable + idx * 4u - 4u;
+    recomp::do_rom_read(rdram, static_cast<gpr>(static_cast<int32_t>(kP2Header)), 0x10000000u + header, 8);
+    const uint32_t start = static_cast<uint32_t>(MEM_W(0, static_cast<gpr>(static_cast<int32_t>(kP2Header))));
+    const uint32_t end = static_cast<uint32_t>(MEM_W(4, static_cast<gpr>(static_cast<int32_t>(kP2Header))));
+    const uint32_t size = end - start;
+    if (size == 0 || size > 0x2000u || (start & 1) != 0) return;
+    recomp::do_rom_read(rdram, static_cast<gpr>(static_cast<int32_t>(kP2Packed)), 0x10000000u + start + kFrameData,
+                        (size + 7u) & ~7u);
+    const recomp_context saved = *ctx;
+    ctx->r4 = static_cast<gpr>(static_cast<int32_t>(kP2Packed));
+    ctx->r5 = static_cast<gpr>(static_cast<int32_t>(dst));
+    ctx->r6 = 0x1000;
+    ctx->r29 -= 0x40;
+    Trouble_RLE_Type2(rdram, ctx);
+    *ctx = saved;
+}
+
+// A copy of a game display list with its texture images moved to hers.
+uint32_t copy_list(uint8_t* rdram, uint32_t src, uint32_t dst) {
+    for (uint32_t off = 0; off + 8 <= 0x100u; off += 8) {
+        const uint32_t w0 = static_cast<uint32_t>(MEM_W(off, static_cast<gpr>(static_cast<int32_t>(src))));
+        uint32_t w1 = static_cast<uint32_t>(MEM_W(off + 4, static_cast<gpr>(static_cast<int32_t>(src))));
+        if ((w0 >> 24) == 0xFD && w1 >= kGameTexture && w1 < kGameTexture + 0x2000u) {
+            w1 = kP2Texture + (w1 - kGameTexture);
+        }
+        MEM_W(off, static_cast<gpr>(static_cast<int32_t>(dst))) = static_cast<int32_t>(w0);
+        MEM_W(off + 4, static_cast<gpr>(static_cast<int32_t>(dst))) = static_cast<int32_t>(w1);
+        if ((w0 >> 24) == 0xB8) break;   // end of list
+    }
+    return dst;
+}
+} // namespace
+
+extern "C" void mm_p2_draw_begin(uint8_t* rdram, recomp_context* ctx) {
+    using namespace mm::player2;
+    if (g_draw_swapped) return;
+    const int p2 = slot(rdram);
+    if (p2 < 0) return;
+    const uint32_t rec = 0x800EF510u + static_cast<uint32_t>(p2) * 0x198u;
+    if (static_cast<uint32_t>(ctx->r20) != rec) return;   // $s4: the actor being drawn
+    uint8_t* const p1 = rdram + (0x800EF510u - 0x80000000u);
+    uint8_t* const me = rdram + (rec - 0x80000000u);
+    std::memcpy(g_draw_p1.data(), p1, 0x198);
+    std::memcpy(g_draw_slot_images.data(), rdram + (kSlotImages - 0x80000000u), 8);
+    std::memcpy(p1, me, 0x198);
+    MEM_H(0xD2, static_cast<gpr>(static_cast<int32_t>(0x800EF510u))) = 0x0016;
+    g_draw_swapped = true;
+    g_draw_k = -1;
+
+    const int k = MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kStreamIndex))) +
+                  MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kStreamParity)));
+    const uint16_t image = MEM_HU(0x84, static_cast<gpr>(static_cast<int32_t>(rec)));
+    if (k < 0 || k > 1 || (image & 0xF800) != 0x5800) return;
+    const gpr loaded = static_cast<gpr>(static_cast<int32_t>(kP2Loaded + static_cast<uint32_t>(k) * 2u));
+    if (MEM_HU(0, loaded) != image) {
+        unpack_frame(rdram, ctx, image, kP2Texture + static_cast<uint32_t>(k) * 0x1000u);
+        MEM_H(0, loaded) = static_cast<int16_t>(image);
+    }
+    const gpr table = static_cast<gpr>(MEM_W(0, static_cast<gpr>(static_cast<int32_t>(kDlTable))));
+    for (int f = 0; f < 2; ++f) {
+        const int id = 2 + 2 * k + f;
+        const uint32_t game_list = static_cast<uint32_t>(MEM_W(id * 4, table));
+        g_draw_lists[f] = game_list;
+        MEM_W(id * 4, table) = static_cast<int32_t>(
+            copy_list(rdram, game_list, kP2Lists + static_cast<uint32_t>(k * 2 + f) * 0x100u));
+    }
+    g_draw_k = k;
+}
+
+extern "C" void mm_p2_draw_end(uint8_t* rdram, recomp_context*) {
+    if (!g_draw_swapped) return;
+    g_draw_swapped = false;
+    std::memcpy(rdram + (0x800EF510u - 0x80000000u), g_draw_p1.data(), 0x198);
+    std::memcpy(rdram + (kSlotImages - 0x80000000u), g_draw_slot_images.data(), 8);
+    if (g_draw_k >= 0) {
+        const gpr table = static_cast<gpr>(MEM_W(0, static_cast<gpr>(static_cast<int32_t>(kDlTable))));
+        for (int f = 0; f < 2; ++f) MEM_W((2 + 2 * g_draw_k + f) * 4, table) = static_cast<int32_t>(g_draw_lists[f]);
+        g_draw_k = -1;
+    }
 }
 
 extern "C" void mm_camera_begin(uint8_t* rdram) {

@@ -89,6 +89,13 @@ save-state range), so states, replays and netplay carry them.
 - Shared camera: hooks at `func_80012830`'s entry and before 0x800128CC make
   Marina's position read as the players' midpoint during the camera update.
   Netplay will instead keep this game camera and draw each player's own view.
+- Her own pose: Marina's frames are streamed into one shared texture for slot 0
+  (func_800821B0 / func_800822B8 unpack slot 0's frame to 0x8027AEE8 / 0x8027BEE8),
+  and the draw builder's class-0x5800 branch reads slot 0's record, so at
+  first player 2 was drawn in player 1's pose. Hooks at 0x8000A474 and
+  0x8000DD18 in `func_80009BE8` put her record in slot 0 for her entry,
+  unpack her frame into her own buffers (0x807F2000) and point images 2..5
+  at copies of their display lists that sample them (0x807F1000).
 - Look: the draw builder's prim-colour tint (+0x9C..+0x9F, `func_80009BE8`)
   adds a cool blue (00 30 5A) while she is not hit-flashing; an overlay tag
   "2P" with her health sits over her head.

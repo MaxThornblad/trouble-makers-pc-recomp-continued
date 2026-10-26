@@ -298,6 +298,10 @@ hook = [
     # with repeating UVs, which RT64 resolves as a transparent/flat wall or
     # stretched platform edges. Normalize only these exact actor display lists
     # after the standard setup DL and immediately before actor->dlist_17C.
+    # Player 2's own pose (player2.cpp): her record, frame and display lists stand in for
+    # Marina's while the draw builder handles her entry.
+    { func = "func_80009BE8", before_vram = 0x8000A474, text = '{ extern void mm_p2_draw_begin(uint8_t*, recomp_context*); mm_p2_draw_begin(rdram, ctx); }' },
+    { func = "func_80009BE8", before_vram = 0x8000DD18, text = '{ extern void mm_p2_draw_end(uint8_t*, recomp_context*); mm_p2_draw_end(rdram, ctx); }' },
     { func = "func_80009BE8", before_vram = 0x8000D388, text = '{ extern void mm_fix_rotation_material(uint8_t*, recomp_context*); mm_fix_rotation_material(rdram, ctx); }' },
     # Portrait entries 0..63 are a fixed 8x8 death/room-transition wipe;
     # entries 64/65 are the HUD. Skip only the wipe's render loop while wide.
