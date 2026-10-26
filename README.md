@@ -287,7 +287,9 @@ far behind she comes back next to player 1. That is local co-op on one screen.
 (`--join 100.64.1.2`, or type it on the Session page and pick **Join**) and
 plays player 2 on their own keyboard or controller, from the host's game.
 Each player gets their own screen, centred on their own Marina (the game
-still has one camera, so the two of you stay within a screen of each other).
+still has one camera, so the two of you share a screen's width: walking apart,
+you stop at its edges). You can pick each other up, carry and throw each other
+(not from mid-air, and not again right after being carried).
 Both need the same build, and the host's UDP port 7845 must be reachable:
 on the same network use the host's local address; over the internet a VPN
 such as Tailscale is the simple way (use the host's Tailscale address). The

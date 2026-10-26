@@ -177,3 +177,44 @@ back to the frame before, to find what made her do it):
   cannot).
 - Random two-player sessions (3000 frames each, six of them) show no position
   jumps other than leash rejoins and the game's own scripted moves.
+
+## Second round: a screen each that holds together, carrying each other
+
+- **Blocks and terrain slid with the player's own view.** Only the 3D objects
+  follow the view matrices. Stage blocks (inline in the frame list) and the
+  three tile layers (their own lists at 0x80400000..0x80418000) are texture
+  rectangles in screen coordinates. Just before the frame's graphics task goes
+  to the RSP (Thread_MainProc 0x80000EA4), the frame list is walked and every
+  rectangle before the HUD's orthographic projection moves by the view offset
+  (12-bit coordinates, the widescreen wings already use the negative half).
+  The whole picture moves together; checked with Wine screenshots alternating
+  offset 0 / 120 every second (MM_VIEW_TEST=120): Marina stays on her block.
+  The view moves across only (the layers draw just 7 rows), and online play is
+  always widescreen so the moved edges stay drawn. Both the layer and frame
+  lists are render-only and left out of fingerprints.
+- **One shared screen.** The players ran apart without limit (the camera follows
+  their midpoint, but nothing kept them near it) until the leash teleported
+  player 2. Now each stays within 180 px of the camera centre across, pushed
+  back with the outward speed removed (`keep_on_screen`).
+- **Carrying each other.** Player 1 carrying player 2 works with Marina's own
+  code. The other way needed three things: player 1's record stands in player
+  2's slot during her update (her held slot points there); player 1's update
+  runs after player 2's that frame (`mm_marina_update_hook` on
+  func_8004ED10), because the carrier must move first or each anchors to the
+  other and both slide with the camera; and the pickup frame, where Marina's
+  code moves the carrier 55 px behind what she lifts, is run again with player
+  1 placed so the carrier stays put. No grabbing each other from the air
+  (Marina hangs on what she grabs mid-air and the pair froze) or within a
+  second of being carried (escaping with B grabbed straight back).
+- **Defeat while player 1 is down** no longer rejoins every frame; player 2
+  rejoins with full health (the most either player has had, kept in game
+  memory).
+
+### Bot tests
+
+`tools/coop_bots.py` runs scripted two-player scenarios in the headless build
+(separating, carrying both ways, both grabbing, carry-jump-throw, random fuzz
+from eight save states) and netplay sessions between two processes, and checks
+every frame: no position jumps, both on the shared screen, a carrier always
+carries a live object, bounded rejoins; online also identical fingerprints and
+no resync. It prints one line per scenario and ALL OK.

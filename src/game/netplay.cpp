@@ -166,7 +166,7 @@ void follow_widescreen(bool wide) {
         }
     }
     for (const char* n : kWideEnv) set_env(n, wide ? "1" : "0");
-    std::fprintf(stderr, "[netplay] widescreen %s to match the host\n", wide ? "on" : "off");
+    std::fprintf(stderr, "[netplay] widescreen %s for the session\n", wide ? "on" : "off");
 }
 
 void restore_widescreen() {
@@ -331,9 +331,13 @@ bool host_start(uint8_t* rdram, recomp_context* ctx) {
     static mm::cheats::SessionSettings s_settings;
     if (!g_active.load()) {
         s_settings = mm::cheats::capture_session_settings();
-        s_settings.widescreen = env_on("MM_WIDESCREEN_ACTIVE") ? 1 : 0;
+        // Online play is always widescreen: each player's own view moves the
+        // picture sideways, and the widescreen wings (and wider activity
+        // around the camera) keep the moved edges filled.
+        s_settings.widescreen = 1;
     }
     mm::cheats::set_session_settings(&s_settings);
+    follow_widescreen(true);
 
     ++g_epoch;
     Writer w;
@@ -649,7 +653,10 @@ void run_frame(uint8_t* rdram, recomp_context* ctx) {
         w.put<uint32_t>(f);
         w.put<uint64_t>(h);
         send(1, w);
-        if (g_log) std::fprintf(g_log, "%u %u %016llx\n", g_epoch, f, static_cast<unsigned long long>(h));
+        if (g_log) {
+            std::fprintf(g_log, "%u %u %016llx\n", g_epoch, f, static_cast<unsigned long long>(h));
+            std::fflush(g_log);
+        }
     }
     flush();
 

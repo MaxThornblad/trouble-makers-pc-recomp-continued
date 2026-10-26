@@ -32,7 +32,7 @@ constexpr uint32_t kActors = 0x800EF510u;
 constexpr uint32_t kStride = 0x198u;
 constexpr uint16_t kMarinaType = 0x0016;
 constexpr uint32_t kMarinaPaused = 0x800CA230u;
-constexpr uint32_t kGrabbableFlag = 0x1000u;     // +0x80: Marina's grab can take this actor   // func_80020024 skips Marina's update while nonzero
+constexpr uint32_t kHoldingFlag = 0x02000000u;   // +0x80: carrying something (slot at +0xD6)   // func_80020024 skips Marina's update while nonzero
 
 // Controller state the game builds in Input_Update (0x80000FE0) and Marina
 // copies into her own input words at the start of her update.
@@ -77,6 +77,8 @@ constexpr uint32_t kP2Globals = 0x807F0000u;
 constexpr uint32_t kP2PrevButtons = kP2Globals + 0x400u;
 constexpr uint32_t kP2JoinTimer = kP2Globals + 0x404u;     // frames P1 has been in play without P2
 constexpr uint32_t kP2AwayTimer = kP2Globals + 0x408u;     // frames P2 has been too far from P1
+constexpr uint32_t kP2FullHealth = kP2Globals + 0x40Cu;    // the most health either player has had (s16)
+constexpr uint32_t kP2GrabCooldown = kP2Globals + 0x410u;  // frames until the players may grab each other again
 
 constexpr uint32_t kGameState = 0x800BE4F0u;   // 6 and 10 = stage gameplay
 constexpr uint32_t kCameraX = 0x800BE558u, kCameraY = 0x800BE55Cu;
@@ -189,8 +191,15 @@ void setup(uint8_t* rdram, int slot) {
     std::memcpy(&x, p + 0x88, 4);
     x += ((MEM_W(0x80, addr(kActors)) & 0x20) != 0 ? 24 : -24) << 16;
     std::memcpy(p + 0x88, &x, 4);
-    MEM_W(0x80, addr(kActors + static_cast<uint32_t>(slot) * kStride)) &= ~(0x02000000 | kGrabbableFlag);   // not holding anything; not grabbable
+    MEM_W(0x80, addr(kActors + static_cast<uint32_t>(slot) * kStride)) &= ~0x02000000;   // not holding anything
     MEM_H(0xD6, addr(kActors + static_cast<uint32_t>(slot) * kStride)) = 0;
+    // Full health, not player 1's present health (which may be almost gone).
+    {
+        int16_t full = MEM_H(0, addr(kP2FullHealth));
+        full = std::max<int16_t>(full, MEM_H(0xE0, addr(kActors)));
+        if (full <= 0) full = 1;
+        MEM_H(0xE0, addr(kActors + static_cast<uint32_t>(slot) * kStride)) = full;
+    }
     copy_globals_out(rdram, at(rdram, kP2Globals));
     // Not player 1's recent presses or input words: she starts with none.
     for (uint32_t i = 0; i < kHistoryLen * 2; i += 2) {
@@ -212,12 +221,52 @@ void rejoin(uint8_t* rdram, int slot) {
     setup(rdram, slot);
 }
 
+// One shared screen. The game has one camera (the players' midpoint, see
+// mm_camera_begin), and only what is near it is active and drawn, so the
+// players can't leave it: across, each stays within kScreenEdge px of the
+// camera centre (360 px apart at most), pushed back with the outward speed
+// taken away, as in other shared-screen co-op games. Without it they ran off
+// in opposite directions until the leash pulled player 2 back (a teleport).
+// Each machine's own view then shows its player at most 180 px off the
+// shared centre, well inside the widescreen picture and active area.
+constexpr int kScreenEdge = 180;
+
+void clamp_player(uint8_t* rdram, uint32_t record, uint32_t world_x_global) {
+    const gpr a = addr(record);
+    const int32_t x = MEM_W(0x88, a);
+    const int32_t limit = kScreenEdge << 16;
+    int32_t want = x;
+    if (x > limit) want = limit;
+    if (x < -limit) want = -limit;
+    if (want == x) return;
+    MEM_W(0x88, a) = want;
+    const int32_t vx = MEM_W(0xEC, a);
+    if ((x > 0 && vx > 0) || (x < 0 && vx < 0)) MEM_W(0xEC, a) = 0;
+    if (world_x_global != 0) {
+        MEM_W(0, addr(world_x_global)) = MEM_W(0, addr(world_x_global)) + (want - x);
+    }
+}
+
+void keep_on_screen(uint8_t* rdram, int slot) {
+    clamp_player(rdram, kActors, kWorldX);
+    clamp_player(rdram, kActors + static_cast<uint32_t>(slot) * kStride, kP2Globals + global_offset(kWorldX));
+}
+
+bool g_in_own_call = false;   // inside a func_8004ED10 call made here
+bool g_p1_deferred = false;   // player 1's update was skipped at its usual place this frame
+
 void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
     g.slot = slot;
     if (MEM_HU(0, addr(kMarinaPaused)) != 0) return;   // the game is not running Marina either
     // Defeated: she comes straight back by player 1 instead of running
     // Marina's own defeat (which would end the game for both).
     if (MEM_H(0xE0, addr(kActors + static_cast<uint32_t>(slot) * kStride)) <= 0) {
+        if (MEM_H(0xE0, addr(kActors)) <= 0) {
+            // Player 1 is down too: wait (the game's own defeat runs for
+            // her); a copy of her now would be defeated at once, every frame.
+            MEM_H(0xE0, addr(kActors + static_cast<uint32_t>(slot) * kStride)) = 0;
+            return;
+        }
         std::fprintf(stderr, "[player2] defeated, rejoining\n");
         rejoin(rdram, slot);
     }
@@ -230,12 +279,34 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
     std::memcpy(&p1_flags, p1_record.data() + 0x80, 4);   // host-endian word, as MEM_W stores it
     copy_globals_out(rdram, p1_globals.data());
 
-    // Player 2 in. (With Marina's "can be grabbed" flag, kept off her own
-    // slot, see below.)
+    // Player 2 in.
     std::memcpy(slot_ptr(rdram, 0), slot_ptr(rdram, slot), kStride);
     MEM_H(0xD2, addr(kActors)) = static_cast<int16_t>(kMarinaType);
-    MEM_W(0x80, addr(kActors)) = static_cast<int32_t>(
-        static_cast<uint32_t>(MEM_W(0x80, addr(kActors))) | (p1_flags & kGrabbableFlag));
+    (void)p1_flags;
+    // Carrying player 1? The game recorded slot 0 as what she holds, but in
+    // her own update slot 0 is herself. Player 1's record goes into player
+    // 2's slot for the update and the held slot points there, so Marina's
+    // carry and throw code moves player 1; it comes back to slot 0 after.
+    const bool holding_p1 = (static_cast<uint32_t>(MEM_W(0x80, addr(kActors))) & kHoldingFlag) != 0 &&
+                            MEM_HU(0xD6, addr(kActors)) == 0;
+    if (holding_p1) {
+        std::memcpy(slot_ptr(rdram, slot), p1_record.data(), kStride);
+        // As an ordinary object: Marina holding a Marina-type actor pulls
+        // herself to it instead of carrying it (she jumped 40 px on the grab
+        // and slid away while carrying).
+        MEM_H(0xD2, addr(kActors + static_cast<uint32_t>(slot) * kStride)) =
+            static_cast<int16_t>(mm::custom_actors::type_id(kCustomIndex));
+        MEM_H(0xD6, addr(kActors)) = static_cast<int16_t>(slot);
+        if (const char* t = std::getenv("MM_TEST_HELDX")) {   // experiment: move the held copy
+            MEM_W(0x88, addr(kActors + static_cast<uint32_t>(slot) * kStride)) += std::atoi(t) << 16;
+        }
+        if (std::getenv("MM_P2_TRACE")) {
+            const gpr h = addr(kActors + static_cast<uint32_t>(slot) * kStride);
+            std::fprintf(stderr, "[p2trace] carry in: p2 x %d vx %d | held x %d y %d fl %08X st %04X D8 %08X\n",
+                         MEM_W(0x88, addr(kActors)) >> 16, MEM_W(0xEC, addr(kActors)), MEM_W(0x88, h) >> 16, MEM_W(0x8C, h) >> 16,
+                         static_cast<uint32_t>(MEM_W(0x80, h)), MEM_HU(0xD0, h), static_cast<uint32_t>(MEM_W(0xD8, h)));
+        }
+    }
     copy_globals_in(rdram, at(rdram, kP2Globals));
     const uint16_t buttons = p2_buttons(rdram);
     // Controller 1's raw pad as well (some of Marina's code reads it there):
@@ -286,7 +357,32 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
     const gpr saved_a0 = ctx->r4;
     const uint16_t state_before = MEM_HU(0xD0, addr(kActors));
     ctx->r4 = 0;
+    const int32_t x_before = MEM_W(0x88, addr(kActors));
+    static std::vector<uint8_t> snapshot;
+    recomp_context ctx_before;
+    if (holding_p1) {
+        snapshot.assign(rdram, rdram + 0x800000);
+        ctx_before = *ctx;
+    }
+    g_in_own_call = true;
     func_8004ED10(rdram, ctx);
+    g_in_own_call = false;
+    if (holding_p1) {
+        // Picking player 1 up, Marina's code puts the carrier 55 px behind
+        // what she holds (the pickup offset for objects): a jump. Then run
+        // her update again from before it, with player 1 placed where that
+        // offset leaves the carrier where she was; player 1 comes to her
+        // hands instead.
+        const int32_t moved = MEM_W(0x88, addr(kActors)) - x_before;
+        if (moved > (12 << 16) || moved < -(12 << 16)) {
+            std::memcpy(rdram, snapshot.data(), snapshot.size());
+            *ctx = ctx_before;
+            MEM_W(0x88, addr(kActors + static_cast<uint32_t>(slot) * kStride)) -= moved;
+            g_in_own_call = true;
+            func_8004ED10(rdram, ctx);
+            g_in_own_call = false;
+        }
+    }
     ctx->r4 = saved_a0;
     if (std::getenv("MM_P2_TRACE") && MEM_HU(0xD0, addr(kActors)) != state_before) {
         std::fprintf(stderr, "[p2trace] p2 state %04X -> %04X (98 %08X, input %04X/%04X, 70CC %08X %08X)\n", state_before,
@@ -296,17 +392,22 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
 
     for (int i = 0; i < 6; ++i) MEM_B(i, addr(kPads)) = static_cast<int8_t>(pad0[i]);
 
+    if (holding_p1 && std::getenv("MM_P2_TRACE")) {
+        std::fprintf(stderr, "[p2trace] carry: p2 x %d -> %d, p1 x %d -> %d, p1 st %04X\n",
+                     MEM_W(0x88, addr(kActors + static_cast<uint32_t>(slot) * kStride)) >> 16, MEM_W(0x88, addr(kActors)) >> 16,
+                     static_cast<int32_t>(p1_record[0x88] | p1_record[0x89] << 8 | p1_record[0x8A] << 16 | p1_record[0x8B] << 24) >> 16,
+                     MEM_W(0x88, addr(kActors + static_cast<uint32_t>(slot) * kStride)) >> 16, MEM_HU(0xD0, addr(kActors + static_cast<uint32_t>(slot) * kStride)));
+    }
+    if (holding_p1) {
+        // Player 1 as the carry / throw left her.
+        std::memcpy(p1_record.data(), slot_ptr(rdram, slot), kStride);
+        if (MEM_HU(0xD6, addr(kActors)) == slot) MEM_H(0xD6, addr(kActors)) = 0;
+    }
+
     // Player 2 out, player 1 back.
     std::memcpy(slot_ptr(rdram, slot), slot_ptr(rdram, 0), kStride);
     MEM_H(0xD2, addr(kActors + static_cast<uint32_t>(slot) * kStride)) =
         static_cast<int16_t>(mm::custom_actors::type_id(kCustomIndex));
-    // Players don't pick each other up: Marina's grab takes any actor whose
-    // +0x80 has 0x1000, and player 2, a copy of Marina's record, had it. The
-    // grab put her in the held state while her own Marina code kept running;
-    // she slid off, held "herself" (slot 0 in her update) and after the throw
-    // jumped on the spot for good. Her slot never carries the flag.
-    MEM_W(0x80, addr(kActors + static_cast<uint32_t>(slot) * kStride)) = static_cast<int32_t>(
-        static_cast<uint32_t>(MEM_W(0x80, addr(kActors + static_cast<uint32_t>(slot) * kStride))) & ~kGrabbableFlag);
     // Her colour: a cool blue added over Marina's own (the draw builder's
     // prim-colour tint at +0x9C..+0x9F, func_80009BE8). Marina's update
     // clears those bytes each frame and uses them for her hit flash, so the
@@ -322,7 +423,22 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
     }
     copy_globals_out(rdram, at(rdram, kP2Globals));
     std::memcpy(slot_ptr(rdram, 0), p1_record.data(), kStride);
+    MEM_H(0xD2, addr(kActors)) = static_cast<int16_t>(kMarinaType);
     copy_globals_in(rdram, p1_globals.data());
+    keep_on_screen(rdram, slot);
+    // Player 1's update, held back this frame because player 2 carries her
+    // (mm_marina_update_hook): the holder must move first, as when player 1
+    // carries player 2 (Marina's own update runs before the actors'), or
+    // each anchors to the other and both slide with the camera.
+    if (g_p1_deferred) {
+        g_p1_deferred = false;
+        const gpr a0 = ctx->r4;
+        ctx->r4 = 0;
+        g_in_own_call = true;
+        func_8004ED10(rdram, ctx);
+        g_in_own_call = false;
+        ctx->r4 = a0;
+    }
 }
 
 // Test (MM_P2_BISECT): the first time player 2 starts a grab (0x011F)
@@ -387,11 +503,8 @@ void publish_marker(uint8_t* rdram, int p2) {
         m.x = MEM_H(0x88, a);
         m.top = MEM_H(0x8C, a) + MEM_H(0xAE, a);
         m.health = MEM_H(0xE0, a);
-        // Full health is what she joined with (a copy of player 1's); grows if she heals past it.
-        static int full = 0;
-        if (m.health > full || g.joined) full = m.health;
         g.joined = false;
-        m.max_health = full;
+        m.max_health = MEM_H(0, addr(kP2FullHealth));
     }
     std::lock_guard lock{g_marker_mutex};
     g_marker = m;
@@ -399,10 +512,33 @@ void publish_marker(uint8_t* rdram, int p2) {
 
 void tick(uint8_t* rdram) {
     const int p2 = slot(rdram);
+    // No grabbing each other for a second after either was carried (state
+    // 0x2F): escaping from the other's hands with B would grab them back
+    // at once, in mid-air, and lock both there.
+    {
+        int32_t cool = MEM_W(0, addr(kP2GrabCooldown));
+        const bool held = (MEM_HU(0xD0, addr(kActors)) & 0xFF) == 0x2F ||
+                          (p2 > 0 && (MEM_HU(0xD0, addr(kActors + static_cast<uint32_t>(p2) * kStride)) & 0xFF) == 0x2F);
+        cool = held ? 60 : std::max(0, cool - 1);
+        MEM_W(0, addr(kP2GrabCooldown)) = cool;
+    }
+    {
+        int16_t full = MEM_H(0, addr(kP2FullHealth));
+        full = std::max<int16_t>(full, MEM_H(0xE0, addr(kActors)));
+        if (p2 > 0) full = std::max<int16_t>(full, MEM_H(0xE0, addr(kActors + static_cast<uint32_t>(p2) * kStride)));
+        MEM_H(0, addr(kP2FullHealth)) = full;
+    }
     if (std::getenv("MM_P2_TRACE")) {   // test: both players each frame
         static long n = 0;
         const gpr m = addr(kActors);
         const gpr b = p2 >= 0 ? addr(kActors + static_cast<uint32_t>(p2) * kStride) : m;
+        const auto held_ok = [&](gpr who) {
+            if ((static_cast<uint32_t>(MEM_W(0x80, who)) & kHoldingFlag) == 0) return 1;
+            const uint16_t h = MEM_HU(0xD6, who);
+            return h < 0xD0 && MEM_W(0x80, addr(kActors + static_cast<uint32_t>(h) * kStride)) != 0 ? 1 : 0;
+        };
+        std::fprintf(stderr, "[p2trace] held_ok %d %d hp %d %d\n", held_ok(m), p2 >= 0 ? held_ok(b) : 1,
+                     MEM_H(0xE0, m), p2 >= 0 ? MEM_H(0xE0, b) : 0);
         std::fprintf(stderr, "[p2trace] %ld cam %d,%d p1 %d,%d st %04X fl %08X hold %04X | p2(%d) %d,%d st %04X fl %08X hold %04X\n",
                      n++, MEM_W(0, addr(kCameraX)) >> 16, MEM_W(0, addr(kCameraY)) >> 16,
                      MEM_W(0x88, m) >> 16, MEM_W(0x8C, m) >> 16, MEM_HU(0xD0, m), static_cast<uint32_t>(MEM_W(0x80, m)), MEM_HU(0xD6, m),
@@ -609,35 +745,55 @@ extern "C" void mm_p2_draw_end(uint8_t* rdram, recomp_context*) {
     }
 }
 
-// Player 2's grab must not take player 1 either. func_8001EC1C (once a
-// frame, from func_80020024) resolves contacts between actors: a grab box
-// (+0x80 & 0x80, here player 2 reaching out) takes an actor flagged 0x1000,
-// and Marina has that flag. Player 2 would hold "slot 0", which in her own
-// update is herself: she slid away, shaking. While she reaches out, player
-// 1's 0x1000 is off for the routine.
+// Grabbing each other has two limits, applied while func_8001EC1C (once a
+// frame, from func_80020024) resolves contacts: there a grab box (+0x80 &
+// 0x80, a player reaching out) takes an actor flagged 0x1000, as both
+// players are. (1) Not from the air: Marina grabbing something while
+// airborne hangs on it, and the other player, carried, holds on to her:
+// both froze in mid-air. (2) Not during the cooldown after a carry (tick).
+// Then the other player's 0x1000 is off for the routine.
 namespace {
-bool g_contacts_cleared = false;
+uint32_t g_contacts_cleared[2]{};   // records whose 0x1000 was taken off
 }
 
 extern "C" void mm_p2_contacts_begin(uint8_t* rdram) {
     using namespace mm::player2;
-    g_contacts_cleared = false;
+    g_contacts_cleared[0] = g_contacts_cleared[1] = 0;
     const int p2 = slot(rdram);
     if (p2 <= 0) return;
-    const gpr b = static_cast<gpr>(static_cast<int32_t>(0x800EF510u + static_cast<uint32_t>(p2) * 0x198u));
-    const gpr m = static_cast<gpr>(static_cast<int32_t>(0x800EF510u));
-    if ((static_cast<uint32_t>(MEM_W(0x80, b)) & 0x80u) == 0) return;
-    const uint32_t flags = static_cast<uint32_t>(MEM_W(0x80, m));
-    if ((flags & 0x1000u) == 0) return;
-    MEM_W(0x80, m) = static_cast<int32_t>(flags & ~0x1000u);
-    g_contacts_cleared = true;
+    const uint32_t rec[2] = {kActors, kActors + static_cast<uint32_t>(p2) * kStride};
+    const bool cooling = MEM_W(0, addr(kP2GrabCooldown)) > 0;
+    for (int i = 0; i < 2; ++i) {
+        const uint32_t grabber = static_cast<uint32_t>(MEM_W(0x80, addr(rec[i])));
+        const uint32_t target = static_cast<uint32_t>(MEM_W(0x80, addr(rec[1 - i])));
+        const bool reaching = (grabber & 0x80u) != 0;
+        const bool airborne = (grabber & 0x00020000u) != 0;
+        if (reaching && (airborne || cooling) && (target & 0x1000u) != 0) {
+            MEM_W(0x80, addr(rec[1 - i])) = static_cast<int32_t>(target & ~0x1000u);
+            g_contacts_cleared[1 - i] = rec[1 - i];
+        }
+    }
 }
 
 extern "C" void mm_p2_contacts_end(uint8_t* rdram) {
-    if (!g_contacts_cleared) return;
-    g_contacts_cleared = false;
-    const gpr m = static_cast<gpr>(static_cast<int32_t>(0x800EF510u));
-    MEM_W(0x80, m) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0x80, m)) | 0x1000u);
+    using namespace mm::player2;
+    for (uint32_t r : g_contacts_cleared) {
+        if (r != 0 && MEM_W(0x80, addr(r)) != 0) MEM_W(0x80, addr(r)) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0x80, addr(r))) | 0x1000u);
+    }
+}
+
+// func_8004ED10's entry (troublemakers.us1.toml): nonzero = skip this call.
+// Player 1's update moves to the end of player 2's while player 2 carries
+// her (update_core).
+extern "C" int mm_marina_update_hook(uint8_t* rdram) {
+    using namespace mm::player2;
+    if (g_in_own_call) return 0;
+    const int p2 = slot(rdram);
+    if (p2 <= 0) return 0;
+    const gpr b = addr(kActors + static_cast<uint32_t>(p2) * kStride);
+    if ((static_cast<uint32_t>(MEM_W(0x80, b)) & kHoldingFlag) == 0 || MEM_HU(0xD6, b) != 0) return 0;
+    g_p1_deferred = true;
+    return 1;
 }
 
 // Each player's own view (netplay). The game has one camera, shared by both
@@ -678,6 +834,57 @@ void view_offset(float& x, float& y) {
 
 extern "C" void mm_view_begin(uint8_t*) {}
 
+// The rest of the picture: tile layers and stage blocks are not 3D. The
+// draw builder (func_80009BE8) emits them as texture rectangles in screen
+// coordinates (10.2 fixed point, 12 bits; the widescreen wings use the
+// negative half), the blocks inline and the three tile layers as calls to
+// their own display lists (0x80400000..0x80418000). After the builder they
+// move by the same offset as the view; the HUD comes later, after the
+// orthographic projection, and stays. The view matrices moved the 3D
+// objects; without this the blocks and terrain stayed put on screen and
+// seemed to slide along with the player.
+namespace {
+uint32_t g_layer_mark[6]{};                    // first texrect word of each layer list, as last moved
+
+void shift_texrect(uint8_t* rdram, uint32_t at, int dx4) {
+    const gpr a = static_cast<gpr>(static_cast<int32_t>(at));
+    uint32_t w0 = static_cast<uint32_t>(MEM_W(0, a)), w1 = static_cast<uint32_t>(MEM_W(4, a));
+    const uint32_t lrx = (((w0 >> 12) & 0xFFFu) + static_cast<uint32_t>(dx4)) & 0xFFFu;
+    const uint32_t ulx = (((w1 >> 12) & 0xFFFu) + static_cast<uint32_t>(dx4)) & 0xFFFu;
+    w0 = (w0 & ~(0xFFFu << 12)) | (lrx << 12);
+    w1 = (w1 & ~(0xFFFu << 12)) | (ulx << 12);
+    MEM_W(0, a) = static_cast<int32_t>(w0);
+    MEM_W(4, a) = static_cast<int32_t>(w1);
+}
+
+// A tile layer's list, from its start to G_ENDDL; once per rebuild.
+void shift_layer(uint8_t* rdram, uint32_t list, int dx4) {
+    const int index = static_cast<int>((list - 0x80400000u) / 0x4000u);
+    if (index < 0 || index >= 6) return;
+    uint32_t first = 0;
+    for (uint32_t pc = list, n = 0; n < 2000; pc += 8, ++n) {
+        const uint32_t w0 = static_cast<uint32_t>(MEM_W(0, static_cast<gpr>(static_cast<int32_t>(pc))));
+        const uint8_t op = static_cast<uint8_t>(w0 >> 24);
+        if (op == 0xB8) break;
+        if (op == 0xE4 || op == 0xE5) {
+            if (first == 0) {
+                first = static_cast<uint32_t>(MEM_W(4, static_cast<gpr>(static_cast<int32_t>(pc))));
+                if (first == g_layer_mark[index]) return;   // already moved: not rebuilt since
+            }
+            shift_texrect(rdram, pc, dx4);
+        }
+    }
+    for (uint32_t pc = list, n = 0; n < 2000; pc += 8, ++n) {
+        const uint32_t w0 = static_cast<uint32_t>(MEM_W(0, static_cast<gpr>(static_cast<int32_t>(pc))));
+        if ((w0 >> 24) == 0xE4 || (w0 >> 24) == 0xE5) {
+            g_layer_mark[index] = static_cast<uint32_t>(MEM_W(4, static_cast<gpr>(static_cast<int32_t>(pc))));
+            break;
+        }
+        if ((w0 >> 24) == 0xB8) break;
+    }
+}
+} // namespace
+
 extern "C" void mm_view_end(uint8_t* rdram) {
     using namespace mm::player2;
     const int own = mm::netplay::active() ? mm::netplay::player() : 0;
@@ -689,11 +896,17 @@ extern "C" void mm_view_end(uint8_t* rdram) {
         const float x1 = MEM_W(0x88, a1) / 65536.0f, y1 = MEM_W(0x8C, a1) / 65536.0f;
         const float x2 = MEM_W(0x88, a2) / 65536.0f, y2 = MEM_W(0x8C, a2) / 65536.0f;
         tx = std::clamp((own == 1 ? x1 - x2 : x2 - x1) * 0.5f, -160.0f, 160.0f);
-        ty = std::clamp((own == 1 ? y1 - y2 : y2 - y1) * 0.5f, -100.0f, 100.0f);
+        (void)y1;
+        (void)y2;   // across only: the tile layers draw 7 rows, nothing above or below
     }
     if (const char* t = std::getenv("MM_VIEW_TEST")) {   // test: a fixed offset "x,y"
         tx = static_cast<float>(std::atof(t));
         if (const char* c = std::strchr(t, ',')) ty = static_cast<float>(std::atof(c + 1));
+    }
+    if (const char* t = std::getenv("MM_VIEW_TEST")) {   // test: offset "x" every other second, no easing
+        static long frames = 0;
+        tx = (++frames / 60) % 2 ? static_cast<float>(std::atof(t)) : 0.0f;
+        g_smooth_x = tx;
     }
     // Eased, so a rejoin (a jump of up to 250 px) glides instead of cutting.
     g_smooth_x += (tx - g_smooth_x) * 0.12f;
@@ -708,6 +921,35 @@ extern "C" void mm_view_end(uint8_t* rdram) {
         shift_translation(rdram, mtx, 0, -g_smooth_x);
         shift_translation(rdram, mtx, 1, -g_smooth_y);
     }
+}
+
+// Thread_MainProc, just before the frame's graphics task goes to the RSP:
+// the whole frame list (task data, from the arena base + 0x180) is final.
+extern "C" void mm_view_frame_dl(uint8_t* rdram, uint32_t task) {
+    const float off = g_view_x.load(std::memory_order_relaxed);
+    const int dx4 = -static_cast<int>(std::lround(off * 4.0f));
+    if (dx4 == 0 || task < 0x80000000u || task >= 0x80800000u) return;
+    const uint32_t start = static_cast<uint32_t>(MEM_W(0x30, static_cast<gpr>(static_cast<int32_t>(task)))) | 0x80000000u;
+    const uint32_t size = static_cast<uint32_t>(MEM_W(0x34, static_cast<gpr>(static_cast<int32_t>(task))));
+    if (start < 0x80000000u || start >= 0x80800000u || size > 0x10000u) return;
+    static const bool dbg = std::getenv("MM_VIEW_DEBUG") != nullptr;
+    int moved = 0;
+    for (uint32_t pc = start; pc < start + size; pc += 8) {
+        const uint32_t w0 = static_cast<uint32_t>(MEM_W(0, static_cast<gpr>(static_cast<int32_t>(pc))));
+        const uint32_t w1 = static_cast<uint32_t>(MEM_W(4, static_cast<gpr>(static_cast<int32_t>(pc))));
+        const uint8_t op = static_cast<uint8_t>(w0 >> 24);
+        if (op == 0xB8) break;
+        if (op == 0x01 && (w0 & 0x00010000u) != 0 && (w1 & 0xFFFFu) == 0x0080u) break;   // the HUD's projection
+        if (op == 0xE4 || op == 0xE5) {
+            shift_texrect(rdram, pc, dx4);
+            ++moved;
+        }
+        if (op == 0x06) {
+            const uint32_t target = w1 | 0x80000000u;
+            if (target >= 0x80400000u && target < 0x80418000u) shift_layer(rdram, target, dx4);
+        }
+    }
+    if (dbg) std::fprintf(stderr, "[view] frame list %08X+%X: %d rectangles moved by %d\n", start, size, moved, dx4);
 }
 
 extern "C" void mm_camera_begin(uint8_t* rdram) {

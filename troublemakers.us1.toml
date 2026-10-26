@@ -282,13 +282,16 @@ hook = [
     { func = "func_80012830", text = '{ extern void mm_camera_begin(uint8_t*); mm_camera_begin(rdram); }' },
     { func = "func_80012830", before_vram = 0x800128CC, text = '{ extern void mm_camera_end(uint8_t*); mm_camera_end(rdram); }' },
     { func = "func_80010A10", before_vram = 0x80010A30, text = '{ MEM_W(0, (gpr)(int32_t)0x801780F0u) = 0x80460000u; ctx->r15 = (gpr)(int32_t)0x80470000u; }' },
-    # Co-op: player 2's grab must not take player 1 (player2.cpp, mm_p2_contacts_*).
+    # Co-op: limits on the players grabbing each other (player2.cpp, mm_p2_contacts_*).
     { func = "func_8001EC1C", text = '{ extern void mm_p2_contacts_begin(uint8_t*); mm_p2_contacts_begin(rdram); }' },
     { func = "func_8001EC1C", before_vram = 0x8001F884, text = '{ extern void mm_p2_contacts_end(uint8_t*); mm_p2_contacts_end(rdram); }' },
+    # Co-op: while player 2 carries player 1, player 1's update runs after player 2's (player2.cpp).
+    { func = "func_8004ED10", text = '{ extern int mm_marina_update_hook(uint8_t*); if (mm_marina_update_hook(rdram)) return; }' },
     # Test (dev_harness.cpp, MM_TEST_P1DIFF): what Marina's update writes.
     { func = "func_80020024", before_vram = 0x8002022C, text = '{ extern void mm_test_p1diff_begin(uint8_t*); mm_test_p1diff_begin(rdram); }' },
     { func = "func_80020024", before_vram = 0x80020234, text = '{ extern void mm_test_p1diff_end(uint8_t*); mm_test_p1diff_end(rdram); }' },
     # Netplay: each player's own view (player2.cpp, mm_view_begin).
+    { func = "Thread_MainProc", before_vram = 0x80000EA4, text = '{ extern void mm_view_frame_dl(uint8_t*, uint32_t); mm_view_frame_dl(rdram, (uint32_t)MEM_W(0, ctx->r16)); }' },
     { func = "LookAt_Update", text = '{ extern void mm_view_begin(uint8_t*); mm_view_begin(rdram); }' },
     { func = "LookAt_Update", before_vram = 0x800109A0, text = '{ extern void mm_view_end(uint8_t*); mm_view_end(rdram); }' },
     { func = "LookAt_Update", before_vram = 0x800108B8, text = '{ MEM_W(0, (gpr)(int32_t)0x801780F0u) = 0x80460000u; ctx->r15 = (gpr)(int32_t)0x80470000u; }' },

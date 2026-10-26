@@ -53,11 +53,13 @@ struct Range { uint32_t start, end; };
 // Also the two view matrices LookAt_Update writes (0x804600C0 / 0x804700C0,
 // the matrix pool moved to expansion memory): netplay builds them from each
 // player's own view (player2.cpp, mm_view_begin), and only the renderer reads them.
+// The frame and tile-layer display lists are render-only as well (netplay
+// moves parts of them for each player's own view, player2.cpp).
 constexpr std::array<Range, 4> kRendererRanges{{
     {0x801DA800u, 0x801DA800u + 320u * 240u * 2u},
     {0x803DA800u, 0x803DA800u + 320u * 240u * 2u},
-    {0x804600C0u, 0x804600C0u + 0x40u},
-    {0x804700C0u, 0x804700C0u + 0x40u},
+    {0x80400000u, 0x80418000u},   // tile layer lists (widescreen.cpp remap_arena)
+    {0x80460000u, 0x80480000u},   // frame arenas: display lists and view matrices
 }};
 
 struct Poll {
