@@ -133,7 +133,7 @@ constexpr int kPageSpawn = 2;
 constexpr int kPageInspect = 3;
 constexpr int kPageSession = 4;
 constexpr int kPageCount = 5;
-constexpr int kSessionRows = 7;   // record, play latest, stop; host, join address, join, leave
+constexpr int kSessionRows = 9;   // record, play latest, stop; host, host on Steam, address, join, join on Steam, leave
 
 // Session page: the netplay join address being typed (row 4; Enter starts
 // and ends editing, text comes from SDL text input).
@@ -299,14 +299,15 @@ void activate_selection() {
             case 1: mm::replay::request_play_latest(); close_overlay(); break;
             case 2: mm::replay::request_stop(); break;
             case 3: mm::netplay::request_host(); break;
-            case 4: {
+            case 4: mm::netplay::request_host_steam(); break;
+            case 5: {
                 const bool now = !g_editing_address.load();
                 g_editing_address.store(now);
                 if (now) SDL_StartTextInput();
                 else SDL_StopTextInput();
                 break;
             }
-            case 5: {
+            case 6: {
                 std::string a;
                 {
                     std::lock_guard lock{g_address_mutex};
@@ -315,6 +316,7 @@ void activate_selection() {
                 if (!a.empty()) mm::netplay::request_join(a);
                 break;
             }
+            case 7: mm::netplay::request_join_steam(0); break;
             default: mm::netplay::request_leave(); break;
         }
         return;
@@ -499,7 +501,7 @@ extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
     mm::actors::tick(rdram);
     mm::player2::tick(rdram);
     mm::dev_harness::tick(rdram);
-    if (!mm::far::shows_p2_view(rdram)) mm::enemy_bars::publish(rdram);
+    if (!mm::faraway::shows_p2_view(rdram)) mm::enemy_bars::publish(rdram);
     mm::cheats::set_active(g_enabled.load(std::memory_order_acquire));
     if (g_enabled.load(std::memory_order_acquire)) mm::inspector::publish(rdram);
 
@@ -981,9 +983,11 @@ void draw_overlay() {
         ImGui::TextUnformatted("Online co-op (netplay)");
         ImGui::TextWrapped(
             "The host plays Marina, the other player joins as player 2 from the host's "
-            "game. Both need the same build. The host's port (UDP 7845) must be reachable: "
-            "on the same network use the host's local address; over the internet a VPN "
-            "like Tailscale is easiest (use the host's Tailscale address).");
+            "game. Both need the same build. On Steam (both running Steam, signed in, "
+            "friends): the host picks Host on Steam and invites, the friend accepts the "
+            "invite or picks Join a friend on Steam. No ports or addresses. Without Steam, "
+            "the host's port (UDP 7845) must be reachable: on the same network use the "
+            "host's local address; over the internet a VPN like Tailscale is easiest.");
         {
             std::string address;
             {
@@ -996,11 +1000,13 @@ void draw_overlay() {
             }
             const bool editing = g_editing_address.load();
             ImGui::Selectable("      Host a game (port 7845)", selected == 3);
+            ImGui::Selectable("      Host on Steam (no port forwarding)", selected == 4);
             const std::string row = std::string("      Address: ") + (address.empty() ? "(none)" : address) +
                                     (editing ? "_   (type, Enter to finish)" : "   (Enter to edit)");
-            ImGui::Selectable(row.c_str(), selected == 4);
-            ImGui::Selectable("      Join that address", selected == 5);
-            ImGui::Selectable("      Leave the online game", selected == 6);
+            ImGui::Selectable(row.c_str(), selected == 5);
+            ImGui::Selectable("      Join that address (or steam:<lobby id>)", selected == 6);
+            ImGui::Selectable("      Join a friend on Steam (or accept their invite)", selected == 7);
+            ImGui::Selectable("      Leave the online game", selected == 8);
             const std::string net = mm::netplay::status_text();
             ImGui::BulletText("%s", net.empty() ? "Not connected" : net.c_str());
         }

@@ -609,6 +609,8 @@ static void print_usage(const char* argv0) {
         "  --no-widescreen     force the original 4:3 presentation\n"
         "  --host [port]       host an online co-op game (default port 7845)\n"
         "  --join addr[:port]  join an online co-op game\n"
+        "  --steam-host        host an online co-op game on Steam (no port forwarding)\n"
+        "  --steam-join [id]   join a friend's game on Steam (or that lobby id)\n"
         "  --debug-menu        enable the in-game debug overlay\n"
         "  --no-debug-menu     disable the in-game debug overlay\n"
         "settings persist in the app config folder (display.cfg, controls.json)\n"
@@ -722,6 +724,13 @@ int main(int argc, char** argv) {
             g_net_host_port = port;
         } else if (arg == "--join" && i + 1 < argc) {
             g_net_join = argv[++i];
+        } else if (arg == "--steam-host") {
+            g_net_host_port = -1;
+        } else if (arg == "--steam-join") {
+            g_net_join = "steam";
+            if (i + 1 < argc && argv[i + 1][0] != '-' && argv[i + 1][0] != '+') g_net_join += std::string(":") + argv[++i];
+        } else if (arg == "+connect_lobby" && i + 1 < argc) {   // Steam starting us for an invite
+            g_net_join = std::string("steam:") + argv[++i];
         } else if (arg == "--debug-menu") {
             g_debug_menu = true;
         } else if (arg == "--no-debug-menu") {
@@ -854,6 +863,7 @@ int main(int argc, char** argv) {
     mm::replay::configure(config_dir / "replays");
     mm::netplay::configure(config_dir / "netplay");
     if (g_net_host_port > 0) mm::netplay::request_host(g_net_host_port);
+    if (g_net_host_port < 0) mm::netplay::request_host_steam();
     if (!g_net_join.empty()) mm::netplay::request_join(g_net_join);
     mm::cheats::configure(config_dir);
 #ifdef MM_HAS_GRAPHICS

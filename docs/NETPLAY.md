@@ -180,6 +180,9 @@ back to the frame before, to find what made her do it):
 
 ## Second round: a screen each that holds together, carrying each other
 
+(The shifted view and the shared screen below were replaced by the third
+round's second camera; the code is gone.)
+
 - **Blocks and terrain slid with the player's own view.** Only the 3D objects
   follow the view matrices. Stage blocks (inline in the frame list) and the
   three tile layers (their own lists at 0x80400000..0x80418000) are texture
@@ -251,6 +254,28 @@ the game gets a second camera for player 2, so neither is held to the other:
   every frame; screenshots from the real renderer (lavapipe under Xvfb) show
   player 2 crossing the whole first desert stage on her own with its enemies
   and blocks, while player 1's picture is unchanged.
+
+## Transports: ENet and Steam
+
+`net_transport.h` is the connection netplay runs over: one partner, two
+reliable ordered channels, events Connected / Received / Disconnected /
+Failed. `net_enet.cpp` is ENet (address and port); `steam_net.cpp` is Steam,
+following coop-anything's playbook/networking-steam-spacewar.md: the flat C
+API loaded at run time (no SDK headers), app 480, a friends-only lobby tagged
+`troublemakers=1`, ISteamNetworkingMessages with messages over 60000 bytes
+split, manual callback dispatch, LobbyCreated handled once though it arrives
+twice, sessions accepted only from lobby members (the host) or the host (the
+guest), and the partner dropped when it leaves the lobby or the session
+fails. The guest finds a friend hosting by walking the friends list
+(GetFriendGamePlayed: app 480 with a lobby), or joins by invite or Join Game.
+`tools/steam_mock/mock_steam.c` is a stand-in libsteam_api.so for testing
+two copies on one Linux machine (`coop_bots.py --steam-mock`, scenario
+net-steam). Not yet checked: real Steam between two accounts.
+
+Also fixed: in widescreen the game skips two border rectangles; the frame
+list then had another length on a machine with widescreen off, which leaked
+into game memory (the list head and stack copies) and made every online
+session resync once a second. Two no-ops now take their place.
 
 ### Bot tests
 

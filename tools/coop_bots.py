@@ -76,6 +76,7 @@ FAR = [
 NETPLAY = [
     ("net-apart", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r"),
     ("net-far", 1, 1500, "60:,1440:r", "60:,1440:l"),
+    ("net-steam", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r"),   # over the Steam stand-in (--steam-mock)
     ("net-carry", 1, 1200, "80:,6:l,10:B,20:,60:r,30:,60:l,20:,10:B,900:", "600:,6:r,10:B,20:,60:l,30:,60:r,20:,10:B,400:"),
     ("net-fuzz", 4, 1800, fuzz(901, grab_bias=True), fuzz(902, grab_bias=True)),
 ]
@@ -84,9 +85,9 @@ BASE_ENV = {"MM_HEADLESS_GFX": "1", "SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER
 
 
 # States in which a player's position is the carry's to set: being carried
-# (0x2F; she snaps to the carrier's hands, and to the other side when the
+# (0x16 grabbed, 0x2F; she snaps to the carrier's hands, and to the other side when the
 # carrier turns), reaching (0x11F), carrying / throwing (0x122, 0x126).
-CARRY_STATES = {0x2F, 0x11F, 0x122, 0x126}
+CARRY_STATES = {0x16, 0x2F, 0x11F, 0x122, 0x126}
 
 
 def check_trace(text, allowed_rejoins, far=False):
@@ -218,6 +219,7 @@ def run_far(args, name, slot, frames, pad1, pad2, want_apart):
 
 
 def run_netplay(args, name, slot, frames, pad1, pad2, port):
+    steam = name.startswith("net-steam")
     with tempfile.TemporaryDirectory() as tmp:
         guest_home = Path(tmp) / "guest"
         (guest_home / ".config" / "troublemakers-recomp").mkdir(parents=True)
@@ -231,6 +233,13 @@ def run_netplay(args, name, slot, frames, pad1, pad2, port):
                     MM_NET_HOST="%d@200" % port, MM_NET_PAD=pad1, MM_NET_LOG=str(hlog))
         genv = dict(common, HOME=str(guest_home), MM_NET_JOIN="127.0.0.1:%d@300" % port, MM_NET_PAD=pad2,
                     MM_NET_LOG=str(glog))
+        if steam:
+            # Two Steam users who are friends; the guest finds the host's lobby
+            # through the friends list (tools/steam_mock/mock_steam.c).
+            host_id, guest_id = "76561190000000%03d" % (port % 1000), "76561190000001%03d" % (port % 1000)
+            mock = dict(MM_STEAM_LIB=args.steam_mock, MOCK_STEAM_DIR=str(Path(tmp) / "steam"))
+            henv.update(mock, MM_NET_HOST="steam@200", MOCK_STEAM_ID=host_id, MOCK_STEAM_FRIENDS=guest_id)
+            genv.update(mock, MM_NET_JOIN="steam@300", MOCK_STEAM_ID=guest_id, MOCK_STEAM_FRIENDS=host_id)
         timeout = 60 + frames // 30
         hfile = open(Path(tmp) / "host.log", "wb")   # a file, not a pipe: nobody reads it while the game runs
         host = subprocess.Popen([args.bin, args.rom], env=henv, stdout=hfile, stderr=subprocess.STDOUT)
@@ -272,6 +281,8 @@ def main():
     ap.add_argument("--home", required=True)
     ap.add_argument("--only", default="")
     ap.add_argument("--no-net", action="store_true")
+    ap.add_argument("--steam-mock", default="", help="the Steam stand-in library (cc -shared -fPIC "
+                    "-o libsteam_api.so tools/steam_mock/mock_steam.c); without it net-steam is skipped")
     args = ap.parse_args()
     failed = 0
     port = 7900
@@ -292,6 +303,9 @@ def main():
     if not args.no_net:
         for name, slot, frames, p1, p2 in NETPLAY:
             if args.only and args.only not in name:
+                continue
+            if name.startswith("net-steam") and not args.steam_mock:
+                print("%-18s skip (no --steam-mock)" % name, flush=True)
                 continue
             port += 1
             problems, traced = run_netplay(args, name, slot, frames, p1, p2, port)

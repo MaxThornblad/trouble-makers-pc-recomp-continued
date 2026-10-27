@@ -1,6 +1,7 @@
 #include "far_coop.h"
 
 #include <algorithm>
+#include <chrono>
 #include <array>
 #include <cstdio>
 #include <cstdlib>
@@ -16,7 +17,7 @@ extern "C" void func_80012830(uint8_t* rdram, recomp_context* ctx);          // 
 extern "C" void func_8001DE30(uint8_t* rdram, recomp_context* ctx);          // map actor prefetch
 extern "C" void Graphics_Begin_Frame(uint8_t* rdram, recomp_context* ctx);   // a whole frame (a0: buffer)
 
-namespace mm::far {
+namespace mm::faraway {
 namespace {
 
 constexpr uint32_t kActors = 0x800EF510u;
@@ -167,11 +168,11 @@ int32_t cheb(int32_t dx, int32_t dy) {
 } // namespace
 
 bool active(uint8_t* rdram) {
-    static const bool force = [] {
+    static const int force = [] {   // test: MM_FAR=1 on locally too, =0 off online too
         const char* e = std::getenv("MM_FAR");
-        return e && e[0] == '1';
+        return e ? (e[0] == '1' ? 1 : 0) : -1;
     }();
-    if (!force && !mm::netplay::active()) return false;
+    if (force == 0 || (force < 0 && !mm::netplay::active())) return false;
     if (!mm::cheats::coop_enabled()) return false;
     const uint16_t state = MEM_HU(0, addr(kGameState));
     if (state != 6 && state != 10) return false;
@@ -199,17 +200,17 @@ bool p2_camera_offset(uint8_t* rdram, int32_t& dx, int32_t& dy) {
 }
 
 bool shows_p2_view(uint8_t* rdram) {
-    static const bool force = [] {
+    static const int force = [] {   // test: MM_FAR_SHADOW=1 always, =0 never
         const char* e = std::getenv("MM_FAR_SHADOW");
-        return e && e[0] == '1';
+        return e ? (e[0] == '1' ? 1 : 0) : -1;
     }();
-    if (!active(rdram) || !store_valid(rdram)) return false;
-    return force || (mm::netplay::active() && mm::netplay::player() == 2);
+    if (force == 0 || !active(rdram) || !store_valid(rdram)) return false;
+    return force == 1 || (mm::netplay::active() && mm::netplay::player() == 2);
 }
 
-} // namespace mm::far
+} // namespace mm::faraway
 
-using namespace mm::far;
+using namespace mm::faraway;
 
 extern "C" int mm_far_in_shadow(void) {
     return g_shadow ? 1 : 0;
@@ -374,8 +375,9 @@ int holder_set(uint8_t* rdram, int slot) {
 } // namespace
 
 extern "C" void mm_far_actor(uint8_t* rdram, uint32_t slot) {
-    if (!g_frame_on) return;
     const int s = static_cast<int>(slot & 0xFFFF);
+    mm::player2::held_swap_begin(rdram, s);
+    if (!g_frame_on) return;
     const int held = holder_set(rdram, s);
     switch_to(rdram, held >= 0 ? held : nearest(rdram, s));
 }
@@ -383,6 +385,7 @@ extern "C" void mm_far_actor(uint8_t* rdram, uint32_t slot) {
 // func_80020024 after the actor loop, before Marina's walls (func_80014C44):
 // back to the game's camera; player 2 keeps within her own camera's walls.
 extern "C" void mm_far_after_actors(uint8_t* rdram) {
+    mm::player2::held_swap_end(rdram);
     if (!g_frame_on) return;
     switch_to(rdram, 0);
     int32_t dx, dy;
@@ -597,6 +600,7 @@ extern "C" void mm_far_shadow(uint8_t* rdram, recomp_context* ctx, uint32_t task
     }
     if (fb_real == 0) return;
 
+    const auto t0 = std::chrono::steady_clock::now();
     g_backup.assign(rdram, rdram + kRam);
     const recomp_context saved = *ctx;
     g_shadow = true;
@@ -648,8 +652,10 @@ extern "C" void mm_far_shadow(uint8_t* rdram, recomp_context* ctx, uint32_t task
     if (dbg && (g_shadow_frames % 60) == 0) {
         size_t dirty = 0;
         for (uint8_t d : g_dirty) dirty += d;
-        std::fprintf(stderr, "[far] shadow %u: %zu pages changed, %d blocks copied, mirror %u KB, fb %06X -> %06X\n",
-                     g_shadow_frames, dirty, b.copied, b.used / 1024, fb_shadow, fb_real);
+        const long us = static_cast<long>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                              std::chrono::steady_clock::now() - t0).count());
+        std::fprintf(stderr, "[far] shadow %u: %zu pages changed, %d blocks copied, mirror %u KB, fb %06X -> %06X, %ld us\n",
+                     g_shadow_frames, dirty, b.copied, b.used / 1024, fb_shadow, fb_real, us);
     }
     ++g_shadow_frames;
 }

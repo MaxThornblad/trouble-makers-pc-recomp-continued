@@ -294,7 +294,14 @@ camera. Player 2 comes back next to player 1 only when defeated or lost
 door. You can pick each other up, carry and throw each other (not from
 mid-air, and not again right after being carried), and both can grab stage
 blocks with the grabbable-blocks cheat.
-Both need the same build, and the host's UDP port 7845 must be reachable:
+**On Steam** (no ports, no addresses): put Valve's `steam_api64.dll` (from
+the Steamworks.NET Standalone release 2025.164.1, Windows-x64) next to the
+game; both players run Steam, signed in, as friends. The host picks **Host on
+Steam** on the Session page (or starts with `--steam-host`) and invites; the
+friend accepts the invite or picks **Join a friend on Steam** (`--steam-join`).
+The game runs as Valve's free sample app 480, so you both show as playing
+"Spacewar". Without Steam, both need the same build, and the host's UDP port
+7845 must be reachable:
 on the same network use the host's local address; over the internet a VPN
 such as Tailscale is the simple way (use the host's Tailscale address). The
 host's cheats and settings apply to both; once a second the two games are

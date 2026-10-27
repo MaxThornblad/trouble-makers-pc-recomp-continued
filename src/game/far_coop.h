@@ -35,7 +35,7 @@
 
 #include "recomp.h"
 
-namespace mm::far {
+namespace mm::faraway {
 
 // The far-apart rules are on for this frame (netplay session, or MM_FAR=1 to
 // test locally, with player 2 in the stage). Game thread.
@@ -62,4 +62,4 @@ void reset(uint8_t* rdram);
 // This machine shows player 2's camera (netplay guest, or MM_FAR_SHADOW=1).
 bool shows_p2_view(uint8_t* rdram);
 
-} // namespace mm::far
+} // namespace mm::faraway

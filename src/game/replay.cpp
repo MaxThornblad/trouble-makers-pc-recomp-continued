@@ -50,11 +50,10 @@ constexpr std::array<uint32_t, 2> kClockWords{0x801374DCu, 0x80182018u};
 // renderer (RT64 writes pixels back, a headless build draws nothing), not on
 // the game, so they are left out of the fingerprint.
 struct Range { uint32_t start, end; };
-// Also the two view matrices LookAt_Update writes (0x804600C0 / 0x804700C0,
-// the matrix pool moved to expansion memory): netplay builds them from each
-// player's own view (player2.cpp, mm_view_begin), and only the renderer reads them.
-// The frame and tile-layer display lists are render-only as well (netplay
-// moves parts of them for each player's own view, player2.cpp).
+// Also the frame arenas (display lists and the view matrices LookAt_Update
+// writes) and the tile-layer lists: only the renderer reads them, and on
+// player 2's machine the frame's list jumps to her own picture
+// (far_coop.cpp).
 constexpr std::array<Range, 4> kRendererRanges{{
     {0x801DA800u, 0x801DA800u + 320u * 240u * 2u},
     {0x803DA800u, 0x803DA800u + 320u * 240u * 2u},

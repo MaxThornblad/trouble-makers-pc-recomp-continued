@@ -41,7 +41,11 @@ add_executable(troublemakers
     replay.cpp
     far_coop.cpp
     player2.cpp
+    player2_draw.cpp
+    player2_camera.cpp
     netplay.cpp
+    steam_net.cpp
+    net_enet.cpp
     widescreen.cpp
 )
 
@@ -84,6 +88,8 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(enet)
 target_include_directories(troublemakers PRIVATE ${enet_SOURCE_DIR}/include)
 target_link_libraries(troublemakers PRIVATE enet)
+# Steam transport (steam_net.cpp) loads the Steam library at run time.
+target_link_libraries(troublemakers PRIVATE ${CMAKE_DL_LIBS})
 if(WIN32)
     target_link_libraries(troublemakers PRIVATE ws2_32 winmm)
 endif()

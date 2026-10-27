@@ -1,5 +1,4 @@
 #include "enemy_bars.h"
-#include "player2.h"
 
 #include <algorithm>
 #include <array>
@@ -225,11 +224,9 @@ void draw_overlay() {
     const ImVec2 centre(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
     const float half_w = widescreen ? io.DisplaySize.x * 0.5f : 144.0f * scale;
     const float w = 26.0f * scale, h = std::max(3.0f, 2.8f * scale);
-    float vx, vy;   // netplay's own-view offset (player2.h)
-    mm::player2::view_offset(vx, vy);
     for (const Bar& b : bars) {
-        const float cx = centre.x + (b.x - vx) * scale;
-        const float cy = centre.y - (b.y - vy) * scale;
+        const float cx = centre.x + b.x * scale;
+        const float cy = centre.y - b.y * scale;
         if (std::abs(cx - centre.x) > half_w + w || cy < centre.y - 100.0f * scale - h ||
             cy > centre.y + 90.0f * scale) {
             continue;
@@ -253,8 +250,8 @@ void draw_overlay() {
         if (age < 0.0f || age > 1.0f) continue;
         const float rx = n.x - cam_x;
         const float ry = n.y - cam_y + 20.0f * (1.0f - (1.0f - age) * (1.0f - age));
-        const float cx = centre.x + (rx - vx) * scale;
-        const float cy = centre.y - (ry - vy) * scale;
+        const float cx = centre.x + rx * scale;
+        const float cy = centre.y - ry * scale;
         if (std::abs(cx - centre.x) > half_w || cy < centre.y - 100.0f * scale ||
             cy > centre.y + 90.0f * scale) {
             continue;

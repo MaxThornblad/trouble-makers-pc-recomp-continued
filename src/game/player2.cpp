@@ -16,13 +16,10 @@
 #include "custom_actors.h"
 #include "far_coop.h"
 #include "netplay.h"
+#include "player2_internal.h"
 
-#ifdef MM_HAS_GRAPHICS
-#include "imgui.h"
-#endif
 
 extern "C" void func_8004ED10(uint8_t* rdram, recomp_context* ctx);   // Marina's update(slot)
-extern "C" void Trouble_RLE_Type2(uint8_t* rdram, recomp_context* ctx);   // (src, dst, size) unpack
 
 #include "librecomp/game.hpp"
 
@@ -98,15 +95,6 @@ struct State {
 };
 State g;
 
-struct Marker {
-    bool visible = false;
-    int x = 0, top = 0, health = 0, max_health = 0;
-    // Far apart (far_coop.h): where the other player is, relative to this
-    // machine's view (px, +y up), for an arrow at the screen's edge.
-    bool partner = false;
-    bool partner_is_p1 = false;
-    int px = 0, py = 0;
-};
 std::mutex g_marker_mutex;
 Marker g_marker;
 
@@ -117,7 +105,7 @@ uint8_t* at(uint8_t* rdram, uint32_t vaddr) {
 // MM_P2_TRACE test lines (not from the shadow frame, mm::far).
 bool trace_on() {
     static const bool on = std::getenv("MM_P2_TRACE") != nullptr;
-    return on && !mm::far::in_shadow();
+    return on && !mm::faraway::in_shadow();
 }
 
 uint8_t* slot_ptr(uint8_t* rdram, int slot) {
@@ -246,8 +234,8 @@ void setup(uint8_t* rdram, int slot) {
     MEM_H(0, addr(kP2PrevButtons)) = 0;
     g.slot = slot;
     g.joined = true;
-    mm::far::reset(rdram);   // her own camera starts again from the game's
-    if (!mm::far::in_shadow()) std::fprintf(stderr, "[player2] joined in slot %d\n", slot);
+    mm::faraway::reset(rdram);   // her own camera starts again from the game's
+    if (!mm::faraway::in_shadow()) std::fprintf(stderr, "[player2] joined in slot %d\n", slot);
 }
 
 // Put player 2 back next to player 1: a fresh copy of her (as she joins),
@@ -283,9 +271,49 @@ void clamp_player(uint8_t* rdram, uint32_t record, uint32_t world_x_global) {
 }
 
 void keep_on_screen(uint8_t* rdram, int slot) {
-    if (mm::far::active(rdram)) return;   // far apart allowed: each has her own camera (far_coop.h)
+    if (mm::faraway::active(rdram)) return;   // far apart allowed: each has her own camera (far_coop.h)
     clamp_player(rdram, kActors, kWorldX);
     clamp_player(rdram, kActors + static_cast<uint32_t>(slot) * kStride, kP2Globals + global_offset(kWorldX));
+}
+
+// What player 2 carries reads "the player" from Marina's globals (her world
+// position where enemies aim, her player-state block): while it updates it
+// gets player 2's copy, or a carried handle (type 0x5F) jumped to player 1's
+// hands when she threw something.
+namespace {
+// Marina's globals about where she is and what she does (not her input).
+constexpr std::array<Range, 5> kHeldView{{
+    {0x800BE5A4u, 4}, {0x800BE5D8u, 0x18}, {0x800EF4F0u, 0x20}, {0x80104090u, 4}, {0x801373D0u, 0x98},
+}};
+uint8_t g_held_saved[4 + 0x18 + 0x20 + 4 + 0x98];
+bool g_held_swapped = false;
+}
+
+void held_swap_end(uint8_t* rdram) {
+    if (!g_held_swapped) return;
+    g_held_swapped = false;
+    const uint8_t* src = g_held_saved;
+    for (const Range& r : kHeldView) {
+        std::memcpy(at(rdram, kP2Globals + global_offset(r.start)), at(rdram, r.start), r.size);
+        std::memcpy(at(rdram, r.start), src, r.size);
+        src += r.size;
+    }
+}
+
+void held_swap_begin(uint8_t* rdram, int actor) {
+    held_swap_end(rdram);
+    if (!mm::cheats::coop_enabled()) return;
+    const int p2 = slot(rdram);
+    if (p2 <= 0 || actor == p2 || actor == 0) return;
+    const gpr b = addr(kActors + static_cast<uint32_t>(p2) * kStride);
+    if ((static_cast<uint32_t>(MEM_W(0x80, b)) & kHoldingFlag) == 0 || MEM_HU(0xD6, b) != actor) return;
+    uint8_t* dst = g_held_saved;
+    for (const Range& r : kHeldView) {
+        std::memcpy(dst, at(rdram, r.start), r.size);
+        std::memcpy(at(rdram, r.start), at(rdram, kP2Globals + global_offset(r.start)), r.size);
+        dst += r.size;
+    }
+    g_held_swapped = true;
 }
 
 void clamp_x(uint8_t* rdram, int32_t centre, int32_t half_width) {
@@ -317,7 +345,7 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
             MEM_H(0xE0, addr(kActors + static_cast<uint32_t>(slot) * kStride)) = 0;
             return;
         }
-        if (!mm::far::in_shadow()) std::fprintf(stderr, "[player2] defeated, rejoining\n");
+        if (!mm::faraway::in_shadow()) std::fprintf(stderr, "[player2] defeated, rejoining\n");
         rejoin(rdram, slot);
     }
 
@@ -452,6 +480,23 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
         // Player 1 as the carry / throw left her.
         std::memcpy(p1_record.data(), slot_ptr(rdram, slot), kStride);
         if (MEM_HU(0xD6, addr(kActors)) == slot) MEM_H(0xD6, addr(kActors)) = 0;
+        // Still carried: she is where player 2's hands are (the hold point
+        // Marina's grab code leaves at +0x104 / +0x108). On the pickup frame
+        // the code above can leave her a long way off for a frame (picked
+        // up while carrying something herself: 95 px, a visible flicker).
+        if ((static_cast<uint32_t>(MEM_W(0x80, addr(kActors))) & kHoldingFlag) != 0 && MEM_HU(0xD6, addr(kActors)) == 0) {
+            int32_t hx, hy, x, y;
+            std::memcpy(&hx, p1_record.data() + 0x104, 4);
+            std::memcpy(&hy, p1_record.data() + 0x108, 4);
+            std::memcpy(&x, p1_record.data() + 0x88, 4);
+            std::memcpy(&y, p1_record.data() + 0x8C, 4);
+            const int32_t p2x = MEM_W(0x88, addr(kActors));
+            const bool hold_sane = std::abs(hx - p2x) < (48 << 16) && std::abs(hy - MEM_W(0x8C, addr(kActors))) < (64 << 16);
+            if (hold_sane && (std::abs(x - hx) > (12 << 16) || std::abs(y - hy) > (16 << 16))) {
+                std::memcpy(p1_record.data() + 0x88, &hx, 4);
+                std::memcpy(p1_record.data() + 0x8C, &hy, 4);
+            }
+        }
     }
 
     // Player 2 out, player 1 back.
@@ -553,16 +598,16 @@ void publish_marker(uint8_t* rdram, int p2) {
         m.x = MEM_H(0x88, a);
         m.top = MEM_H(0x8C, a) + MEM_H(0xAE, a);
         // On her machine the picture is her own camera's.
-        if (int32_t dx, dy; mm::far::shows_p2_view(rdram) && mm::far::p2_camera_offset(rdram, dx, dy)) {
+        if (int32_t dx, dy; mm::faraway::shows_p2_view(rdram) && mm::faraway::p2_camera_offset(rdram, dx, dy)) {
             m.x = (MEM_W(0x88, a) - dx) >> 16;
             m.top = ((MEM_W(0x8C, a) - dy) >> 16) + MEM_H(0xAE, a);
         }
         m.health = MEM_H(0xE0, a);
         g.joined = false;
         m.max_health = MEM_H(0, addr(kP2FullHealth));
-        if (int32_t dx, dy; mm::far::p2_camera_offset(rdram, dx, dy)) {
+        if (int32_t dx, dy; mm::faraway::p2_camera_offset(rdram, dx, dy)) {
             m.partner = true;
-            if (mm::far::shows_p2_view(rdram)) {   // her machine: player 1, seen from her camera
+            if (mm::faraway::shows_p2_view(rdram)) {   // her machine: player 1, seen from her camera
                 m.partner_is_p1 = true;
                 m.px = (MEM_W(0x88, addr(kActors)) - dx) >> 16;
                 m.py = (MEM_W(0x8C, addr(kActors)) - dy) >> 16;
@@ -603,6 +648,15 @@ void tick(uint8_t* rdram) {
             const uint16_t h = MEM_HU(0xD6, who);
             return h < 0xD0 && MEM_W(0x80, addr(kActors + static_cast<uint32_t>(h) * kStride)) != 0 ? 1 : 0;
         };
+        for (int who = 0; who < 2; ++who) {
+            const gpr c = who == 0 ? m : b;
+            if ((who == 1 && p2 < 0) || (static_cast<uint32_t>(MEM_W(0x80, c)) & kHoldingFlag) == 0) continue;
+            const uint16_t h = MEM_HU(0xD6, c);
+            if (h >= 0xD0) continue;
+            const gpr ha = addr(kActors + static_cast<uint32_t>(h) * kStride);
+            std::fprintf(stderr, "[p2trace] p%d holds %02X type %04X st %04X at %d,%d fl %08X\n", who + 1, h, MEM_HU(0xD2, ha),
+                         MEM_HU(0xD0, ha), MEM_W(0x88, ha) >> 16, MEM_W(0x8C, ha) >> 16, static_cast<uint32_t>(MEM_W(0x80, ha)));
+        }
         std::fprintf(stderr, "[p2trace] held_ok %d %d hp %d %d\n", held_ok(m), p2 >= 0 ? held_ok(b) : 1,
                      MEM_H(0xE0, m), p2 >= 0 ? MEM_H(0xE0, b) : 0);
         std::fprintf(stderr, "[p2trace] %ld cam %d,%d p1 %d,%d st %04X fl %08X hold %04X | p2(%d) %d,%d st %04X fl %08X hold %04X\n",
@@ -641,7 +695,7 @@ void tick(uint8_t* rdram) {
     const gpr a = addr(kActors + static_cast<uint32_t>(p2) * kStride);
     int px = MEM_H(0x88, a), py = MEM_H(0x8C, a);
     // Far apart (netplay): out of her own camera's view instead.
-    if (int32_t dx, dy; mm::far::p2_camera_offset(rdram, dx, dy)) {
+    if (int32_t dx, dy; mm::faraway::p2_camera_offset(rdram, dx, dy)) {
         px = (MEM_W(0x88, a) - dx) >> 16;
         py = (MEM_W(0x8C, a) - dy) >> 16;
     }
@@ -655,193 +709,14 @@ void tick(uint8_t* rdram) {
     MEM_W(0, addr(kP2AwayTimer)) = away_frames;
 }
 
-#ifdef MM_HAS_GRAPHICS
-// The "2P" marker and her health, over her head (same canvas mapping as the
-// enemy bars: 320x240 fills the window height, camera-relative px, +y up).
-void draw_overlay() {
-    Marker m;
-    {
-        std::lock_guard lock{g_marker_mutex};
-        m = g_marker;
-    }
-    if (!m.visible) return;
-    const ImGuiIO& io = ImGui::GetIO();
-    ImDrawList* dl = ImGui::GetForegroundDrawList();
-    const float scale = io.DisplaySize.y / 240.0f;
-    const ImVec2 centre(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
-    // The other player off this screen (far apart): an arrow at the edge
-    // pointing at her, with her tag and how far she is.
-    if (m.partner) {
-        const float half_w = centre.x / scale - 12.0f, half_h = 120.0f - 14.0f;
-        const float fx = static_cast<float>(m.px), fy = static_cast<float>(m.py) + 16.0f;
-        if (std::abs(fx) > half_w + 8.0f || std::abs(fy) > half_h + 8.0f) {
-            const float k = std::min(half_w / std::max(std::abs(fx), 1.0f), half_h / std::max(std::abs(fy), 1.0f));
-            const ImVec2 tip(centre.x + fx * k * scale, centre.y - fy * k * scale);
-            const float len = std::sqrt(fx * fx + fy * fy);
-            const ImVec2 dir(fx / len, -fy / len), side(-dir.y, dir.x);
-            const float as = std::max(8.0f, 7.0f * scale);
-            const ImVec2 back(tip.x - dir.x * as, tip.y - dir.y * as);
-            const ImU32 col = m.partner_is_p1 ? IM_COL32(220, 60, 60, 230) : IM_COL32(20, 90, 200, 230);
-            dl->AddTriangleFilled(tip, ImVec2(back.x + side.x * as * 0.6f, back.y + side.y * as * 0.6f),
-                                  ImVec2(back.x - side.x * as * 0.6f, back.y - side.y * as * 0.6f), col);
-            char label[32];
-            std::snprintf(label, sizeof label, "%s %dm", m.partner_is_p1 ? "1P" : "2P", static_cast<int>(len / 16.0f));
-            ImFont* f = ImGui::GetFont();
-            const float size = std::max(10.0f, 5.0f * scale);
-            const ImVec2 ts = f->CalcTextSizeA(size, FLT_MAX, 0.0f, label);
-            ImVec2 at(back.x - dir.x * as * 0.4f - ts.x * 0.5f, back.y - dir.y * as * 0.4f - ts.y * 0.5f);
-            at.x = std::clamp(at.x, 2.0f, io.DisplaySize.x - ts.x - 2.0f);
-            at.y = std::clamp(at.y, 2.0f, io.DisplaySize.y - ts.y - 2.0f);
-            dl->AddRectFilled(ImVec2(at.x - 3, at.y - 1), ImVec2(at.x + ts.x + 3, at.y + ts.y + 1), col, 3.0f);
-            dl->AddText(f, size, at, IM_COL32(255, 255, 255, 255), label);
-        }
-    }
-    float vx, vy;
-    view_offset(vx, vy);
-    const ImVec2 head(centre.x + (m.x - vx) * scale, centre.y - (m.top - vy + 6.0f) * scale);
-    const char* text = "2P";
-    ImFont* font = ImGui::GetFont();
-    const float size = std::max(10.0f, 6.0f * scale);
-    const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.0f, text);
-    const ImVec2 p0(head.x - ts.x * 0.5f - size * 0.3f, head.y - ts.y - size * 0.6f);
-    const ImVec2 p1(head.x + ts.x * 0.5f + size * 0.3f, head.y - size * 0.2f);
-    dl->AddRectFilled(p0, p1, IM_COL32(20, 90, 200, 220), size * 0.3f);
-    dl->AddText(font, size, ImVec2(head.x - ts.x * 0.5f, p0.y + size * 0.2f), IM_COL32(255, 255, 255, 255), text);
-    // Health under the tag.
-    const float w = (p1.x - p0.x) * 1.6f, h = std::max(2.0f, size * 0.22f);
-    const ImVec2 b0(head.x - w * 0.5f, p1.y + h * 0.6f), b1(head.x + w * 0.5f, p1.y + h * 1.6f);
-    dl->AddRectFilled(b0, b1, IM_COL32(0, 0, 0, 180));
-    const float frac = m.max_health > 0 ? std::clamp(static_cast<float>(m.health) / m.max_health, 0.0f, 1.0f) : 0.0f;
-    dl->AddRectFilled(b0, ImVec2(b0.x + (b1.x - b0.x) * frac, b1.y), IM_COL32(70, 170, 255, 255));
+
+Marker current_marker() {
+    std::lock_guard lock{g_marker_mutex};
+    return g_marker;
 }
-#endif
 
 } // namespace mm::player2
 
-// Shared camera. Translated func_80012830 (camera update) calls these at its
-// entry and before its return (troublemakers.us1.toml). While co-op is on,
-// Marina's position reads as the midpoint between the two players for the
-// camera's sake, so it frames both; her real position comes back after,
-// carrying any shift the camera code applied meanwhile.
-namespace {
-bool g_camera_swapped = false;
-int32_t g_saved_x, g_saved_y, g_saved_wx, g_saved_wy, g_mid_x, g_mid_y;
-}
-
-// Her own look. Marina's pose is one of ~800 compressed 64x64 frames that
-// the game streams into a single texture: func_800821B0 / func_800822B8
-// (main loop) DMA slot 0's frame (+0x84, image class 0x5800) and unpack it
-// to 0x8027AEE8 or 0x8027BEE8 (double buffered, index = 0x800BE6A4 +
-// 0x800BE700), and the draw builder's class-0x5800 branch (func_80009BE8 at
-// 0x8000A474) draws whoever has a Marina image as image 2..5 (the display
-// lists in table [0x801376DC] that sample that buffer), with offsets and
-// flags read from slot 0, not the actor being drawn. So without help player
-// 2 is drawn in player 1's pose. Around her entry in the draw builder
-// (0x8000A474 to the loop step at 0x8000DD18) her record stands in for slot
-// 0, her own frame is unpacked into her own buffer and images 2..5 point at
-// copies of their display lists that sample it. Everything lives in game
-// memory at 0x807F1000.. so it is the same on every machine.
-namespace {
-constexpr uint32_t kDlTable = 0x801376DCu;        // -> display list per class-0 image
-constexpr uint32_t kSlotImages = 0x80137480u;     // image per streamed buffer (afterimages)
-constexpr uint32_t kStreamIndex = 0x800BE6A4u, kStreamParity = 0x800BE700u;
-constexpr uint32_t kGameTexture = 0x8027AEE8u;    // the game's two 0x1000 buffers
-constexpr uint32_t kP2Lists = 0x807F1000u;        // 4 display lists, 0x100 each
-constexpr uint32_t kP2Texture = 0x807F2000u;      // her two 0x1000 buffers
-constexpr uint32_t kP2Packed = 0x807F4000u;       // compressed frame (DMA target)
-constexpr uint32_t kP2Header = 0x807F0420u;       // 8-byte frame header
-constexpr uint32_t kP2Loaded = 0x807F0410u;       // frame unpacked in each of her buffers
-constexpr uint32_t kFrameTable = 0x004A0918u;     // ROM: frame offsets (func_800821B0)
-constexpr uint32_t kFrameData = 0x0040AC80u - 0x05000000u;
-
-bool g_draw_swapped = false;
-std::array<uint8_t, 0x198> g_draw_p1;
-std::array<uint8_t, 8> g_draw_slot_images;
-uint32_t g_draw_lists[2];
-int g_draw_k = -1;
-
-void unpack_frame(uint8_t* rdram, recomp_context* ctx, uint16_t image, uint32_t dst) {
-    const uint32_t idx = static_cast<uint32_t>(image & 0x7FF) % 0x322u;
-    const uint32_t header = idx == 0 ? kFrameTable : kFrameTable + idx * 4u - 4u;
-    recomp::do_rom_read(rdram, static_cast<gpr>(static_cast<int32_t>(kP2Header)), 0x10000000u + header, 8);
-    const uint32_t start = static_cast<uint32_t>(MEM_W(0, static_cast<gpr>(static_cast<int32_t>(kP2Header))));
-    const uint32_t end = static_cast<uint32_t>(MEM_W(4, static_cast<gpr>(static_cast<int32_t>(kP2Header))));
-    const uint32_t size = end - start;
-    if (size == 0 || size > 0x2000u || (start & 1) != 0) return;
-    recomp::do_rom_read(rdram, static_cast<gpr>(static_cast<int32_t>(kP2Packed)), 0x10000000u + start + kFrameData,
-                        (size + 7u) & ~7u);
-    const recomp_context saved = *ctx;
-    ctx->r4 = static_cast<gpr>(static_cast<int32_t>(kP2Packed));
-    ctx->r5 = static_cast<gpr>(static_cast<int32_t>(dst));
-    ctx->r6 = 0x1000;
-    ctx->r29 -= 0x40;
-    Trouble_RLE_Type2(rdram, ctx);
-    *ctx = saved;
-}
-
-// A copy of a game display list with its texture images moved to hers.
-uint32_t copy_list(uint8_t* rdram, uint32_t src, uint32_t dst) {
-    for (uint32_t off = 0; off + 8 <= 0x100u; off += 8) {
-        const uint32_t w0 = static_cast<uint32_t>(MEM_W(off, static_cast<gpr>(static_cast<int32_t>(src))));
-        uint32_t w1 = static_cast<uint32_t>(MEM_W(off + 4, static_cast<gpr>(static_cast<int32_t>(src))));
-        if ((w0 >> 24) == 0xFD && w1 >= kGameTexture && w1 < kGameTexture + 0x2000u) {
-            w1 = kP2Texture + (w1 - kGameTexture);
-        }
-        MEM_W(off, static_cast<gpr>(static_cast<int32_t>(dst))) = static_cast<int32_t>(w0);
-        MEM_W(off + 4, static_cast<gpr>(static_cast<int32_t>(dst))) = static_cast<int32_t>(w1);
-        if ((w0 >> 24) == 0xB8) break;   // end of list
-    }
-    return dst;
-}
-} // namespace
-
-extern "C" void mm_p2_draw_begin(uint8_t* rdram, recomp_context* ctx) {
-    using namespace mm::player2;
-    if (g_draw_swapped) return;
-    const int p2 = slot(rdram);
-    if (p2 < 0) return;
-    const uint32_t rec = 0x800EF510u + static_cast<uint32_t>(p2) * 0x198u;
-    if (static_cast<uint32_t>(ctx->r20) != rec) return;   // $s4: the actor being drawn
-    uint8_t* const p1 = rdram + (0x800EF510u - 0x80000000u);
-    uint8_t* const me = rdram + (rec - 0x80000000u);
-    std::memcpy(g_draw_p1.data(), p1, 0x198);
-    std::memcpy(g_draw_slot_images.data(), rdram + (kSlotImages - 0x80000000u), 8);
-    std::memcpy(p1, me, 0x198);
-    MEM_H(0xD2, static_cast<gpr>(static_cast<int32_t>(0x800EF510u))) = 0x0016;
-    g_draw_swapped = true;
-    g_draw_k = -1;
-
-    const int k = MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kStreamIndex))) +
-                  MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kStreamParity)));
-    const uint16_t image = MEM_HU(0x84, static_cast<gpr>(static_cast<int32_t>(rec)));
-    if (k < 0 || k > 1 || (image & 0xF800) != 0x5800) return;
-    const gpr loaded = static_cast<gpr>(static_cast<int32_t>(kP2Loaded + static_cast<uint32_t>(k) * 2u));
-    if (MEM_HU(0, loaded) != image) {
-        unpack_frame(rdram, ctx, image, kP2Texture + static_cast<uint32_t>(k) * 0x1000u);
-        MEM_H(0, loaded) = static_cast<int16_t>(image);
-    }
-    const gpr table = static_cast<gpr>(MEM_W(0, static_cast<gpr>(static_cast<int32_t>(kDlTable))));
-    for (int f = 0; f < 2; ++f) {
-        const int id = 2 + 2 * k + f;
-        const uint32_t game_list = static_cast<uint32_t>(MEM_W(id * 4, table));
-        g_draw_lists[f] = game_list;
-        MEM_W(id * 4, table) = static_cast<int32_t>(
-            copy_list(rdram, game_list, kP2Lists + static_cast<uint32_t>(k * 2 + f) * 0x100u));
-    }
-    g_draw_k = k;
-}
-
-extern "C" void mm_p2_draw_end(uint8_t* rdram, recomp_context*) {
-    if (!g_draw_swapped) return;
-    g_draw_swapped = false;
-    std::memcpy(rdram + (0x800EF510u - 0x80000000u), g_draw_p1.data(), 0x198);
-    std::memcpy(rdram + (kSlotImages - 0x80000000u), g_draw_slot_images.data(), 8);
-    if (g_draw_k >= 0) {
-        const gpr table = static_cast<gpr>(MEM_W(0, static_cast<gpr>(static_cast<int32_t>(kDlTable))));
-        for (int f = 0; f < 2; ++f) MEM_W((2 + 2 * g_draw_k + f) * 4, table) = static_cast<int32_t>(g_draw_lists[f]);
-        g_draw_k = -1;
-    }
-}
 
 // Grabbing each other has two limits, applied while func_8001EC1C (once a
 // frame, from func_80020024) resolves contacts: there a grab box (+0x80 &
@@ -894,199 +769,4 @@ extern "C" int mm_marina_update_hook(uint8_t* rdram) {
     if ((static_cast<uint32_t>(MEM_W(0x80, b)) & kHoldingFlag) == 0 || MEM_HU(0xD6, b) != 0) return 0;
     g_p1_deferred = true;
     return 1;
-}
-
-// Each player's own view (netplay). The game has one camera, shared by both
-// players and by the simulation (actor positions are camera-relative and the
-// camera decides what is active), so it stays as it is: the players'
-// midpoint. Only the picture moves. LookAt_Update builds the view matrix
-// (eye (0, 0, 448) looking at the origin) into 0x804600C0 and 0x804700C0;
-// afterwards its translation is moved by half the distance from the other
-// player to this machine's player, so the view centres on this player the
-// way the camera centres on the midpoint (same dead zone and easing). The
-// players stay within 144 px of the midpoint across (Marina's screen clamp),
-// well inside what the game draws in widescreen. Only those two matrices
-// differ between the machines (the netplay memory check leaves them out);
-// the game's own computation, stack leftovers included, is untouched.
-namespace {
-std::atomic<float> g_view_x{0.0f}, g_view_y{0.0f};   // render thread reads
-float g_smooth_x = 0.0f, g_smooth_y = 0.0f;
-
-// Adds `delta` (px) to element [3][col] (translation) of an N64 Mtx.
-void shift_translation(uint8_t* rdram, uint32_t mtx, int col, float delta) {
-    const gpr m = static_cast<gpr>(static_cast<int32_t>(mtx));
-    const int idx = 3 * 4 + col;
-    const int32_t whole = MEM_H(idx * 2, m);
-    const uint32_t frac = MEM_HU(32 + idx * 2, m);
-    int32_t v = static_cast<int32_t>((static_cast<uint32_t>(whole) << 16) | frac);
-    v += static_cast<int32_t>(std::lround(delta * 65536.0f));
-    MEM_H(idx * 2, m) = static_cast<int16_t>(v >> 16);
-    MEM_H(32 + idx * 2, m) = static_cast<int16_t>(v & 0xFFFF);
-}
-} // namespace
-
-namespace mm::player2 {
-void view_offset(float& x, float& y) {
-    x = g_view_x.load(std::memory_order_relaxed);
-    y = g_view_y.load(std::memory_order_relaxed);
-}
-} // namespace mm::player2
-
-extern "C" void mm_view_begin(uint8_t*) {}
-
-// The rest of the picture: tile layers and stage blocks are not 3D. The
-// draw builder (func_80009BE8) emits them as texture rectangles in screen
-// coordinates (10.2 fixed point, 12 bits; the widescreen wings use the
-// negative half), the blocks inline and the three tile layers as calls to
-// their own display lists (0x80400000..0x80418000). After the builder they
-// move by the same offset as the view; the HUD comes later, after the
-// orthographic projection, and stays. The view matrices moved the 3D
-// objects; without this the blocks and terrain stayed put on screen and
-// seemed to slide along with the player.
-namespace {
-uint32_t g_layer_mark[6]{};                    // first texrect word of each layer list, as last moved
-
-void shift_texrect(uint8_t* rdram, uint32_t at, int dx4) {
-    const gpr a = static_cast<gpr>(static_cast<int32_t>(at));
-    uint32_t w0 = static_cast<uint32_t>(MEM_W(0, a)), w1 = static_cast<uint32_t>(MEM_W(4, a));
-    const uint32_t lrx = (((w0 >> 12) & 0xFFFu) + static_cast<uint32_t>(dx4)) & 0xFFFu;
-    const uint32_t ulx = (((w1 >> 12) & 0xFFFu) + static_cast<uint32_t>(dx4)) & 0xFFFu;
-    w0 = (w0 & ~(0xFFFu << 12)) | (lrx << 12);
-    w1 = (w1 & ~(0xFFFu << 12)) | (ulx << 12);
-    MEM_W(0, a) = static_cast<int32_t>(w0);
-    MEM_W(4, a) = static_cast<int32_t>(w1);
-}
-
-// A tile layer's list, from its start to G_ENDDL; once per rebuild.
-void shift_layer(uint8_t* rdram, uint32_t list, int dx4) {
-    const int index = static_cast<int>((list - 0x80400000u) / 0x4000u);
-    if (index < 0 || index >= 6) return;
-    uint32_t first = 0;
-    for (uint32_t pc = list, n = 0; n < 2000; pc += 8, ++n) {
-        const uint32_t w0 = static_cast<uint32_t>(MEM_W(0, static_cast<gpr>(static_cast<int32_t>(pc))));
-        const uint8_t op = static_cast<uint8_t>(w0 >> 24);
-        if (op == 0xB8) break;
-        if (op == 0xE4 || op == 0xE5) {
-            if (first == 0) {
-                first = static_cast<uint32_t>(MEM_W(4, static_cast<gpr>(static_cast<int32_t>(pc))));
-                if (first == g_layer_mark[index]) return;   // already moved: not rebuilt since
-            }
-            shift_texrect(rdram, pc, dx4);
-        }
-    }
-    for (uint32_t pc = list, n = 0; n < 2000; pc += 8, ++n) {
-        const uint32_t w0 = static_cast<uint32_t>(MEM_W(0, static_cast<gpr>(static_cast<int32_t>(pc))));
-        if ((w0 >> 24) == 0xE4 || (w0 >> 24) == 0xE5) {
-            g_layer_mark[index] = static_cast<uint32_t>(MEM_W(4, static_cast<gpr>(static_cast<int32_t>(pc))));
-            break;
-        }
-        if ((w0 >> 24) == 0xB8) break;
-    }
-}
-} // namespace
-
-extern "C" void mm_view_end(uint8_t* rdram) {
-    using namespace mm::player2;
-    const int own = mm::netplay::active() ? mm::netplay::player() : 0;
-    const int p2 = own != 0 && !mm::far::active(rdram) ? slot(rdram) : -1;   // far apart: each machine's camera is its player's
-    float tx = 0.0f, ty = 0.0f;
-    if (p2 > 0) {
-        const gpr a1 = static_cast<gpr>(static_cast<int32_t>(0x800EF510u));
-        const gpr a2 = static_cast<gpr>(static_cast<int32_t>(0x800EF510u + static_cast<uint32_t>(p2) * 0x198u));
-        const float x1 = MEM_W(0x88, a1) / 65536.0f, y1 = MEM_W(0x8C, a1) / 65536.0f;
-        const float x2 = MEM_W(0x88, a2) / 65536.0f, y2 = MEM_W(0x8C, a2) / 65536.0f;
-        tx = std::clamp((own == 1 ? x1 - x2 : x2 - x1) * 0.5f, -160.0f, 160.0f);
-        (void)y1;
-        (void)y2;   // across only: the tile layers draw 7 rows, nothing above or below
-    }
-    if (const char* t = std::getenv("MM_VIEW_TEST")) {   // test: a fixed offset "x,y"
-        tx = static_cast<float>(std::atof(t));
-        if (const char* c = std::strchr(t, ',')) ty = static_cast<float>(std::atof(c + 1));
-    }
-    if (const char* t = std::getenv("MM_VIEW_TEST")) {   // test: offset "x" every other second, no easing
-        static long frames = 0;
-        tx = (++frames / 60) % 2 ? static_cast<float>(std::atof(t)) : 0.0f;
-        g_smooth_x = tx;
-    }
-    // Eased, so a rejoin (a jump of up to 250 px) glides instead of cutting.
-    g_smooth_x += (tx - g_smooth_x) * 0.12f;
-    g_smooth_y += (ty - g_smooth_y) * 0.12f;
-    if (tx == 0.0f && ty == 0.0f && std::abs(g_smooth_x) < 0.05f && std::abs(g_smooth_y) < 0.05f) {
-        g_smooth_x = g_smooth_y = 0.0f;
-    }
-    g_view_x.store(g_smooth_x, std::memory_order_relaxed);
-    g_view_y.store(g_smooth_y, std::memory_order_relaxed);
-    if (g_smooth_x == 0.0f && g_smooth_y == 0.0f) return;
-    for (uint32_t mtx : {0x804600C0u, 0x804700C0u}) {
-        shift_translation(rdram, mtx, 0, -g_smooth_x);
-        shift_translation(rdram, mtx, 1, -g_smooth_y);
-    }
-}
-
-// Thread_MainProc, just before the frame's graphics task goes to the RSP:
-// the whole frame list (task data, from the arena base + 0x180) is final.
-extern "C" void mm_far_shadow(uint8_t* rdram, recomp_context* ctx, uint32_t task);
-
-extern "C" void mm_view_frame_dl(uint8_t* rdram, recomp_context* ctx, uint32_t task) {
-    mm_far_shadow(rdram, ctx, task);
-    const float off = g_view_x.load(std::memory_order_relaxed);
-    const int dx4 = -static_cast<int>(std::lround(off * 4.0f));
-    if (dx4 == 0 || task < 0x80000000u || task >= 0x80800000u) return;
-    const uint32_t start = static_cast<uint32_t>(MEM_W(0x30, static_cast<gpr>(static_cast<int32_t>(task)))) | 0x80000000u;
-    const uint32_t size = static_cast<uint32_t>(MEM_W(0x34, static_cast<gpr>(static_cast<int32_t>(task))));
-    if (start < 0x80000000u || start >= 0x80800000u || size > 0x10000u) return;
-    static const bool dbg = std::getenv("MM_VIEW_DEBUG") != nullptr;
-    int moved = 0;
-    for (uint32_t pc = start; pc < start + size; pc += 8) {
-        const uint32_t w0 = static_cast<uint32_t>(MEM_W(0, static_cast<gpr>(static_cast<int32_t>(pc))));
-        const uint32_t w1 = static_cast<uint32_t>(MEM_W(4, static_cast<gpr>(static_cast<int32_t>(pc))));
-        const uint8_t op = static_cast<uint8_t>(w0 >> 24);
-        if (op == 0xB8) break;
-        if (op == 0x01 && (w0 & 0x00010000u) != 0 && (w1 & 0xFFFFu) == 0x0080u) break;   // the HUD's projection
-        if (op == 0xE4 || op == 0xE5) {
-            shift_texrect(rdram, pc, dx4);
-            ++moved;
-        }
-        if (op == 0x06) {
-            const uint32_t target = w1 | 0x80000000u;
-            if (target >= 0x80400000u && target < 0x80418000u) shift_layer(rdram, target, dx4);
-        }
-    }
-    if (dbg) std::fprintf(stderr, "[view] frame list %08X+%X: %d rectangles moved by %d\n", start, size, moved, dx4);
-}
-
-extern "C" void mm_camera_begin(uint8_t* rdram) {
-    using namespace mm::player2;
-    g_camera_swapped = false;
-    if (mm::far::secondary_pass()) return;   // the second camera: its target is set up already
-    if (!mm::cheats::coop_enabled()) return;
-    const int p2 = slot(rdram);
-    if (p2 < 0) return;
-    // Far apart (far_coop.h): the game's camera follows player 1, or player
-    // 2 in her machine's shadow frame; no midpoint.
-    const bool far = mm::far::active(rdram);
-    if (far && !mm::far::swapped()) return;
-    const gpr m = static_cast<gpr>(static_cast<int32_t>(0x800EF510u));
-    const gpr b = static_cast<gpr>(static_cast<int32_t>(0x800EF510u + static_cast<uint32_t>(p2) * 0x198u));
-    g_saved_x = MEM_W(0x88, m);
-    g_saved_y = MEM_W(0x8C, m);
-    g_saved_wx = MEM_W(0, static_cast<gpr>(static_cast<int32_t>(0x800BE5D8u)));
-    g_saved_wy = MEM_W(0, static_cast<gpr>(static_cast<int32_t>(0x800BE5DCu)));
-    g_mid_x = far ? MEM_W(0x88, b) : static_cast<int32_t>((static_cast<int64_t>(g_saved_x) + MEM_W(0x88, b)) / 2);
-    g_mid_y = far ? MEM_W(0x8C, b) : static_cast<int32_t>((static_cast<int64_t>(g_saved_y) + MEM_W(0x8C, b)) / 2);
-    MEM_W(0x88, m) = g_mid_x;
-    MEM_W(0x8C, m) = g_mid_y;
-    MEM_W(0, static_cast<gpr>(static_cast<int32_t>(0x800BE5D8u))) = g_saved_wx + (g_mid_x - g_saved_x);
-    MEM_W(0, static_cast<gpr>(static_cast<int32_t>(0x800BE5DCu))) = g_saved_wy + (g_mid_y - g_saved_y);
-    g_camera_swapped = true;
-}
-
-extern "C" void mm_camera_end(uint8_t* rdram) {
-    if (!g_camera_swapped) return;
-    g_camera_swapped = false;
-    const gpr m = static_cast<gpr>(static_cast<int32_t>(0x800EF510u));
-    MEM_W(0x88, m) = g_saved_x + (MEM_W(0x88, m) - g_mid_x);
-    MEM_W(0x8C, m) = g_saved_y + (MEM_W(0x8C, m) - g_mid_y);
-    MEM_W(0, static_cast<gpr>(static_cast<int32_t>(0x800BE5D8u))) = g_saved_wx;
-    MEM_W(0, static_cast<gpr>(static_cast<int32_t>(0x800BE5DCu))) = g_saved_wy;
 }

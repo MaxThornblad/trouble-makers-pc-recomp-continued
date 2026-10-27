@@ -14,13 +14,14 @@
 // loads a save state), the host sends a fresh state and both carry on from
 // it (a resync), so a divergence heals in about a second.
 //
-// Transport: ENet (reliable, ordered UDP), one connection, default port 7845.
+// Transport: ENet (reliable, ordered UDP), one connection, default port 7845;
+// or Steam (steam_net.h): lobbies and Steam's relays, no address or port.
 // Everything except the request functions runs on the game thread, from the
 // frame hook.
 //
 // Environment (headless tests and scripting):
-//   MM_NET_HOST=<port>[@<frame>]     host from that frame on (default port 7845)
-//   MM_NET_JOIN=<address>[:<port>][@<frame>]
+//   MM_NET_HOST=<port>[@<frame>]     host from that frame on (default port 7845; "steam": on Steam)
+//   MM_NET_JOIN=<address>[:<port>][@<frame>]   ("steam[:<lobby>]": on Steam)
 //   MM_NET_DELAY=<frames>            input delay (host decides; default 4)
 //   MM_NET_PAD="20:,30:r"            synthetic local input (replay.h syntax)
 //   MM_NET_LENGTH=<frames>           leave after that many session frames
@@ -42,7 +43,10 @@ void configure(const std::filesystem::path& folder);
 
 // Any thread. Acted on at the next frame point.
 void request_host(int port = kDefaultPort);
-void request_join(const std::string& address);   // "host[:port]"
+void request_join(const std::string& address);   // "host[:port]", or "steam[:<lobby id>]"
+// Over Steam (steam_net.h): host a lobby; join one (0: a friend hosting).
+void request_host_steam();
+void request_join_steam(uint64_t lobby);
 void request_leave();
 
 // The address last joined (netplay.cfg), for the menu.

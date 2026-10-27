@@ -216,9 +216,12 @@ instruction = [
 hook = [
     # The game draws 14px/18px black strips at x=0 and x=302 around its
     # original 4:3 safe area. They become seams in an expanded framebuffer.
+    # Two no-ops take their place so the frame list has the same length either
+    # way: netplay compares game memory, and the list's end leaks into it (the
+    # list head, stack copies), while each player picks widescreen for herself.
     # Suppress only those vertical rectangles in widescreen; top/bottom bars
     # and dynamically animated letterboxing remain untouched.
-    { func = "Gfx_DrawBorderRect", text = '{ static int wide = -1; if (wide < 0) { extern char* getenv(const char*); char* e = getenv("MM_WIDESCREEN_ACTIVE"); wide = (e && e[0] == 0x31); } extern int mm_widescreen_gameplay_active(uint8_t*); int gamewide = mm_widescreen_gameplay_active(rdram); if (wide && gamewide && (((int32_t)ctx->r5 == 0 && (int32_t)ctx->r7 <= 14) || ((int32_t)ctx->r5 >= 302 && (int32_t)ctx->r7 == 320))) { return; } }' },
+    { func = "Gfx_DrawBorderRect", text = '{ static int wide = -1; if (wide < 0) { extern char* getenv(const char*); char* e = getenv("MM_WIDESCREEN_ACTIVE"); wide = (e && e[0] == 0x31); } extern int mm_widescreen_gameplay_active(uint8_t*); int gamewide = mm_widescreen_gameplay_active(rdram); if (wide && gamewide && (((int32_t)ctx->r5 == 0 && (int32_t)ctx->r7 <= 14) || ((int32_t)ctx->r5 >= 302 && (int32_t)ctx->r7 == 320))) { uint32_t head = (uint32_t)MEM_W(0, (gpr)(int32_t)0x8012A670u); MEM_W(0, ctx->r29) = ctx->r4; MEM_W(0, (gpr)(int32_t)head) = 0; MEM_W(4, (gpr)(int32_t)head) = 0; MEM_W(8, (gpr)(int32_t)head) = 0; MEM_W(12, (gpr)(int32_t)head) = 0; MEM_W(0, (gpr)(int32_t)0x8012A670u) = (int32_t)(head + 16); return; } }' },
     # func_80026428 reloads the map bank for scenes 10, 24 and 46..51 but
     # never updates the recorded decompressed extent at 0x80137724/28 that
     # the wing residency check relies on. Capture Trouble_RLE_Type1's return
@@ -299,10 +302,9 @@ hook = [
     { func = "func_8001751C", before_vram = 0x80017614, text = '{ extern void mm_far_actor(uint8_t*, uint32_t); mm_far_actor(rdram, (uint32_t)ctx->r16); }' },
     { func = "func_80020024", before_vram = 0x8002022C, text = '{ extern void mm_test_p1diff_begin(uint8_t*); mm_test_p1diff_begin(rdram); }' },
     { func = "func_80020024", before_vram = 0x80020234, text = '{ extern void mm_test_p1diff_end(uint8_t*); mm_test_p1diff_end(rdram); }' },
-    # Netplay: each player's own view (player2.cpp, mm_view_begin).
-    { func = "Thread_MainProc", before_vram = 0x80000EA4, text = '{ extern void mm_view_frame_dl(uint8_t*, recomp_context*, uint32_t); mm_view_frame_dl(rdram, ctx, (uint32_t)MEM_W(0, ctx->r16)); }' },
-    { func = "LookAt_Update", text = '{ extern void mm_view_begin(uint8_t*); mm_view_begin(rdram); }' },
-    { func = "LookAt_Update", before_vram = 0x800109A0, text = '{ extern void mm_view_end(uint8_t*); mm_view_end(rdram); }' },
+    # Far-apart co-op: player 2's own picture on her machine (far_coop.cpp,
+    # the shadow frame), just before the frame's graphics task goes out.
+    { func = "Thread_MainProc", before_vram = 0x80000EA4, text = '{ extern void mm_far_shadow(uint8_t*, recomp_context*, uint32_t); mm_far_shadow(rdram, ctx, (uint32_t)MEM_W(0, ctx->r16)); }' },
     { func = "LookAt_Update", before_vram = 0x800108B8, text = '{ MEM_W(0, (gpr)(int32_t)0x801780F0u) = 0x80460000u; ctx->r15 = (gpr)(int32_t)0x80470000u; }' },
     # Layer repacks: rebuild each 7x10 layer grid at stride 20 with real
     # map-derived wing columns (exact func_8001107C formulas, all parallax

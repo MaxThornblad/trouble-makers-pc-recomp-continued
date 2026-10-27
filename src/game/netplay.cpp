@@ -11,11 +11,12 @@
 #include <iterator>
 #include <map>
 #include <mutex>
+#include <thread>
 #include <vector>
 
-#include <enet/enet.h>
 
 #include "cheats.h"
+#include "net_transport.h"
 #include "librecomp/game.hpp"
 #include "mm_audio_input.hpp"
 #include "replay.h"
@@ -43,7 +44,7 @@ namespace {
 
 constexpr uint32_t kMagic = 0x504E4D54u;   // "TMNP"
 constexpr uint32_t kProtocol = 1;
-constexpr int kChannels = 2;               // 0 control (state), 1 input + fingerprints
+// Channels: 0 control (state), 1 input + fingerprints.
 constexpr int kHashEvery = 60;             // frames between fingerprint checks
 
 enum Msg : uint8_t {
@@ -93,7 +94,7 @@ struct Input {
     int8_t x = 0, y = 0;
 };
 
-enum class Req { None, Host, Join, Leave };
+enum class Req { None, Host, Join, Leave, HostSteam, JoinSteam };
 
 std::filesystem::path g_folder;
 std::atomic<Status> g_status{Status::Off};
@@ -102,15 +103,15 @@ std::atomic<int> g_player{0};
 std::atomic<Req> g_request{Req::None};
 std::mutex g_mutex;                 // g_req_address, g_text, g_last_address
 std::string g_req_address;
+uint64_t g_req_lobby = 0;           // JoinSteam: lobby id, 0 = find a friend hosting
 int g_req_port = kDefaultPort;
 std::string g_text;
 std::string g_last_address;
 std::atomic<bool> g_waiting{false};  // stalled for the partner's input
 
 // Game thread only from here on.
-bool g_enet_ready = false;
-ENetHost* g_host = nullptr;
-ENetPeer* g_peer = nullptr;
+std::unique_ptr<Transport> g_net;   // the connection (ENet or Steam), while not Off
+bool g_partner = false;             // the transport reported the partner there
 bool g_is_host = false;
 bool g_peer_ok = false;             // host: hello accepted; guest: connected
 bool g_start_wanted = false;        // host: start (or resync) at this frame point
@@ -238,13 +239,11 @@ bool filter(int controller, uint16_t* buttons, float* x, float* y) {
 }
 
 void send(int channel, const Writer& w) {
-    if (!g_peer) return;
-    ENetPacket* p = enet_packet_create(w.b.data(), w.b.size(), ENET_PACKET_FLAG_RELIABLE);
-    enet_peer_send(g_peer, static_cast<enet_uint8>(channel), p);
+    if (g_net) g_net->send(channel, w.b.data(), w.b.size());
 }
 
 void flush() {
-    if (g_host) enet_host_flush(g_host);
+    if (g_net) g_net->flush();
 }
 
 // ---------------------------------------------------------------- sessions
@@ -284,15 +283,7 @@ void end_session(const char* why) {
         recomp::end_save_sandbox();
         g_sandboxed = false;
     }
-    if (g_peer) {
-        enet_peer_disconnect_now(g_peer, 0);
-        g_peer = nullptr;
-    }
-    if (g_host) {
-        enet_host_flush(g_host);
-        enet_host_destroy(g_host);
-        g_host = nullptr;
-    }
+    g_net.reset();
     g_peer_ok = false;
     g_start_wanted = false;
     g_waiting.store(false);
@@ -422,7 +413,7 @@ void on_packet(uint8_t* rdram, recomp_context* ctx, const uint8_t* data, size_t 
                 send(0, w);
                 flush();
                 std::fprintf(stderr, "[netplay] refused a player: %s\n", why.c_str());
-                enet_peer_disconnect_later(g_peer, 0);
+                g_net->drop_partner();
                 return;
             }
             g_peer_ok = true;
@@ -463,124 +454,84 @@ void on_packet(uint8_t* rdram, recomp_context* ctx, const uint8_t* data, size_t 
     }
 }
 
-// Services the connection once; false when it is gone.
-bool service(uint8_t* rdram, recomp_context* ctx, uint32_t timeout_ms) {
-    if (!g_host) return false;
-    ENetEvent ev;
-    int got = enet_host_service(g_host, &ev, timeout_ms);
-    while (got > 0) {
-        switch (ev.type) {
-            case ENET_EVENT_TYPE_CONNECT:
-                if (g_is_host) {
-                    if (g_peer && g_peer != ev.peer) {
-                        enet_peer_disconnect_now(ev.peer, 0);   // one guest at a time
-                        break;
-                    }
-                    g_peer = ev.peer;
-                    set_text("A player is connecting...");
-                } else {
-                    g_peer = ev.peer;
-                    Writer w;
-                    w.put<uint8_t>(kHello);
-                    w.put<uint32_t>(kMagic);
-                    w.put<uint32_t>(kProtocol);
-                    const std::string build = MM_GIT_COMMIT;
-                    w.bytes(build.data(), build.size());
-                    send(0, w);
-                    flush();
-                    g_peer_ok = true;
-                    set_text("Connected, waiting for the host's game...");
-                }
-                enet_peer_timeout(ev.peer, 32, 10000, 30000);
-                break;
-            case ENET_EVENT_TYPE_RECEIVE:
-                on_packet(rdram, ctx, ev.packet->data, ev.packet->dataLength);
-                enet_packet_destroy(ev.packet);
-                if (!g_host) return false;   // the packet ended the session
-                break;
-            case ENET_EVENT_TYPE_DISCONNECT:
-                if (ev.peer == g_peer) {
-                    g_peer = nullptr;
-                    if (g_is_host && !g_active.load()) {
-                        g_peer_ok = false;
-                        set_text("Hosting: waiting for a player");
-                    } else {
-                        end_session("the other player left");
-                        return false;
-                    }
-                }
-                break;
-            default: break;
-        }
-        got = enet_host_service(g_host, &ev, 0);
-    }
-    return got >= 0;
+void send_hello() {
+    Writer w;
+    w.put<uint8_t>(kHello);
+    w.put<uint32_t>(kMagic);
+    w.put<uint32_t>(kProtocol);
+    const std::string build = MM_GIT_COMMIT;
+    w.bytes(build.data(), build.size());
+    send(0, w);
+    flush();
+    g_peer_ok = true;
+    set_text("Connected, waiting for the host's game...");
 }
 
-bool ensure_enet() {
-    if (!g_enet_ready) {
-        if (enet_initialize() != 0) {
-            set_text("Netplay: network start-up failed");
-            return false;
+// Handles the connection's events, waiting up to timeout_ms for the first;
+// false when the session is gone.
+bool service(uint8_t* rdram, recomp_context* ctx, uint32_t timeout_ms) {
+    if (!g_net) return false;
+    for (NetEvent ev = g_net->poll(timeout_ms); ev.type != NetEvent::None; ev = g_net->poll(0)) {
+        switch (ev.type) {
+            case NetEvent::Connected:
+                g_partner = true;
+                if (g_is_host) set_text("A player is connecting...");
+                else send_hello();
+                break;
+            case NetEvent::Received:
+                on_packet(rdram, ctx, ev.data.data(), ev.data.size());
+                if (!g_net) return false;   // the packet ended the session
+                break;
+            case NetEvent::Disconnected:
+                g_partner = false;
+                if (g_is_host && !g_active.load()) {
+                    g_peer_ok = false;
+                    set_text(g_net->waiting_text());
+                } else {
+                    end_session("the other player left");
+                    return false;
+                }
+                break;
+            case NetEvent::Failed:
+                end_session(ev.text.c_str());
+                return false;
+            case NetEvent::None:
+                break;
         }
-        g_enet_ready = true;
     }
+    if (!g_partner && !g_active.load()) set_text(g_net->waiting_text());   // e.g. Steam: lobby made
     return true;
 }
 
-void start_hosting(int port) {
-    if (!ensure_enet()) return;
-    ENetAddress addr{};
-    addr.host = ENET_HOST_ANY;
-    addr.port = static_cast<enet_uint16>(port);
-    g_host = enet_host_create(&addr, 1, kChannels, 0, 0);
-    if (!g_host) {
-        set_text("Netplay: cannot listen on port " + std::to_string(port) + " (in use?)");
+// Starts a session's connection: hosting (player 1) or joining (player 2).
+void begin(std::unique_ptr<Transport> net, const std::string& error, bool host) {
+    if (!net) {
+        set_text("Netplay: " + error);
+        std::fprintf(stderr, "[netplay] %s\n", error.c_str());
         return;
     }
-    g_is_host = true;
-    g_peer = nullptr;
+    g_net = std::move(net);
+    g_partner = false;
+    g_is_host = host;
     g_peer_ok = false;
     g_epoch = 0;
     g_resyncs = 0;
-    g_player.store(1);
-    g_status.store(Status::Hosting);
-    set_text("Hosting on port " + std::to_string(port) + ": waiting for a player");
+    g_player.store(host ? 1 : 2);
+    g_status.store(host ? Status::Hosting : Status::Joining);
+    set_text(g_net->waiting_text());
+}
+
+void start_hosting(int port) {
+    std::string error;
+    auto net = enet_host(port, error);
+    begin(std::move(net), error, true);
 }
 
 void start_joining(const std::string& address) {
-    if (!ensure_enet()) return;
-    std::string host = address;
-    int port = kDefaultPort;
-    if (const size_t colon = address.rfind(':'); colon != std::string::npos && address.find(':') == colon) {
-        host = address.substr(0, colon);
-        port = std::atoi(address.c_str() + colon + 1);
-    }
-    ENetAddress addr{};
-    if (enet_address_set_host(&addr, host.c_str()) != 0) {
-        set_text("Netplay: cannot find " + host);
-        return;
-    }
-    addr.port = static_cast<enet_uint16>(port);
-    g_host = enet_host_create(nullptr, 1, kChannels, 0, 0);
-    if (!g_host) {
-        set_text("Netplay: network start-up failed");
-        return;
-    }
-    g_peer = enet_host_connect(g_host, &addr, kChannels, 0);
-    if (!g_peer) {
-        enet_host_destroy(g_host);
-        g_host = nullptr;
-        set_text("Netplay: cannot connect");
-        return;
-    }
-    g_is_host = false;
-    g_peer_ok = false;
-    g_epoch = 0;
-    g_resyncs = 0;
-    g_player.store(2);
-    g_status.store(Status::Joining);
-    set_text("Joining " + host + ":" + std::to_string(port) + "...");
+    std::string error;
+    auto net = enet_join(address, error);
+    begin(std::move(net), error, false);
+    if (!g_net) return;
     {
         std::lock_guard lock{g_mutex};
         g_last_address = address;
@@ -591,6 +542,18 @@ void start_joining(const std::string& address) {
         std::ofstream f(g_folder / "netplay.cfg", std::ios::trunc);
         f << "join=" << address << '\n';
     }
+}
+
+void start_hosting_steam() {
+    std::string error;
+    auto net = steam_host(error);
+    begin(std::move(net), error, true);
+}
+
+void start_joining_steam(uint64_t lobby) {
+    std::string error;
+    auto net = steam_join(lobby, error);
+    begin(std::move(net), error, false);
 }
 
 // "<value>[@<frame>]"
@@ -736,6 +699,12 @@ void request_host(int port) {
 }
 
 void request_join(const std::string& address) {
+    // "steam:<lobby id>" (or "steam") joins over Steam instead.
+    if (address.rfind("steam", 0) == 0) {
+        const size_t colon = address.find(':');
+        request_join_steam(colon == std::string::npos ? 0 : std::strtoull(address.c_str() + colon + 1, nullptr, 10));
+        return;
+    }
     {
         std::lock_guard lock{g_mutex};
         g_req_address = address;
@@ -744,6 +713,16 @@ void request_join(const std::string& address) {
 }
 
 void request_leave() { g_request.store(Req::Leave); }
+
+void request_host_steam() { g_request.store(Req::HostSteam); }
+
+void request_join_steam(uint64_t lobby) {
+    {
+        std::lock_guard lock{g_mutex};
+        g_req_lobby = lobby;
+    }
+    g_request.store(Req::JoinSteam);
+}
 
 std::string last_address() {
     std::lock_guard lock{g_mutex};
@@ -773,8 +752,16 @@ void on_frame(uint8_t* rdram, recomp_context* ctx) {
         if (const char* p = std::getenv("MM_NET_PAD")) parse_pad(p);
         if (const char* l = std::getenv("MM_NET_LENGTH")) g_length = std::strtol(l, nullptr, 10);
     }
-    if (global == host_at) request_host(env_host.empty() ? kDefaultPort : std::atoi(env_host.c_str()));
+    if (global == host_at) {
+        if (env_host == "steam") request_host_steam();
+        else request_host(env_host.empty() ? kDefaultPort : std::atoi(env_host.c_str()));
+    }
     if (global == join_at) request_join(env_join);
+    // Steam: an invite accepted / Join Game picked while not in a game, or
+    // +connect_lobby on the command line.
+    if (g_status.load() == Status::Off && g_request.load() == Req::None && (global % 30) == 0) {
+        if (const uint64_t l = steam_join_request()) request_join_steam(l);
+    }
 
     switch (g_request.exchange(Req::None)) {
         case Req::Host:
@@ -799,6 +786,19 @@ void on_frame(uint8_t* rdram, recomp_context* ctx) {
             break;
         case Req::Leave:
             if (g_status.load() != Status::Off) end_session("left");
+            break;
+        case Req::HostSteam:
+            if (g_status.load() == Status::Off && mm::replay::mode() == mm::replay::Mode::Idle) start_hosting_steam();
+            break;
+        case Req::JoinSteam:
+            if (g_status.load() == Status::Off && mm::replay::mode() == mm::replay::Mode::Idle) {
+                uint64_t l;
+                {
+                    std::lock_guard lock{g_mutex};
+                    l = g_req_lobby;
+                }
+                start_joining_steam(l);
+            }
             break;
         case Req::None: break;
     }
