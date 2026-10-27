@@ -210,6 +210,48 @@ back to the frame before, to find what made her do it):
   rejoins with full health (the most either player has had, kept in game
   memory).
 
+## Third round: anywhere in the stage (src/game/far_coop.cpp)
+
+The game has one camera and keeps the world alive and drawn only near it
+(docs/README.md 10.2: prefetch rings, the onscreen-only despawner, about 69
+actor families with their own distance checks). Online (or with `MM_FAR=1`)
+the game gets a second camera for player 2, so neither is held to the other:
+
+- **A second camera in game memory.** The camera's globals
+  (0x800BE544..0x800BE577, 0x800BE61C..0x800BE623) are kept for it at
+  0x807F0500. Each frame, after the game's camera, func_80012830 runs again
+  with that set loaded and player 2's position in Marina's place, so it
+  follows her with the game's own smoothing and stage limits. Scroll locks
+  are shared only when she is near the locked camera (same arena).
+- **One world, run around both cameras.** Actor positions (+0x88 / +0x8C) are
+  camera-relative (func_80016D94 scrolls them). Switching cameras swaps the
+  global set and moves every scrolled actor (and what the players carry,
+  +0x104 / +0x108) by the difference, so world positions stay. The map actor
+  prefetch (func_8001DE30) runs a second time with her camera loaded; the
+  onscreen-only despawner spares actors in her view; and in the actor loop
+  (func_8001751C) each actor runs with the camera it is nearest to (a carried
+  actor with its carrier's), so every distance check in its own code works.
+  Player 2 has Marina's walls (+-0x90) around her own camera.
+- **Each machine shows its own player.** Player 1's is the game's camera.
+  On player 2's machine, just before the frame's graphics task goes out, the
+  game's whole frame (Graphics_Begin_Frame) runs once more from a copy of
+  memory with the two cameras' roles swapped; its display list, and every
+  piece of memory it reads that this changed (found by comparing 4 KB pages),
+  is copied above the fingerprinted range (0x80840000+, under 16 MB where the
+  renderer still reads), memory is put back exactly, and the real frame's list
+  jumps there (its colour image retargeted). Host hooks with state of their
+  own sit that frame out (debug tick, mortal NPCs, rumble, item list). The
+  picture is that of the next frame with this frame's input, which costs
+  nothing in latency. The block actor's scratch moved from host memory into
+  its record (it leaked between the two frames, and would have broken a
+  resync too).
+- **Leash** only for a player 2 out of her own camera's view (fallen, stuck).
+- Checked: bot scenarios run each far-apart case twice, with and without
+  building player 2's picture, and require identical memory fingerprints on
+  every frame; screenshots from the real renderer (lavapipe under Xvfb) show
+  player 2 crossing the whole first desert stage on her own with its enemies
+  and blocks, while player 1's picture is unchanged.
+
 ### Bot tests
 
 `tools/coop_bots.py` runs scripted two-player scenarios in the headless build

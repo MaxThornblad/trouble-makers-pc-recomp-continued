@@ -14,6 +14,7 @@
 #include "actors.h"
 #include "cheats.h"
 #include "custom_actors.h"
+#include "far_coop.h"
 #include "netplay.h"
 
 #ifdef MM_HAS_GRAPHICS
@@ -73,12 +74,16 @@ constexpr size_t globals_size() {
 // host-only expansion memory (unused above 0x80480000, docs/README.md 14.1)
 // rather than in host variables, so save states, replays and netplay carry
 // them with the rest of the game.
+// Layout at 0x807F0000 (keep in step): 0x000 globals copy, 0x400 previous
+// buttons, 0x404 join timer, 0x408 away timer, 0x40C full health, 0x410 frames
+// in her texture buffers (draw), 0x414 grab cooldown, 0x420 frame header,
+// 0x1000 display lists, 0x2000 textures, 0x4000 packed frame.
 constexpr uint32_t kP2Globals = 0x807F0000u;
 constexpr uint32_t kP2PrevButtons = kP2Globals + 0x400u;
 constexpr uint32_t kP2JoinTimer = kP2Globals + 0x404u;     // frames P1 has been in play without P2
 constexpr uint32_t kP2AwayTimer = kP2Globals + 0x408u;     // frames P2 has been too far from P1
 constexpr uint32_t kP2FullHealth = kP2Globals + 0x40Cu;    // the most health either player has had (s16)
-constexpr uint32_t kP2GrabCooldown = kP2Globals + 0x410u;  // frames until the players may grab each other again
+constexpr uint32_t kP2GrabCooldown = kP2Globals + 0x414u;  // frames until the players may grab each other again
 
 constexpr uint32_t kGameState = 0x800BE4F0u;   // 6 and 10 = stage gameplay
 constexpr uint32_t kCameraX = 0x800BE558u, kCameraY = 0x800BE55Cu;
@@ -96,12 +101,23 @@ State g;
 struct Marker {
     bool visible = false;
     int x = 0, top = 0, health = 0, max_health = 0;
+    // Far apart (far_coop.h): where the other player is, relative to this
+    // machine's view (px, +y up), for an arrow at the screen's edge.
+    bool partner = false;
+    bool partner_is_p1 = false;
+    int px = 0, py = 0;
 };
 std::mutex g_marker_mutex;
 Marker g_marker;
 
 uint8_t* at(uint8_t* rdram, uint32_t vaddr) {
     return rdram + (vaddr - 0x80000000u);
+}
+
+// MM_P2_TRACE test lines (not from the shadow frame, mm::far).
+bool trace_on() {
+    static const bool on = std::getenv("MM_P2_TRACE") != nullptr;
+    return on && !mm::far::in_shadow();
 }
 
 uint8_t* slot_ptr(uint8_t* rdram, int slot) {
@@ -159,6 +175,15 @@ uint16_t p2_buttons(uint8_t* rdram) {
 
 } // namespace
 
+bool controls(uint8_t* rdram, uint32_t& record, uint16_t& hold, uint16_t& press) {
+    const int p2 = slot(rdram);
+    if (p2 <= 0) return false;
+    record = kActors + static_cast<uint32_t>(p2) * kStride;
+    hold = MEM_HU(0, addr(kP2Globals + global_offset(0x801370CCu)));
+    press = MEM_HU(0, addr(kP2Globals + global_offset(0x801370CEu)));
+    return true;
+}
+
 int slot(uint8_t* rdram) {
     // The cached slot, else a scan: a loaded state (or a netplay peer's)
     // brings its player 2 along without this process having spawned her.
@@ -189,8 +214,17 @@ void setup(uint8_t* rdram, int slot) {
     MEM_H(0xD2, addr(kActors + static_cast<uint32_t>(slot) * kStride)) =
         static_cast<int16_t>(mm::custom_actors::type_id(kCustomIndex));
     std::memcpy(&x, p + 0x88, 4);
-    x += ((MEM_W(0x80, addr(kActors)) & 0x20) != 0 ? 24 : -24) << 16;
+    int dx = (MEM_W(0x80, addr(kActors)) & 0x20) != 0 ? 24 : -24;
+    static const char* test_dx = std::getenv("MM_TEST_P2_DX");   // test: join at this offset, facing player 1
+    if (test_dx) dx = std::atoi(test_dx);
+    x += dx << 16;
     std::memcpy(p + 0x88, &x, 4);
+    if (test_dx) {
+        uint32_t fl;
+        std::memcpy(&fl, p + 0x80, 4);
+        fl = dx > 0 ? (fl | 0x20u) : (fl & ~0x20u);   // 0x20: facing left
+        std::memcpy(p + 0x80, &fl, 4);
+    }
     MEM_W(0x80, addr(kActors + static_cast<uint32_t>(slot) * kStride)) &= ~0x02000000;   // not holding anything
     MEM_H(0xD6, addr(kActors + static_cast<uint32_t>(slot) * kStride)) = 0;
     // Full health, not player 1's present health (which may be almost gone).
@@ -212,7 +246,8 @@ void setup(uint8_t* rdram, int slot) {
     MEM_H(0, addr(kP2PrevButtons)) = 0;
     g.slot = slot;
     g.joined = true;
-    std::fprintf(stderr, "[player2] joined in slot %d\n", slot);
+    mm::far::reset(rdram);   // her own camera starts again from the game's
+    if (!mm::far::in_shadow()) std::fprintf(stderr, "[player2] joined in slot %d\n", slot);
 }
 
 // Put player 2 back next to player 1: a fresh copy of her (as she joins),
@@ -248,8 +283,23 @@ void clamp_player(uint8_t* rdram, uint32_t record, uint32_t world_x_global) {
 }
 
 void keep_on_screen(uint8_t* rdram, int slot) {
+    if (mm::far::active(rdram)) return;   // far apart allowed: each has her own camera (far_coop.h)
     clamp_player(rdram, kActors, kWorldX);
     clamp_player(rdram, kActors + static_cast<uint32_t>(slot) * kStride, kP2Globals + global_offset(kWorldX));
+}
+
+void clamp_x(uint8_t* rdram, int32_t centre, int32_t half_width) {
+    const int p2 = slot(rdram);
+    if (p2 <= 0) return;
+    const gpr a = addr(kActors + static_cast<uint32_t>(p2) * kStride);
+    const int32_t x = MEM_W(0x88, a);
+    const int32_t want = std::clamp(x, centre - half_width, centre + half_width);
+    if (want == x) return;
+    MEM_W(0x88, a) = want;
+    const int32_t vx = MEM_W(0xEC, a);
+    if ((want < x && vx > 0) || (want > x && vx < 0)) MEM_W(0xEC, a) = 0;
+    const uint32_t wx = kP2Globals + global_offset(kWorldX);
+    MEM_W(0, addr(wx)) = MEM_W(0, addr(wx)) + (want - x);
 }
 
 bool g_in_own_call = false;   // inside a func_8004ED10 call made here
@@ -267,7 +317,7 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
             MEM_H(0xE0, addr(kActors + static_cast<uint32_t>(slot) * kStride)) = 0;
             return;
         }
-        std::fprintf(stderr, "[player2] defeated, rejoining\n");
+        if (!mm::far::in_shadow()) std::fprintf(stderr, "[player2] defeated, rejoining\n");
         rejoin(rdram, slot);
     }
 
@@ -300,7 +350,7 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
         if (const char* t = std::getenv("MM_TEST_HELDX")) {   // experiment: move the held copy
             MEM_W(0x88, addr(kActors + static_cast<uint32_t>(slot) * kStride)) += std::atoi(t) << 16;
         }
-        if (std::getenv("MM_P2_TRACE")) {
+        if (trace_on()) {
             const gpr h = addr(kActors + static_cast<uint32_t>(slot) * kStride);
             std::fprintf(stderr, "[p2trace] carry in: p2 x %d vx %d | held x %d y %d fl %08X st %04X D8 %08X\n",
                          MEM_W(0x88, addr(kActors)) >> 16, MEM_W(0xEC, addr(kActors)), MEM_W(0x88, h) >> 16, MEM_W(0x8C, h) >> 16,
@@ -342,13 +392,13 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
         MEM_H(0, addr(kHistoryHold)) = static_cast<int16_t>(hold & m);
         MEM_H(0, addr(kHistoryPress)) = static_cast<int16_t>(press & m);
     }
-    if (std::getenv("MM_P2_TRACE") && buttons != 0) {
+    if (trace_on() && buttons != 0) {
         std::fprintf(stderr, "[p2trace] p2 input %04X (pads %04X/%02X %04X/%02X, p1 index %d)\n", buttons,
                      MEM_HU(0, addr(kPads)), MEM_BU(4, addr(kPads)), MEM_HU(0, addr(kPads + 6)), MEM_BU(4, addr(kPads + 6)),
                      MEM_W(0, addr(0x801370C0u)));
     }
 
-    if (std::getenv("MM_P2_TRACE")) {
+    if (trace_on()) {
         std::fprintf(stderr, "[p2trace] p2 in: st %04X 98 %08X 94 %04X D4 %04X DA %08X\n", MEM_HU(0xD0, addr(kActors)),
                      static_cast<uint32_t>(MEM_W(0x98, addr(kActors))), MEM_HU(0x94, addr(kActors)), MEM_HU(0xD4, addr(kActors)),
                      static_cast<uint32_t>(MEM_W(0xD8, addr(kActors))));
@@ -384,7 +434,7 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
         }
     }
     ctx->r4 = saved_a0;
-    if (std::getenv("MM_P2_TRACE") && MEM_HU(0xD0, addr(kActors)) != state_before) {
+    if (trace_on() && MEM_HU(0xD0, addr(kActors)) != state_before) {
         std::fprintf(stderr, "[p2trace] p2 state %04X -> %04X (98 %08X, input %04X/%04X, 70CC %08X %08X)\n", state_before,
                      MEM_HU(0xD0, addr(kActors)), static_cast<uint32_t>(MEM_W(0x98, addr(kActors))), MEM_HU(0, addr(kHold)), MEM_HU(0, addr(kPress)),
                      static_cast<uint32_t>(MEM_W(0, addr(0x801370CCu))), static_cast<uint32_t>(MEM_W(0, addr(0x801370D0u))));
@@ -392,7 +442,7 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
 
     for (int i = 0; i < 6; ++i) MEM_B(i, addr(kPads)) = static_cast<int8_t>(pad0[i]);
 
-    if (holding_p1 && std::getenv("MM_P2_TRACE")) {
+    if (holding_p1 && trace_on()) {
         std::fprintf(stderr, "[p2trace] carry: p2 x %d -> %d, p1 x %d -> %d, p1 st %04X\n",
                      MEM_W(0x88, addr(kActors + static_cast<uint32_t>(slot) * kStride)) >> 16, MEM_W(0x88, addr(kActors)) >> 16,
                      static_cast<int32_t>(p1_record[0x88] | p1_record[0x89] << 8 | p1_record[0x8A] << 16 | p1_record[0x8B] << 24) >> 16,
@@ -502,9 +552,25 @@ void publish_marker(uint8_t* rdram, int p2) {
         m.visible = true;
         m.x = MEM_H(0x88, a);
         m.top = MEM_H(0x8C, a) + MEM_H(0xAE, a);
+        // On her machine the picture is her own camera's.
+        if (int32_t dx, dy; mm::far::shows_p2_view(rdram) && mm::far::p2_camera_offset(rdram, dx, dy)) {
+            m.x = (MEM_W(0x88, a) - dx) >> 16;
+            m.top = ((MEM_W(0x8C, a) - dy) >> 16) + MEM_H(0xAE, a);
+        }
         m.health = MEM_H(0xE0, a);
         g.joined = false;
         m.max_health = MEM_H(0, addr(kP2FullHealth));
+        if (int32_t dx, dy; mm::far::p2_camera_offset(rdram, dx, dy)) {
+            m.partner = true;
+            if (mm::far::shows_p2_view(rdram)) {   // her machine: player 1, seen from her camera
+                m.partner_is_p1 = true;
+                m.px = (MEM_W(0x88, addr(kActors)) - dx) >> 16;
+                m.py = (MEM_W(0x8C, addr(kActors)) - dy) >> 16;
+            } else {
+                m.px = MEM_W(0x88, a) >> 16;
+                m.py = MEM_W(0x8C, a) >> 16;
+            }
+        }
     }
     std::lock_guard lock{g_marker_mutex};
     g_marker = m;
@@ -573,7 +639,12 @@ void tick(uint8_t* rdram) {
     // lets the two stand 288 px apart at the screen edges, and a distance
     // leash pulled her back from there.) Positions are camera-relative.
     const gpr a = addr(kActors + static_cast<uint32_t>(p2) * kStride);
-    const int px = MEM_H(0x88, a), py = MEM_H(0x8C, a);
+    int px = MEM_H(0x88, a), py = MEM_H(0x8C, a);
+    // Far apart (netplay): out of her own camera's view instead.
+    if (int32_t dx, dy; mm::far::p2_camera_offset(rdram, dx, dy)) {
+        px = (MEM_W(0x88, a) - dx) >> 16;
+        py = (MEM_W(0x8C, a) - dy) >> 16;
+    }
     const bool away = px > kLeashX || px < -kLeashX || py > kLeashY || py < -kLeashY;
     int32_t away_frames = away ? MEM_W(0, addr(kP2AwayTimer)) + 1 : 0;
     if (away_frames >= kLeashFrames) {
@@ -598,6 +669,33 @@ void draw_overlay() {
     ImDrawList* dl = ImGui::GetForegroundDrawList();
     const float scale = io.DisplaySize.y / 240.0f;
     const ImVec2 centre(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+    // The other player off this screen (far apart): an arrow at the edge
+    // pointing at her, with her tag and how far she is.
+    if (m.partner) {
+        const float half_w = centre.x / scale - 12.0f, half_h = 120.0f - 14.0f;
+        const float fx = static_cast<float>(m.px), fy = static_cast<float>(m.py) + 16.0f;
+        if (std::abs(fx) > half_w + 8.0f || std::abs(fy) > half_h + 8.0f) {
+            const float k = std::min(half_w / std::max(std::abs(fx), 1.0f), half_h / std::max(std::abs(fy), 1.0f));
+            const ImVec2 tip(centre.x + fx * k * scale, centre.y - fy * k * scale);
+            const float len = std::sqrt(fx * fx + fy * fy);
+            const ImVec2 dir(fx / len, -fy / len), side(-dir.y, dir.x);
+            const float as = std::max(8.0f, 7.0f * scale);
+            const ImVec2 back(tip.x - dir.x * as, tip.y - dir.y * as);
+            const ImU32 col = m.partner_is_p1 ? IM_COL32(220, 60, 60, 230) : IM_COL32(20, 90, 200, 230);
+            dl->AddTriangleFilled(tip, ImVec2(back.x + side.x * as * 0.6f, back.y + side.y * as * 0.6f),
+                                  ImVec2(back.x - side.x * as * 0.6f, back.y - side.y * as * 0.6f), col);
+            char label[32];
+            std::snprintf(label, sizeof label, "%s %dm", m.partner_is_p1 ? "1P" : "2P", static_cast<int>(len / 16.0f));
+            ImFont* f = ImGui::GetFont();
+            const float size = std::max(10.0f, 5.0f * scale);
+            const ImVec2 ts = f->CalcTextSizeA(size, FLT_MAX, 0.0f, label);
+            ImVec2 at(back.x - dir.x * as * 0.4f - ts.x * 0.5f, back.y - dir.y * as * 0.4f - ts.y * 0.5f);
+            at.x = std::clamp(at.x, 2.0f, io.DisplaySize.x - ts.x - 2.0f);
+            at.y = std::clamp(at.y, 2.0f, io.DisplaySize.y - ts.y - 2.0f);
+            dl->AddRectFilled(ImVec2(at.x - 3, at.y - 1), ImVec2(at.x + ts.x + 3, at.y + ts.y + 1), col, 3.0f);
+            dl->AddText(f, size, at, IM_COL32(255, 255, 255, 255), label);
+        }
+    }
     float vx, vy;
     view_offset(vx, vy);
     const ImVec2 head(centre.x + (m.x - vx) * scale, centre.y - (m.top - vy + 6.0f) * scale);
@@ -759,6 +857,8 @@ uint32_t g_contacts_cleared[2]{};   // records whose 0x1000 was taken off
 extern "C" void mm_p2_contacts_begin(uint8_t* rdram) {
     using namespace mm::player2;
     g_contacts_cleared[0] = g_contacts_cleared[1] = 0;
+    static const bool off = std::getenv("MM_TEST_NO_GRAB_RULES") != nullptr;
+    if (off) return;
     const int p2 = slot(rdram);
     if (p2 <= 0) return;
     const uint32_t rec[2] = {kActors, kActors + static_cast<uint32_t>(p2) * kStride};
@@ -888,7 +988,7 @@ void shift_layer(uint8_t* rdram, uint32_t list, int dx4) {
 extern "C" void mm_view_end(uint8_t* rdram) {
     using namespace mm::player2;
     const int own = mm::netplay::active() ? mm::netplay::player() : 0;
-    const int p2 = own != 0 ? slot(rdram) : -1;
+    const int p2 = own != 0 && !mm::far::active(rdram) ? slot(rdram) : -1;   // far apart: each machine's camera is its player's
     float tx = 0.0f, ty = 0.0f;
     if (p2 > 0) {
         const gpr a1 = static_cast<gpr>(static_cast<int32_t>(0x800EF510u));
@@ -925,7 +1025,10 @@ extern "C" void mm_view_end(uint8_t* rdram) {
 
 // Thread_MainProc, just before the frame's graphics task goes to the RSP:
 // the whole frame list (task data, from the arena base + 0x180) is final.
-extern "C" void mm_view_frame_dl(uint8_t* rdram, uint32_t task) {
+extern "C" void mm_far_shadow(uint8_t* rdram, recomp_context* ctx, uint32_t task);
+
+extern "C" void mm_view_frame_dl(uint8_t* rdram, recomp_context* ctx, uint32_t task) {
+    mm_far_shadow(rdram, ctx, task);
     const float off = g_view_x.load(std::memory_order_relaxed);
     const int dx4 = -static_cast<int>(std::lround(off * 4.0f));
     if (dx4 == 0 || task < 0x80000000u || task >= 0x80800000u) return;
@@ -955,17 +1058,22 @@ extern "C" void mm_view_frame_dl(uint8_t* rdram, uint32_t task) {
 extern "C" void mm_camera_begin(uint8_t* rdram) {
     using namespace mm::player2;
     g_camera_swapped = false;
+    if (mm::far::secondary_pass()) return;   // the second camera: its target is set up already
     if (!mm::cheats::coop_enabled()) return;
     const int p2 = slot(rdram);
     if (p2 < 0) return;
+    // Far apart (far_coop.h): the game's camera follows player 1, or player
+    // 2 in her machine's shadow frame; no midpoint.
+    const bool far = mm::far::active(rdram);
+    if (far && !mm::far::swapped()) return;
     const gpr m = static_cast<gpr>(static_cast<int32_t>(0x800EF510u));
     const gpr b = static_cast<gpr>(static_cast<int32_t>(0x800EF510u + static_cast<uint32_t>(p2) * 0x198u));
     g_saved_x = MEM_W(0x88, m);
     g_saved_y = MEM_W(0x8C, m);
     g_saved_wx = MEM_W(0, static_cast<gpr>(static_cast<int32_t>(0x800BE5D8u)));
     g_saved_wy = MEM_W(0, static_cast<gpr>(static_cast<int32_t>(0x800BE5DCu)));
-    g_mid_x = static_cast<int32_t>((static_cast<int64_t>(g_saved_x) + MEM_W(0x88, b)) / 2);
-    g_mid_y = static_cast<int32_t>((static_cast<int64_t>(g_saved_y) + MEM_W(0x8C, b)) / 2);
+    g_mid_x = far ? MEM_W(0x88, b) : static_cast<int32_t>((static_cast<int64_t>(g_saved_x) + MEM_W(0x88, b)) / 2);
+    g_mid_y = far ? MEM_W(0x8C, b) : static_cast<int32_t>((static_cast<int64_t>(g_saved_y) + MEM_W(0x8C, b)) / 2);
     MEM_W(0x88, m) = g_mid_x;
     MEM_W(0x8C, m) = g_mid_y;
     MEM_W(0, static_cast<gpr>(static_cast<int32_t>(0x800BE5D8u))) = g_saved_wx + (g_mid_x - g_saved_x);

@@ -31,6 +31,14 @@ void update(uint8_t* rdram, recomp_context* ctx, int slot);
 // Any thread.
 void view_offset(float& x, float& y);
 
+// Game thread: player 2's actor record and her own hold / press words (as
+// Marina's at 0x801370CC/CE, from her last update). False without player 2.
+bool controls(uint8_t* rdram, uint32_t& record, uint16_t& hold, uint16_t& press);
+
+// Keep player 2 within centre +- half_width of the camera now loaded (her
+// x relative to it, Q16.16), as Marina's walls keep her (far_coop.cpp).
+void clamp_x(uint8_t* rdram, int32_t centre, int32_t half_width);
+
 // Slot of the live player 2, or -1.
 int slot(uint8_t* rdram);
 

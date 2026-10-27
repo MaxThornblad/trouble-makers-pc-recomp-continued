@@ -49,12 +49,11 @@ gpr slot_addr(int slot) {
     return addr(kActors + static_cast<uint32_t>(slot) * kActorStride);
 }
 
-// Host-side per-slot scratch for custom types (frame counters, anchors).
-struct Scratch {
-    int frames = 0;
-    int32_t base_y = 0;
-};
-std::array<Scratch, 208> g_scratch;
+// Per-slot scratch for custom types (a frame counter and an anchor), in the
+// actor record itself so save states, replays, netplay resyncs and player 2's
+// picture (far_coop.cpp, which runs a frame and puts memory back) keep it.
+constexpr uint32_t kFieldFrames = 0x118;
+constexpr uint32_t kFieldBaseY = 0x11C;
 
 // --- Test block: a block sprite that bobs where it was spawned -------------
 
@@ -63,16 +62,16 @@ void test_block_setup(uint8_t* rdram, int slot) {
     MEM_H(0x84, a) = kBlockImage;
     MEM_H(0x94, a) = kDrawSprite;
     MEM_W(0x18C, a) = MEM_W(4 * 4, addr(kBlockSprites));
-    g_scratch[slot] = Scratch{0, MEM_W(0x8C, a)};
+    MEM_W(kFieldFrames, a) = 0;
+    MEM_W(kFieldBaseY, a) = MEM_W(0x8C, a);
 }
 
 void test_block_update(uint8_t* rdram, recomp_context* /*ctx*/, int slot) {
     const gpr a = slot_addr(slot);
-    Scratch& s = g_scratch[slot];
-    if (s.frames == 0 && s.base_y == 0) s.base_y = MEM_W(0x8C, a);
-    ++s.frames;
-    const double phase = s.frames * (2.0 * 3.14159265358979 / 90.0);
-    MEM_W(0x8C, a) = s.base_y + static_cast<int32_t>(std::sin(phase) * 4.0 * 65536.0);
+    if (MEM_W(kFieldFrames, a) == 0 && MEM_W(kFieldBaseY, a) == 0) MEM_W(kFieldBaseY, a) = MEM_W(0x8C, a);
+    MEM_W(kFieldFrames, a) = MEM_W(kFieldFrames, a) + 1;
+    const double phase = MEM_W(kFieldFrames, a) * (2.0 * 3.14159265358979 / 90.0);
+    MEM_W(0x8C, a) = MEM_W(kFieldBaseY, a) + static_cast<int32_t>(std::sin(phase) * 4.0 * 65536.0);
 }
 
 // --- Block: a solid block object Marina can carry and throw ----------------
@@ -228,7 +227,8 @@ void block_setup(uint8_t* rdram, int slot) {
     MEM_H(0xD0, a) = 0x0001;
     MEM_W(kFieldSlope, a) = 0;
     MEM_W(kFieldSlopeAt, a) = 0;
-    g_scratch[slot] = Scratch{};
+    MEM_W(kFieldFrames, a) = 0;
+    MEM_W(kFieldBaseY, a) = 0;
 }
 
 void block_update(uint8_t* rdram, recomp_context* /*ctx*/, int slot) {
@@ -277,7 +277,6 @@ void block_update(uint8_t* rdram, recomp_context* /*ctx*/, int slot) {
     // nudging it down by gravity every frame would sink it into what it
     // stands on, and the terrain collision then pushes it out sideways too,
     // which made stacks and rows of blocks slide apart.
-    Scratch& sc = g_scratch[slot];
     if ((MEM_HU(0xD0, a) & 0xFF) == 0x01) {
         MEM_W(0xEC, a) = 0;
         MEM_W(0xF0, a) = 0;
@@ -285,16 +284,16 @@ void block_update(uint8_t* rdram, recomp_context* /*ctx*/, int slot) {
         lift_slope(rdram, slot);
         MEM_H(0xD0, a) = 0x0171;                 // support gone: fall (not solid meanwhile)
         MEM_W(0x80, a) = static_cast<int32_t>(kFlyingFlags);
-        sc.frames = 0;
+        MEM_W(kFieldFrames, a) = 0;
     }
 
     // Flying or falling: move by the velocity under gravity. The terrain
     // collision that runs after this update pushes the block back out of
     // anything solid, so landing shows up as no vertical movement next frame.
     const int32_t x = MEM_W(0x88, a), y = MEM_W(0x8C, a);
-    const bool blocked_y = sc.frames > 0 && std::abs(y - sc.base_y) < 0x4000 && MEM_W(0xF0, a) < 0;
-    ++sc.frames;
-    sc.base_y = y;
+    const bool blocked_y = MEM_W(kFieldFrames, a) > 0 && std::abs(y - MEM_W(kFieldBaseY, a)) < 0x4000 && MEM_W(0xF0, a) < 0;
+    MEM_W(kFieldFrames, a) = MEM_W(kFieldFrames, a) + 1;
+    MEM_W(kFieldBaseY, a) = y;
     int32_t vx = MEM_W(0xEC, a), vy = MEM_W(0xF0, a);
     if (blocked_y && supported(rdram, slot)) {
         come_to_rest(rdram, slot);               // landed: rest, solid again

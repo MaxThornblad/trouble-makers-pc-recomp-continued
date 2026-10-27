@@ -1,4 +1,5 @@
 #include "debug_menu.h"
+#include "far_coop.h"
 #include "cheats.h"
 #include "rank_timer.h"
 #include "gem_compass.h"
@@ -475,7 +476,15 @@ bool handle_event(const SDL_Event& event) {
     return false;
 }
 
+extern "C" int mm_far_in_shadow(void);
+
 extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
+    // Player 2's picture (far_coop.h): only what is drawn over it comes from
+    // this frame; everything else here keeps host state.
+    if (mm_far_in_shadow()) {
+        mm::enemy_bars::publish(rdram);
+        return;
+    }
     const int game_state = MEM_HU(0, rdram_gpr(kGameState));
     const int current_stage = MEM_HU(0, rdram_gpr(kCurrentStage));
     const int current_scene = static_cast<int16_t>(
@@ -490,7 +499,7 @@ extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
     mm::actors::tick(rdram);
     mm::player2::tick(rdram);
     mm::dev_harness::tick(rdram);
-    mm::enemy_bars::publish(rdram);
+    if (!mm::far::shows_p2_view(rdram)) mm::enemy_bars::publish(rdram);
     mm::cheats::set_active(g_enabled.load(std::memory_order_acquire));
     if (g_enabled.load(std::memory_order_acquire)) mm::inspector::publish(rdram);
 

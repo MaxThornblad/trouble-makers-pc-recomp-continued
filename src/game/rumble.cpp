@@ -179,8 +179,11 @@ void tick(uint8_t* rdram) {
 
 // Generated hook at Sound_AddSfx's entry (troublemakers.us1.toml): every sound
 // effect passes through it with its id in $a0 and volume (0..255) at 0x10($sp).
+extern "C" int mm_far_in_shadow(void);
+
 extern "C" void mm_rumble_sfx(uint8_t* rdram, uint32_t id, uint32_t volume) {
     (void)rdram;
+    if (mm_far_in_shadow()) return;
     if (!mm::rumble::g_gameplay) return;
     for (const auto& s : mm::rumble::kSfxRumble) {
         if (s.id == (id & 0xFFFFu)) {

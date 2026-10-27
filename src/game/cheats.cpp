@@ -11,6 +11,8 @@
 
 #include "gem_compass.h"
 #include "grab_blocks.h"
+
+extern "C" int mm_far_in_shadow(void);
 #include "inspector.h"
 #include "mm_audio_input.hpp"
 #include "recomp.h"
@@ -356,6 +358,7 @@ void gem_magnet(uint8_t* rdram, uint32_t list) {
 // that bit is what makes a character immortal (the 1-3 hoppers have 1 health
 // and the bit). Clearing it before the check lets them die normally.
 extern "C" void mm_mortal_hook(uint8_t* rdram, uint32_t slot) {
+    if (mm_far_in_shadow()) return;   // its record of health is host state (far_coop.h)
     if (!mm::cheats::g_active_for_hooks() || !mm::cheats::enabled(mm::cheats::Cheat::MortalNpcs)) return;
     slot &= 0xFFFF;
     if (slot == 0 || slot >= 208) return;
@@ -451,6 +454,7 @@ void apply_mortal_refills(uint8_t* rdram) {
 } // namespace mm::cheats
 
 extern "C" void mm_item_list_hook(uint8_t* rdram, uint32_t list) {
+    if (mm_far_in_shadow()) return;
     mm::gem_compass::scan_items(rdram, list);
     mm::grab_blocks::on_item_list(rdram, list);
     mm::inspector::note_item_list(list);
@@ -496,6 +500,7 @@ void configure(const std::filesystem::path& folder) {
     std::ifstream f(g_path);
     std::string line;
     while (std::getline(f, line)) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();  // CRLF files
         const size_t eq = line.find('=');
         if (eq == std::string::npos) continue;
         const std::string key = line.substr(0, eq);

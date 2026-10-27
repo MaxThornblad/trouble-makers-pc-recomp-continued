@@ -286,10 +286,14 @@ far behind she comes back next to player 1. That is local co-op on one screen.
 **Host a game**) and plays Marina; the other joins with the host's address
 (`--join 100.64.1.2`, or type it on the Session page and pick **Join**) and
 plays player 2 on their own keyboard or controller, from the host's game.
-Each player gets their own screen, centred on their own Marina (the game
-still has one camera, so the two of you share a screen's width: walking apart,
-you stop at its edges). You can pick each other up, carry and throw each other
-(not from mid-air, and not again right after being carried).
+Each player gets their own camera and can go anywhere in the stage: the world
+stays alive around both of you (enemies near player 2 spawn, move and fight
+even when player 1 is far away), and each machine shows its own player's
+camera. Player 2 comes back next to player 1 only when defeated or lost
+(fallen out of view for a few seconds), and whenever player 1 goes through a
+door. You can pick each other up, carry and throw each other (not from
+mid-air, and not again right after being carried), and both can grab stage
+blocks with the grabbable-blocks cheat.
 Both need the same build, and the host's UDP port 7845 must be reachable:
 on the same network use the host's local address; over the internet a VPN
 such as Tailscale is the simple way (use the host's Tailscale address). The

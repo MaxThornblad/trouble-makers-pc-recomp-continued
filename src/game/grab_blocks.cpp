@@ -7,6 +7,7 @@
 #include "actors.h"
 #include "cheats.h"
 #include "custom_actors.h"
+#include "player2.h"
 #include "recomp.h"
 #include "terrain.h"
 
@@ -123,12 +124,41 @@ bool object_in_reach(uint8_t* rdram, int fx, int fy) {
 
 } // namespace
 
+// One player's grab at the stage blocks: `record` is her actor record, `hold`
+// and `press` her input words (Marina's at 0x801370CC/CE; player 2's own copy).
+static void try_grab(uint8_t* rdram, uint32_t list, uint32_t record, uint16_t hold, uint16_t press);
+
 void on_item_list(uint8_t* rdram, uint32_t list) {
     if (!mm::cheats::grab_blocks_live()) return;
     const uint16_t game_state = MEM_HU(0, addr(kGameState));
     if (game_state != 6 && game_state != 10) return;
-    if ((MEM_HU(0, addr(kMarinaPress)) & kGrabButton) == 0) return;
-    const gpr m = slot_addr(0);
+    static const bool dbg = std::getenv("MM_GB_DEBUG") != nullptr;
+    static int dbg_n = 0;
+    if (dbg && (++dbg_n % 120) == 1) {
+        const int cx = MEM_H(0, addr(kCameraX)), cy = MEM_H(0, addr(kCameraY));
+        std::fprintf(stderr, "[gb-debug] p1 %d,%d blocks:", cx + MEM_H(0x88, slot_addr(0)), cy + MEM_H(0x8C, slot_addr(0)));
+        uint32_t l = list;
+        int shown = 0;
+        for (int i = 0; i < kMaxItems && shown < 12; ++i, l += 6) {
+            const uint16_t kind = MEM_HU(0, addr(l));
+            if (kind == 0) break;
+            if ((kind & 0xC000u) != 0 || shape_of(rdram, kind) == nullptr) continue;
+            const int bx = MEM_HU(2, addr(l)), by = MEM_HU(4, addr(l));
+            if (std::abs(bx - cx) > 400) continue;
+            std::fprintf(stderr, " %03X@%d,%d", kind, bx, by);
+            ++shown;
+        }
+        std::fprintf(stderr, "\n");
+    }
+    try_grab(rdram, list, kActors, MEM_HU(0, addr(kMarinaHold)), MEM_HU(0, addr(kMarinaPress)));
+    uint32_t record = 0;
+    uint16_t hold = 0, press = 0;
+    if (mm::player2::controls(rdram, record, hold, press)) try_grab(rdram, list, record, hold, press);
+}
+
+static void try_grab(uint8_t* rdram, uint32_t list, uint32_t record, uint16_t hold, uint16_t press) {
+    if ((press & kGrabButton) == 0) return;
+    const gpr m = addr(record);
     const uint32_t flags = static_cast<uint32_t>(MEM_W(0x80, m));
     if ((flags & kHoldingFlag) != 0) return;
 
@@ -137,7 +167,6 @@ void on_item_list(uint8_t* rdram, uint32_t list) {
     const int base_y = cy + MEM_H(0x8C, m);
     // Where her hand reaches: in front at chest height, or straight up / down
     // while Up / Down is held (the game's own grab works in all three).
-    const uint16_t hold = MEM_HU(0, addr(kMarinaHold));
     int fx = mx + ((flags & kFacingLeftFlag) != 0 ? -kReachX : kReachX);
     int my = base_y + (MEM_H(0xAE, m) + MEM_H(0xB0, m)) / 2;
     if ((hold & kUp) != 0) {
@@ -171,8 +200,10 @@ void on_item_list(uint8_t* rdram, uint32_t list) {
     const uint16_t kind = MEM_HU(0, addr(best));
     const int bx = MEM_HU(2, addr(best)), by = MEM_HU(4, addr(best));
     const int marina_y = base_y;
+    (void)marina_y;
+    // spawn_now places relative to slot 0 (player 1), whoever grabbed.
     const int slot = mm::actors::spawn_now(rdram, mm::custom_actors::type_id(mm::custom_actors::kBlock),
-                                           bx - mx, by - marina_y);
+                                           bx - (cx + MEM_H(0x88, slot_addr(0))), by - (cy + MEM_H(0x8C, slot_addr(0))));
     if (slot < 0) return;
     const Shape* shape = shape_of(rdram, kind);
     const gpr a = slot_addr(slot);
