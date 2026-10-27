@@ -247,6 +247,10 @@ extern "C" void mm_far_after_camera(uint8_t* rdram, recomp_context* ctx) {
     g_spared.clear();
     g_frame_on = active(rdram);
     if (!g_frame_on) {
+        // The far rules just ended (the online game is over) with player 2
+        // still here: on one shared screen again, she comes back next to
+        // player 1 at once instead of being dragged across the stage.
+        if (store_valid(rdram) && !g_shadow) mm::player2::bring_back(rdram);
         reset(rdram);
         return;
     }

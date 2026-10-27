@@ -88,6 +88,7 @@ constexpr uint32_t kWorldX = 0x800BE5D8u, kWorldY = 0x800BE5DCu;   // Marina's w
 constexpr int kJoinDelay = 45;                 // frames into a scene
 constexpr int kLeashX = 200, kLeashY = 150;    // px from the camera centre: out of view
 constexpr int kLeashFrames = 150;
+constexpr int kScreenEdge = 180;              // px either side of the shared camera (keep_on_screen)
 
 struct State {
     int slot = -1;        // host-side cache only; slot() checks the slot itself
@@ -244,6 +245,17 @@ void rejoin(uint8_t* rdram, int slot) {
     setup(rdram, slot);
 }
 
+void bring_back(uint8_t* rdram) {
+    const int p2 = slot(rdram);
+    if (p2 <= 0) return;
+    const int32_t dx = MEM_W(0x88, addr(kActors + static_cast<uint32_t>(p2) * kStride)) - MEM_W(0x88, addr(kActors));
+    const int32_t dy = MEM_W(0x8C, addr(kActors + static_cast<uint32_t>(p2) * kStride)) - MEM_W(0x8C, addr(kActors));
+    if (std::abs(dx) > (kScreenEdge << 16) || std::abs(dy) > (kLeashY << 16)) {
+        std::fprintf(stderr, "[player2] far apart rules over: back next to player 1\n");
+        rejoin(rdram, p2);
+    }
+}
+
 // One shared screen. The game has one camera (the players' midpoint, see
 // mm_camera_begin), and only what is near it is active and drawn, so the
 // players can't leave it: across, each stays within kScreenEdge px of the
@@ -252,7 +264,6 @@ void rejoin(uint8_t* rdram, int slot) {
 // in opposite directions until the leash pulled player 2 back (a teleport).
 // Each machine's own view then shows its player at most 180 px off the
 // shared centre, well inside the widescreen picture and active area.
-constexpr int kScreenEdge = 180;
 
 void clamp_player(uint8_t* rdram, uint32_t record, uint32_t world_x_global) {
     const gpr a = addr(record);

@@ -270,7 +270,8 @@ def run_netplay(args, name, slot, frames, pad1, pad2, port):
         if h[:common_n] != g[:common_n]:
             problems.append("fingerprints differ")
         start = hout.find("session started")
-        more, traced, _ = check_trace(hout[start:], 3, far=True)
+        end = hout.find("session ended", start)   # after it the host plays on alone
+        more, traced, _ = check_trace(hout[start:end if end > 0 else None], 3, far=True)
         return problems + more, traced
 
 

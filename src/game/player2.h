@@ -39,6 +39,10 @@ void clamp_x(uint8_t* rdram, int32_t centre, int32_t half_width);
 void held_swap_begin(uint8_t* rdram, int actor);
 void held_swap_end(uint8_t* rdram);
 
+// Back next to player 1 if she is off the shared screen (far apart rules
+// ended, far_coop.cpp).
+void bring_back(uint8_t* rdram);
+
 // Slot of the live player 2, or -1.
 int slot(uint8_t* rdram);
 
