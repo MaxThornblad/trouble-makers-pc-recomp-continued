@@ -63,7 +63,11 @@ for slot in (1, 2, 3, 4, 5, 6, 7, 8):
 # Far apart (far_coop.cpp), run locally with MM_FAR=1: once as player 1's
 # machine sees it and once building player 2's picture each frame
 # (MM_FAR_SHADOW=1), which must not change the game at all (same memory
-# fingerprints every frame). Name, slot, frames, scripts, px apart wanted.
+# fingerprints every frame). Name, slot, frames, scripts, px apart wanted,
+# and optionally: extra environment, lines the run must print, and a check
+# of where the two characters end (slot 0's and player 2's slot's world x,
+# from where they started).
+STAR_SHAKE = "60:,8:r,10:uB," + ",".join(["6:Bl,6:Br"] * 25) + ",600:"
 FAR = [
     ("far-apart-1", 1, 900, "60:,840:r", "60:,840:l", 600),
     ("far-apart-4", 4, 900, "60:,840:l", "60:,840:r", 0),
@@ -71,10 +75,24 @@ FAR = [
     ("far-there-and-back", 1, 1200, "60:,500:r,600:", "60:,300:l,300:r,500:", 400),
     ("far-fuzz-4", 4, 1800, fuzz(404, grab_bias=True), "60:," + fuzz(405), 0),
     ("far-fuzz-2", 2, 1800, fuzz(202), "60:,300:l," + fuzz(203), 0),
+    # The lead swap (player2_lead.cpp). Slot 0 holds 1-1 next to the star
+    # teleporter inside the red block pyramid: player 2 shakes it and flies
+    # (as the lead), player 1 stays where she is.
+    ("lead-star", 0, 1000, "1000:", "200:," + STAR_SHAKE, 0,
+     dict(env={"MM_TEST_PLACE": "120:1800,318,2"}, expect=["star teleporter: player 2 leads now"],
+          final=lambda s0, s2: s0[0] < 1720 and s0[1] > 560 and abs(s2[0] - 438) < 40)),
+    # Swapped by hand (MM_TEST_LEAD_SWAP) early on: each person keeps their
+    # controller, so slot 0 (player 2 now) walks left and player 1 right.
+    ("lead-controls", 1, 900, "60:,840:r", "60:,840:l", 0,
+     dict(env={"MM_TEST_LEAD_SWAP": "100"}, expect=["test: player 2 leads now"],
+          final=lambda s0, s2: s0[0] < -60 and s2[0] > 200)),
 ]
 
 NETPLAY = [
     ("net-apart", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r"),
+    # Player 2 leads from the middle on: the host's machine builds the second
+    # picture from then on, and both stay identical.
+    ("net-lead", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r", dict(env={"MM_TEST_LEAD_SWAP": "500"})),
     ("net-far", 1, 1500, "60:,1440:r", "60:,1440:l"),
     ("net-steam", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r"),   # over the Steam stand-in (--steam-mock)
     ("net-carry", 1, 1200, "80:,6:l,10:B,20:,60:r,30:,60:l,20:,10:B,900:", "600:,6:r,10:B,20:,60:l,30:,60:r,20:,10:B,400:"),
@@ -88,6 +106,8 @@ BASE_ENV = {"MM_HEADLESS_GFX": "1", "SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER
 # (0x16 grabbed, 0x2F; she snaps to the carrier's hands, and to the other side when the
 # carrier turns), reaching (0x11F), carrying / throwing (0x122, 0x126).
 CARRY_STATES = {0x16, 0x2F, 0x11F, 0x122, 0x126}
+# Scripted moves: a star teleporter's flight (0x301).
+SCRIPTED_STATES = {0x301}
 
 
 def check_trace(text, allowed_rejoins, far=False):
@@ -98,8 +118,17 @@ def check_trace(text, allowed_rejoins, far=False):
     held_bad = 0
     rejoins = text.count("rejoining")
     defeats = text.count("defeated, rejoining")
+    first = last = None
     for line in text.splitlines():
-        if "joined in slot" in line or "rejoining" in line:
+        if "leads now" in line or "leads again" in line:
+            # The two swapped characters (player2_lead.cpp): the trace's
+            # columns are slots, so each person's previous place moves over.
+            if prev:
+                prev = (prev[1], prev[0], (prev[2][1], prev[2][0]))
+            if first:
+                first = (first[1], first[0])
+            continue
+        if "joined in slot" in line or "rejoining" in line or "[test] player" in line:
             joined_recently = 3
             continue
         m = HELD.match(line)
@@ -125,6 +154,9 @@ def check_trace(text, allowed_rejoins, far=False):
             continue
         frames += 1
         present += 1
+        if first is None:
+            first = (p1, p2)
+        last = (p1, p2)
         apart = max(apart, abs(p1[0] - p2[0]))
         if not far:
             for who, rel in (("p1", int(m.group(4))), ("p2", int(m.group(10)))):
@@ -133,6 +165,8 @@ def check_trace(text, allowed_rejoins, far=False):
         if prev and joined_recently == 0:
             for k, who, a, b in ((0, "p1", prev[0], p1), (1, "p2", prev[1], p2)):
                 if states[k] in CARRY_STATES or prev[2][k] in CARRY_STATES:
+                    continue
+                if states[k] in SCRIPTED_STATES or prev[2][k] in SCRIPTED_STATES:
                     continue
                 # Landing (a new state) may snap her up onto what she lands on.
                 landing = states[k] != prev[2][k] and abs(a[0] - b[0]) <= 8 and 0 < b[1] - a[1] <= 32
@@ -153,7 +187,28 @@ def check_trace(text, allowed_rejoins, far=False):
         if key not in seen:
             seen.add(key)
             out.append(p)
+    moved = None
+    if first and last:
+        moved = ((last[0][0] - first[0][0], last[0][1] - first[0][1], last[0][0], last[0][1]),
+                 (last[1][0] - first[1][0], last[1][1] - first[1][1], last[1][0], last[1][1]))
+    check_trace.moved = moved
     return out, frames, apart
+
+
+def check_extra(extra, out, moved):
+    """The scenario's own checks: lines it must print, where the characters end."""
+    problems = []
+    for want in extra.get("expect", []):
+        if want not in out:
+            problems.append("no '%s'" % want)
+    final = extra.get("final")
+    if final and moved:
+        # (world x, world y) at the end for "star" checks; moves for the others.
+        s0 = (moved[0][2], moved[0][3]) if "MM_TEST_PLACE" in extra.get("env", {}) else moved[0][:2]
+        s2 = (moved[1][2], moved[1][3]) if "MM_TEST_PLACE" in extra.get("env", {}) else moved[1][:2]
+        if not final(s0, s2):
+            problems.append("characters ended at %s / %s" % (s0, s2))
+    return problems
 
 
 def run_local(args, name, slot, frames, pad1, pad2, allowed, extra_env=None, far=False, want_apart=0):
@@ -180,7 +235,8 @@ def run_local(args, name, slot, frames, pad1, pad2, allowed, extra_env=None, far
     return problems, traced
 
 
-def run_far(args, name, slot, frames, pad1, pad2, want_apart):
+def run_far(args, name, slot, frames, pad1, pad2, want_apart, extra=None):
+    extra = extra or {}
     hashes = []
     problems = []
     traced = 0
@@ -189,7 +245,7 @@ def run_far(args, name, slot, frames, pad1, pad2, want_apart):
             env = dict(os.environ, **BASE_ENV, HOME=args.home, MM_P2_TRACE="1", MM_FAR="1",
                        MM_REPLAY_RECORD="%s/rec@200" % tmp, MM_REPLAY_LENGTH=str(frames),
                        MM_REPLAY_SPEED="4", MM_REPLAY_PAD=pad1, MM_REPLAY_PAD2=pad2,
-                       MM_TEST_SAVESTATE_SLOT=str(slot), MM_TEST_SAVESTATE="load@150")
+                       MM_TEST_SAVESTATE_SLOT=str(slot), MM_TEST_SAVESTATE="load@150", **extra.get("env", {}))
             if shadow:
                 env["MM_FAR_SHADOW"] = "1"
             try:
@@ -209,6 +265,7 @@ def run_far(args, name, slot, frames, pad1, pad2, want_apart):
                 problems.append("only %d px apart at most (want %d)" % (apart, want_apart))
             if "shadow frame too big" in out:
                 problems.append("shadow frame overflowed its mirror")
+            problems += check_extra(extra, out, check_trace.moved)
     n = min(len(hashes[0]), len(hashes[1]))
     if n == 0 or abs(len(hashes[0]) - len(hashes[1])) > 0:
         problems.append("recordings differ in length (%d / %d bytes)" % (len(hashes[0]), len(hashes[1])))
@@ -218,7 +275,8 @@ def run_far(args, name, slot, frames, pad1, pad2, want_apart):
     return problems, traced
 
 
-def run_netplay(args, name, slot, frames, pad1, pad2, port):
+def run_netplay(args, name, slot, frames, pad1, pad2, port, extra=None):
+    extra = extra or {}
     steam = name.startswith("net-steam")
     with tempfile.TemporaryDirectory() as tmp:
         guest_home = Path(tmp) / "guest"
@@ -228,7 +286,7 @@ def run_netplay(args, name, slot, frames, pad1, pad2, port):
             if (cfg / f).exists():
                 (guest_home / ".config" / "troublemakers-recomp" / f).write_bytes((cfg / f).read_bytes())
         hlog, glog = Path(tmp) / "h.txt", Path(tmp) / "g.txt"
-        common = dict(os.environ, **BASE_ENV, MM_NET_LENGTH=str(frames), MM_P2_TRACE="1")
+        common = dict(os.environ, **BASE_ENV, MM_NET_LENGTH=str(frames), MM_P2_TRACE="1", **extra.get("env", {}))
         henv = dict(common, HOME=args.home, MM_TEST_SAVESTATE_SLOT=str(slot), MM_TEST_SAVESTATE="load@150",
                     MM_NET_HOST="%d@200" % port, MM_NET_PAD=pad1, MM_NET_LOG=str(hlog))
         genv = dict(common, HOME=str(guest_home), MM_NET_JOIN="127.0.0.1:%d@300" % port, MM_NET_PAD=pad2,
@@ -294,22 +352,22 @@ def main():
         print("%-18s %s (%d frames)%s" % (name, "ok  " if not problems else "FAIL", traced,
                                           "" if not problems else ": " + "; ".join(problems[:4])), flush=True)
         failed += bool(problems)
-    for name, slot, frames, p1, p2, want in FAR:
+    for name, slot, frames, p1, p2, want, *extra in FAR:
         if args.only and args.only not in name:
             continue
-        problems, traced = run_far(args, name, slot, frames, p1, p2, want)
+        problems, traced = run_far(args, name, slot, frames, p1, p2, want, extra[0] if extra else None)
         print("%-18s %s (%d frames)%s" % (name, "ok  " if not problems else "FAIL", traced,
                                           "" if not problems else ": " + "; ".join(problems[:4])), flush=True)
         failed += bool(problems)
     if not args.no_net:
-        for name, slot, frames, p1, p2 in NETPLAY:
+        for name, slot, frames, p1, p2, *extra in NETPLAY:
             if args.only and args.only not in name:
                 continue
             if name.startswith("net-steam") and not args.steam_mock:
                 print("%-18s skip (no --steam-mock)" % name, flush=True)
                 continue
             port += 1
-            problems, traced = run_netplay(args, name, slot, frames, p1, p2, port)
+            problems, traced = run_netplay(args, name, slot, frames, p1, p2, port, extra[0] if extra else None)
             print("%-18s %s (%d frames)%s" % (name, "ok  " if not problems else "FAIL", traced,
                                               "" if not problems else ": " + "; ".join(problems[:4])), flush=True)
             failed += bool(problems)

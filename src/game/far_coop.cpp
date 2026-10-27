@@ -63,7 +63,39 @@ gpr slot_addr(int slot) {
     return addr(kActors + static_cast<uint32_t>(slot) * kStride);
 }
 
+// Test (MM_TRACE_EXIT): which actor's update changes the exit / scene words.
+void trace_exit(uint8_t* rdram, const char* where, int slot) {
+    static const bool on = std::getenv("MM_TRACE_EXIT") != nullptr;
+    if (!on) return;
+    static uint32_t last[0x18];
+    static int last_slot = -1;
+    static const char* last_where = "";
+    uint32_t now[0x18];
+    for (uint32_t i = 0; i < 0x14; ++i) now[i] = static_cast<uint32_t>(MEM_W(0, addr(0x800D28E0u + i * 4)));
+    now[(0x800D2910u - 0x800D28E0u) / 4] = 0;   // a frame counter
+    now[0x14] = static_cast<uint32_t>(MEM_W(0, addr(0x800BE4F0u)));
+    now[0x15] = static_cast<uint32_t>(MEM_W(0, addr(0x800BE4ECu)));
+    now[0x16] = static_cast<uint32_t>(MEM_W(0, addr(0x800BE5D0u)));
+    now[0x17] = static_cast<uint32_t>(MEM_W(0, addr(0x800BE5F4u)));
+    if (std::memcmp(now, last, sizeof now) != 0) {
+        const int ps = last_slot;
+        std::fprintf(stderr, "[exit] changed after %s slot %d (type %04X):", last_where, ps,
+                     ps >= 0 ? MEM_HU(0xD2, slot_addr(ps)) : 0);
+        for (int i = 0; i < 0x18; ++i) {
+            if (now[i] != last[i]) {
+                const uint32_t a = i < 0x14 ? 0x800D28E0u + i * 4 : (i == 0x14 ? 0x800BE4F0u : i == 0x15 ? 0x800BE4ECu : i == 0x16 ? 0x800BE5D0u : 0x800BE5F4u);
+                std::fprintf(stderr, " %08X %08X->%08X", a, last[i], now[i]);
+            }
+        }
+        std::fprintf(stderr, "\n");
+        std::memcpy(last, now, sizeof now);
+    }
+    last_slot = slot;
+    last_where = where;
+}
+
 bool g_shadow = false;
+bool g_probing = false;           // a lead probe runs (player2_lead.cpp): also thrown away
 bool g_swapped = false;
 bool g_secondary = false;
 bool g_frame_on = false;          // far rules on this frame (set before the camera)
@@ -179,7 +211,8 @@ bool active(uint8_t* rdram) {
     return mm::player2::slot(rdram) > 0;
 }
 
-bool in_shadow() { return g_shadow; }
+bool in_shadow() { return g_shadow || g_probing; }
+void set_probing(bool on) { g_probing = on; }
 bool swapped() { return g_swapped; }
 bool secondary_pass() { return g_secondary; }
 
@@ -199,13 +232,21 @@ bool p2_camera_offset(uint8_t* rdram, int32_t& dx, int32_t& dy) {
     return true;
 }
 
-bool shows_p2_view(uint8_t* rdram) {
+bool shows_second_view(uint8_t* rdram) {
     static const int force = [] {   // test: MM_FAR_SHADOW=1 always, =0 never
         const char* e = std::getenv("MM_FAR_SHADOW");
         return e ? (e[0] == '1' ? 1 : 0) : -1;
     }();
     if (force == 0 || !active(rdram) || !store_valid(rdram)) return false;
-    return force == 1 || (mm::netplay::active() && mm::netplay::player() == 2);
+    if (force == 1) return true;
+    // This machine's person plays player 2's slot: the guest, or the host
+    // while player 2 leads (player2.h).
+    return mm::netplay::active() && (mm::netplay::player() == 2) != mm::player2::lead_swapped(rdram);
+}
+
+void exchange_cameras(uint8_t* rdram) {
+    if (!active(rdram) || !store_valid(rdram)) return;
+    swap_roles(rdram);
 }
 
 } // namespace mm::faraway
@@ -213,14 +254,15 @@ bool shows_p2_view(uint8_t* rdram) {
 using namespace mm::faraway;
 
 extern "C" int mm_far_in_shadow(void) {
-    return g_shadow ? 1 : 0;
+    return in_shadow() ? 1 : 0;
 }
 
 // func_80020024, after the camera (func_80012830), before the scroll and
 // despawn (func_80016D94): the second camera follows player 2 (player 1 in
 // the shadow frame); onscreen-only actors in its view are spared.
 extern "C" void mm_far_after_camera(uint8_t* rdram, recomp_context* ctx) {
-    if (!g_shadow) {   // test: MM_FAR_DUMP=<dir> writes game memory every 20 frames
+    trace_exit(rdram, "frame start", -1);
+    if (!in_shadow()) {   // test: MM_FAR_DUMP=<dir> writes game memory every 20 frames
         static const char* dump = std::getenv("MM_FAR_DUMP");
         static uint32_t n = 0;
         static const bool tc = std::getenv("MM_FAR_TRACECAM") != nullptr;
@@ -243,6 +285,41 @@ extern "C" void mm_far_after_camera(uint8_t* rdram, recomp_context* ctx) {
             }
         }
     }
+    if (!in_shadow()) {   // test: MM_TEST_PLACE="<frame>:<x>,<y>[,2]" puts player 1 (or 2) at a world spot
+        static const char* place = std::getenv("MM_TEST_PLACE");
+        static uint32_t frames = 0;
+        if (place && MEM_HU(0, addr(kGameState)) == 6) {
+            ++frames;
+            unsigned long at = 0;
+            int x = 0, y = 0, who = 1;
+            if (std::sscanf(place, "%lu:%d,%d,%d", &at, &x, &y, &who) >= 3 && frames == at) {
+                if (who == 2) {
+                    mm::player2::place_test(rdram, x << 16, y << 16);
+                    if (store_valid(rdram)) {   // her camera with her
+                        MEM_W(0, addr(kStoreSet + kSetCamX)) = x << 16;
+                        MEM_W(0, addr(kStoreSet + kSetCamY)) = (y + 18) << 16;
+                    }
+                } else {
+                    MEM_W(0x88, slot_addr(0)) = (x << 16) - MEM_W(0, addr(kCamX));
+                    MEM_W(0x8C, slot_addr(0)) = (y << 16) - MEM_W(0, addr(kCamY));
+                    MEM_W(0, addr(kWorldX)) = x << 16;
+                    MEM_W(0, addr(kWorldY)) = y << 16;
+                }
+                std::fprintf(stderr, "[test] player %d placed at %d,%d\n", who, x, y);
+            }
+            if (frames == at + 200) {   // what is around her by then
+                for (int s = 1; s < kSlots; ++s) {
+                    const gpr a = slot_addr(s);
+                    if (MEM_W(0x80, a) == 0) continue;
+                    const int dx = (MEM_W(0x88, a) - MEM_W(0x88, slot_addr(0))) >> 16;
+                    const int dy = (MEM_W(0x8C, a) - MEM_W(0x8C, slot_addr(0))) >> 16;
+                    if (std::abs(dx) > 160 || std::abs(dy) > 120) continue;
+                    std::fprintf(stderr, "[test] near: slot %d type %04X state %04X at %+d,%+d flags %08X\n", s,
+                                 MEM_HU(0xD2, a), MEM_HU(0xD0, a), dx, dy, static_cast<uint32_t>(MEM_W(0x80, a)));
+                }
+            }
+        }
+    }
     g_context = 0;
     g_spared.clear();
     g_frame_on = active(rdram);
@@ -250,7 +327,7 @@ extern "C" void mm_far_after_camera(uint8_t* rdram, recomp_context* ctx) {
         // The far rules just ended (the online game is over) with player 2
         // still here: on one shared screen again, she comes back next to
         // player 1 at once instead of being dragged across the stage.
-        if (store_valid(rdram) && !g_shadow) mm::player2::bring_back(rdram);
+        if (store_valid(rdram) && !in_shadow()) mm::player2::bring_back(rdram);
         reset(rdram);
         return;
     }
@@ -301,7 +378,7 @@ extern "C" void mm_far_after_camera(uint8_t* rdram, recomp_context* ctx) {
 
     static const bool dbg = std::getenv("MM_FAR_DEBUG") != nullptr;
     static uint32_t dbg_n = 0;
-    if (dbg && !g_shadow && (dbg_n++ % 60) == 0) {
+    if (dbg && !in_shadow() && (dbg_n++ % 60) == 0) {
         std::fprintf(stderr, "[far] camera %d,%d second %d,%d | p1 %d,%d p2 %d,%d%s\n", cx >> 16, cy >> 16,
                      MEM_W(0, addr(kStoreSet + kSetCamX)) >> 16, MEM_W(0, addr(kStoreSet + kSetCamY)) >> 16,
                      w_x >> 16, w_y >> 16, (cx + MEM_W(0x88, b)) >> 16, (cy + MEM_W(0x8C, b)) >> 16,
@@ -378,8 +455,10 @@ int holder_set(uint8_t* rdram, int slot) {
 }
 } // namespace
 
+
 extern "C" void mm_far_actor(uint8_t* rdram, uint32_t slot) {
     const int s = static_cast<int>(slot & 0xFFFF);
+    trace_exit(rdram, "actor", s);
     mm::player2::held_swap_begin(rdram, s);
     if (!g_frame_on) return;
     const int held = holder_set(rdram, s);
@@ -389,7 +468,9 @@ extern "C" void mm_far_actor(uint8_t* rdram, uint32_t slot) {
 // func_80020024 after the actor loop, before Marina's walls (func_80014C44):
 // back to the game's camera; player 2 keeps within her own camera's walls.
 extern "C" void mm_far_after_actors(uint8_t* rdram) {
+    trace_exit(rdram, "loop end", -1);
     mm::player2::held_swap_end(rdram);
+    mm::player2::after_actors(rdram);
     if (!g_frame_on) return;
     switch_to(rdram, 0);
     int32_t dx, dy;
@@ -586,7 +667,7 @@ uint32_t g_shadow_frames = 0;
 // was built last time round; this round's frame is next): on player 2's
 // machine, build her picture and point the task's list at it.
 extern "C" void mm_far_shadow(uint8_t* rdram, recomp_context* ctx, uint32_t task) {
-    if (!shows_p2_view(rdram)) return;
+    if (!shows_second_view(rdram)) return;
     if (task < 0x80000000u || task >= 0x80800000u) return;
     const uint32_t list_va = static_cast<uint32_t>(MEM_W(0x30, addr(task))) | 0x80000000u;
     const uint32_t list = list_va & 0x00FFFFFFu;

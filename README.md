@@ -290,10 +290,15 @@ Each player gets their own camera and can go anywhere in the stage: the world
 stays alive around both of you (enemies near player 2 spawn, move and fight
 even when player 1 is far away), and each machine shows its own player's
 camera. Player 2 comes back next to player 1 only when defeated or lost
-(fallen out of view for a few seconds), and whenever player 1 goes through a
-door. You can pick each other up, carry and throw each other (not from
-mid-air, and not again right after being carried), and both can grab stage
-blocks with the grabbable-blocks cheat.
+(fallen out of view for a few seconds), and whenever either of you goes
+through a door. You share one health bar, gems player 2 picks up count for
+both, and either of you can ride a star teleporter or take an exit: when
+player 2 does, the two of you swap characters for the rest of the scene
+(each keeps their own controller, colour and tag; the game simply treats
+player 2 as Marina until the next scene). You can pick each other up, carry
+and throw each other (not from mid-air, and not again right after being
+carried), and both can grab stage blocks with the grabbable-blocks cheat.
+Sounds are those around the leading player's camera on both machines.
 **On Steam** (no ports, no addresses): put Valve's `steam_api64.dll` (from
 the Steamworks.NET Standalone release 2025.164.1, Windows-x64) next to the
 game; both players run Steam, signed in, as friends. The host picks **Host on

@@ -35,6 +35,7 @@ constexpr uint32_t kHoldingFlag = 0x02000000u;   // +0x80: carrying something (s
 // Controller state the game builds in Input_Update (0x80000FE0) and Marina
 // copies into her own input words at the start of her update.
 constexpr uint32_t kPads = 0x8012AD70u;           // OSContPad[4], 6 bytes each
+constexpr uint32_t kPadsRead = 0x8012AD88u;       // the same, Input_Update's first read
 constexpr uint32_t kHold = 0x800BE4F8u;
 constexpr uint32_t kPress = 0x800BE4FCu;
 
@@ -47,7 +48,7 @@ struct Range { uint32_t start, size; };
 // her update reads for buffered actions. Player 2 keeps her own.
 constexpr uint32_t kHistoryPress = 0x8011DD70u, kHistoryHold = 0x801225F0u;
 constexpr uint32_t kHistoryLen = 64;
-constexpr std::array<Range, 11> kGlobals{{
+constexpr std::array<Range, 12> kGlobals{{
     {kHistoryPress, kHistoryLen * 2},
     {kHistoryHold, kHistoryLen * 2},
     {0x800BE5A4u, 4},
@@ -59,6 +60,11 @@ constexpr std::array<Range, 11> kGlobals{{
     {0x801370CCu, 8},        // her hold / press input words and two more
     {0x801373D0u, 0x98},     // player-state block (0x801373D8..0x80137460 seen written)
     {kHold, 8},              // controller words: P2's own while her update runs
+    // Requests to Marina, taken up by her next update: what a star teleporter
+    // asks of whoever holds it, and the flight her own update then asks of
+    // herself. Shared, player 1 took up player 2's flight (and flew).
+    // (Last, so the copy's earlier offsets stay as they were.)
+    {0x800BE5F4u, 4},
 }};
 
 constexpr size_t globals_size() {
@@ -134,9 +140,16 @@ void copy_globals_out(uint8_t* rdram, uint8_t* dst) {
     }
 }
 
+// Not a player's: the frame's matrix arena pointer (0x800EF4F4, inside the
+// 0x800EF4F0 range), which flips between the two frame arenas each frame. A
+// copy of it put back later points into the other frame's arena.
+constexpr uint32_t kSharedWord = 0x800EF4F4u;
+
 void copy_globals_in(uint8_t* rdram, const uint8_t* src) {
     for (const Range& r : kGlobals) {
+        const int32_t keep = MEM_W(0, addr(kSharedWord));
         std::memcpy(at(rdram, r.start), src, r.size);
+        MEM_W(0, addr(kSharedWord)) = keep;
         src += r.size;
     }
 }
@@ -216,13 +229,9 @@ void setup(uint8_t* rdram, int slot) {
     }
     MEM_W(0x80, addr(kActors + static_cast<uint32_t>(slot) * kStride)) &= ~0x02000000;   // not holding anything
     MEM_H(0xD6, addr(kActors + static_cast<uint32_t>(slot) * kStride)) = 0;
-    // Full health, not player 1's present health (which may be almost gone).
-    {
-        int16_t full = MEM_H(0, addr(kP2FullHealth));
-        full = std::max<int16_t>(full, MEM_H(0xE0, addr(kActors)));
-        if (full <= 0) full = 1;
-        MEM_H(0xE0, addr(kActors + static_cast<uint32_t>(slot) * kStride)) = full;
-    }
+    // One health bar for both: hers is player 1's (the HUD's).
+    MEM_H(0xE0, addr(kActors + static_cast<uint32_t>(slot) * kStride)) =
+        std::max<int16_t>(1, MEM_H(0xE0, addr(kActors)));
     copy_globals_out(rdram, at(rdram, kP2Globals));
     // Not player 1's recent presses or input words: she starts with none.
     for (uint32_t i = 0; i < kHistoryLen * 2; i += 2) {
@@ -287,28 +296,145 @@ void keep_on_screen(uint8_t* rdram, int slot) {
     clamp_player(rdram, kActors + static_cast<uint32_t>(slot) * kStride, kP2Globals + global_offset(kWorldX));
 }
 
-// What player 2 carries reads "the player" from Marina's globals (her world
-// position where enemies aim, her player-state block): while it updates it
-// gets player 2's copy, or a carried handle (type 0x5F) jumped to player 1's
-// hands when she threw something.
+// Player 2's colour: a cool blue added over Marina's own (the draw
+// builder's prim-colour tint at +0x9C..+0x9F, func_80009BE8). Marina's update
+// clears those bytes each frame and uses them for her hit flash, so the tint
+// goes on only while she is not flashing.
+void tint(uint8_t* rdram, int slot) {
+    const gpr pa = addr(kActors + static_cast<uint32_t>(slot) * kStride);
+    if (MEM_BU(0x9C, pa) == 0 && MEM_BU(0x9D, pa) == 0 && MEM_BU(0x9E, pa) == 0) {
+        MEM_B(0x9C, pa) = 0x00;
+        MEM_B(0x9D, pa) = 0x30;
+        MEM_B(0x9E, pa) = 0x5A;
+        MEM_B(0x9F, pa) = static_cast<int8_t>(0xFF);
+    }
+}
+
+bool lead_swapped(uint8_t* rdram) {
+    return MEM_W(0, addr(kLeadBlock)) != 0;
+}
+
+void after_actors(uint8_t* rdram) {
+    if (lead_swapped(rdram) && slot(rdram) > 0) tint(rdram, 0);
+}
+
+// Player 1's and player 2's controller entries trade places (Input_Update,
+// while player 2 leads): the game reads player 2's as player 1's.
+void route_pads(uint8_t* rdram) {
+    const int p1pad = MEM_W(0, addr(0x801370C0u)), p2pad = p2_pad_index(rdram);
+    if (p1pad < 0 || p1pad >= 4 || p2pad < 0) return;
+    for (uint32_t base : {kPads, kPadsRead}) {
+        for (uint32_t i = 0; i < 6; ++i) {
+            const gpr x = addr(base + static_cast<uint32_t>(p1pad) * 6u + i), y = addr(base + static_cast<uint32_t>(p2pad) * 6u + i);
+            const int8_t t = MEM_B(0, x);
+            MEM_B(0, x) = MEM_B(0, y);
+            MEM_B(0, y) = t;
+        }
+    }
+}
+
+bool second_controller_acting(uint8_t* rdram) {
+    const int p2pad = p2_pad_index(rdram);
+    if (p2pad < 0) return false;
+    const gpr e = addr(kPads + static_cast<uint32_t>(p2pad) * 6u);
+    const uint16_t pressed = static_cast<uint16_t>(MEM_HU(0, e) & ~MEM_HU(0, addr(kP2PrevButtons)));
+    return pressed != 0 || MEM_B(3, e) > 40;   // a new button, or the stick up
+}
+
+void mute_second_controller(uint8_t* rdram) {
+    const int p2pad = p2_pad_index(rdram);
+    if (p2pad < 0) return;
+    for (uint32_t base : {kPads, kPadsRead}) {
+        const gpr e = addr(base + static_cast<uint32_t>(p2pad) * 6u);
+        MEM_H(0, e) = 0;
+        MEM_B(2, e) = 0;
+        MEM_B(3, e) = 0;
+    }
+}
+
+void exchange_characters(uint8_t* rdram) {
+    const int p2 = slot(rdram);
+    if (p2 <= 0) return;
+    const gpr m = addr(kActors), b = addr(kActors + static_cast<uint32_t>(p2) * kStride);
+    // Records (camera-relative positions both, against the same camera).
+    std::array<uint8_t, kStride> tmp;
+    std::memcpy(tmp.data(), slot_ptr(rdram, 0), kStride);
+    std::memcpy(slot_ptr(rdram, 0), slot_ptr(rdram, p2), kStride);
+    std::memcpy(slot_ptr(rdram, p2), tmp.data(), kStride);
+    MEM_H(0xD2, m) = static_cast<int16_t>(kMarinaType);
+    MEM_H(0xD2, b) = static_cast<int16_t>(mm::custom_actors::type_id(kCustomIndex));
+    // One carrying the other: the held slot follows.
+    for (gpr r : {m, b}) {
+        if ((static_cast<uint32_t>(MEM_W(0x80, r)) & kHoldingFlag) == 0) continue;
+        const uint16_t h = MEM_HU(0xD6, r);
+        if (h == 0) MEM_H(0xD6, r) = static_cast<int16_t>(p2);
+        else if (h == p2) MEM_H(0xD6, r) = 0;
+    }
+    // Marina's globals and player 2's copy.
+    std::array<uint8_t, globals_size()> mine;
+    copy_globals_out(rdram, mine.data());
+    copy_globals_in(rdram, at(rdram, kP2Globals));
+    std::memcpy(at(rdram, kP2Globals), mine.data(), mine.size());
+    // This frame's controls, read with the old pairing: Input_Update left
+    // player 1's buttons in 0x800BE538 (next frame's "previous") and her
+    // hold / press words; player 2's previous buttons are her own. Each
+    // keeps this frame's presses.
+    const uint16_t raw1 = MEM_HU(0, addr(0x800BE538u));
+    const uint16_t press1 = MEM_HU(0, addr(kP2Globals + global_offset(kPress)));   // (globals already exchanged)
+    const uint16_t prev2 = MEM_HU(0, addr(kP2PrevButtons));
+    const int p1pad = MEM_W(0, addr(0x801370C0u)), p2pad = p2_pad_index(rdram);
+    if (p1pad >= 0 && p1pad < 4 && p2pad >= 0) {
+        route_pads(rdram);
+        const gpr pad = addr(kPads + static_cast<uint32_t>(p1pad) * 6u);
+        const uint16_t raw2 = MEM_HU(0, pad);
+        MEM_H(0, addr(0x801370C4u)) = static_cast<int16_t>(raw2);
+        MEM_B(0, addr(0x800BE53Cu)) = MEM_B(2, pad);
+        MEM_B(0, addr(0x800BE540u)) = MEM_B(3, pad);
+        MEM_H(0, addr(kHold)) = static_cast<int16_t>(raw2);
+        MEM_H(0, addr(kPress)) = static_cast<int16_t>(raw2 & ~prev2);
+        MEM_H(0, addr(0x800BE538u)) = static_cast<int16_t>(raw2);
+        // Player 1's next update in player 2's slot finds this frame's press.
+        MEM_H(0, addr(kP2PrevButtons)) = static_cast<int16_t>(raw1 & ~press1);
+    }
+    mm::faraway::exchange_cameras(rdram);
+}
+
+
+// What player 2 carries talks to "Marina": slot 0's record, Marina's
+// globals (her position where enemies aim, her player-state block, her input
+// words) and controller 1. While it updates, player 2 is all of that: a
+// carried handle (type 0x5F) went to player 1's hands when she threw
+// something, and the star teleporter of 1-1 (type 0x32: grab it and shake)
+// only flew whoever was in slot 0. Player 1 waits in player 2's slot.
 namespace {
-// Marina's globals about where she is and what she does (not her input).
-constexpr std::array<Range, 5> kHeldView{{
-    {0x800BE5A4u, 4}, {0x800BE5D8u, 0x18}, {0x800EF4F0u, 0x20}, {0x80104090u, 4}, {0x801373D0u, 0x98},
-}};
-uint8_t g_held_saved[4 + 0x18 + 0x20 + 4 + 0x98];
-bool g_held_swapped = false;
+struct HeldSwap {
+    bool on = false;
+    int p2 = -1;
+    std::array<uint8_t, kStride> p1_record;
+    std::array<uint8_t, kStride> p1_waiting;
+    std::array<uint8_t, globals_size()> p1_globals;
+    uint8_t pad0[6];
+};
+HeldSwap g_held;
 }
 
 void held_swap_end(uint8_t* rdram) {
-    if (!g_held_swapped) return;
-    g_held_swapped = false;
-    const uint8_t* src = g_held_saved;
-    for (const Range& r : kHeldView) {
-        std::memcpy(at(rdram, kP2Globals + global_offset(r.start)), at(rdram, r.start), r.size);
-        std::memcpy(at(rdram, r.start), src, r.size);
-        src += r.size;
-    }
+    if (!g_held.on) return;
+    g_held.on = false;
+    const int p2 = g_held.p2;
+    std::memcpy(g_held.p1_waiting.data(), slot_ptr(rdram, p2), kStride);
+    // Player 2 (slot 0) back to her slot, her globals back to her copy.
+    std::memcpy(slot_ptr(rdram, p2), slot_ptr(rdram, 0), kStride);
+    MEM_H(0xD2, addr(kActors + static_cast<uint32_t>(p2) * kStride)) =
+        static_cast<int16_t>(mm::custom_actors::type_id(kCustomIndex));
+    copy_globals_out(rdram, at(rdram, kP2Globals));
+    // Player 1 back, from where she waited: her record there was rebased
+    // with every change of camera since (far_coop.cpp), the copy taken at
+    // the start was not (she landed a camera's difference away, 156 px).
+    std::memcpy(slot_ptr(rdram, 0), g_held.p1_waiting.data(), kStride);
+    MEM_H(0xD2, addr(kActors)) = static_cast<int16_t>(kMarinaType);
+    copy_globals_in(rdram, g_held.p1_globals.data());
+    for (int i = 0; i < 6; ++i) MEM_B(i, addr(kPads)) = static_cast<int8_t>(g_held.pad0[i]);
 }
 
 void held_swap_begin(uint8_t* rdram, int actor) {
@@ -318,13 +444,96 @@ void held_swap_begin(uint8_t* rdram, int actor) {
     if (p2 <= 0 || actor == p2 || actor == 0) return;
     const gpr b = addr(kActors + static_cast<uint32_t>(p2) * kStride);
     if ((static_cast<uint32_t>(MEM_W(0x80, b)) & kHoldingFlag) == 0 || MEM_HU(0xD6, b) != actor) return;
-    uint8_t* dst = g_held_saved;
-    for (const Range& r : kHeldView) {
-        std::memcpy(dst, at(rdram, r.start), r.size);
-        std::memcpy(at(rdram, r.start), at(rdram, kP2Globals + global_offset(r.start)), r.size);
-        dst += r.size;
+    g_held.on = true;
+    g_held.p2 = p2;
+    std::memcpy(g_held.p1_record.data(), slot_ptr(rdram, 0), kStride);
+    copy_globals_out(rdram, g_held.p1_globals.data());
+    for (int i = 0; i < 6; ++i) g_held.pad0[i] = MEM_BU(i, addr(kPads));
+    std::memcpy(slot_ptr(rdram, 0), slot_ptr(rdram, p2), kStride);
+    MEM_H(0xD2, addr(kActors)) = static_cast<int16_t>(kMarinaType);
+    copy_globals_in(rdram, at(rdram, kP2Globals));
+    const int p2pad = p2_pad_index(rdram);
+    for (int i = 0; i < 6; ++i) {
+        MEM_B(i, addr(kPads)) = p2pad >= 0 ? MEM_BU(i, addr(kPads + static_cast<uint32_t>(p2pad) * 6u)) : 0;
     }
-    g_held_swapped = true;
+    std::memcpy(slot_ptr(rdram, p2), g_held.p1_record.data(), kStride);
+    MEM_H(0xD2, b) = static_cast<int16_t>(mm::custom_actors::type_id(kCustomIndex));
+}
+
+// Gems: stage gems are item records the game collects against Marina's
+// hitbox only (func_800446F0 from func_800451E4, see cheats.cpp's magnet),
+// gems knocked out of enemies are type-8 actors caught the same way. One
+// touched by player 2 goes to player 1's hitbox, where the game collects it
+// for the team (the HUD's count, the shared health).
+void collect_pickups(uint8_t* rdram, uint32_t list) {
+    constexpr uint32_t kItemHandlers = 0x800D37BCu, kGemHandler = 0x800446F0u;
+    constexpr uint16_t kGemActor = 8;
+    constexpr int kSlack = 6;                  // the gem box, +-6 px
+    if (!mm::cheats::coop_enabled()) return;
+    const uint16_t state = MEM_HU(0, addr(kGameState));
+    if (state != 6 && state != 10) return;
+    const int p2 = slot(rdram);
+    if (p2 <= 0 || MEM_W(0x80, addr(kActors)) == 0) return;
+    const gpr b = addr(kActors + static_cast<uint32_t>(p2) * kStride);
+    const gpr m = addr(kActors);
+    // Boxes in camera-relative px (+y up).
+    const int bx = MEM_H(0x88, b), by = MEM_H(0x8C, b);
+    const int left = bx + MEM_H(0xAA, b) - kSlack, right = bx + MEM_H(0xAC, b) + kSlack;
+    const int bottom = by + MEM_H(0xB0, b) - kSlack, top = by + MEM_H(0xAE, b) + kSlack;
+    const int tx = MEM_H(0x88, m) + (MEM_H(0xAA, m) + MEM_H(0xAC, m)) / 2;
+    const int ty = MEM_H(0x8C, m) + (MEM_H(0xAE, m) + MEM_H(0xB0, m)) / 2;
+    const int cx = MEM_H(0, addr(kCameraX)), cy = MEM_H(0, addr(kCameraY));
+    static const bool dbg = std::getenv("MM_GEM_DEBUG") != nullptr;
+    if (dbg) {
+        static int n = 0;
+        if ((n++ % 120) == 0) {
+            int gems = 0, best = 1 << 30, bxw = 0, byw = 0;
+            for (int i = 0; i < 512; ++i) {
+                const gpr rec = addr(list + static_cast<uint32_t>(i) * 6u);
+                const uint16_t kind = MEM_HU(0, rec);
+                if (kind == 0) break;
+                if ((kind & 0xC000u) != 0) continue;
+                if (static_cast<uint32_t>(MEM_W(((kind & 0xFFF0u) >> 4) * 4, addr(kItemHandlers))) != kGemHandler) continue;
+                ++gems;
+                const int d = std::abs(MEM_HU(2, rec) - (bx + cx)) + std::abs(MEM_HU(4, rec) - (by + cy));
+                if (d < best) { best = d; bxw = MEM_HU(2, rec); byw = MEM_HU(4, rec); }
+            }
+            std::fprintf(stderr, "[gems] %d in the list; nearest to p2 (%d,%d) at %d,%d\n", gems, bx + cx, by + cy, bxw, byw);
+        }
+    }
+    for (int i = 0; i < 512 && list != 0; ++i) {
+        const gpr rec = addr(list + static_cast<uint32_t>(i) * 6u);
+        const uint16_t kind = MEM_HU(0, rec);
+        if (kind == 0) break;
+        if ((kind & 0xC000u) != 0) continue;
+        if (static_cast<uint32_t>(MEM_W(((kind & 0xFFF0u) >> 4) * 4, addr(kItemHandlers))) != kGemHandler) continue;
+        const int x = MEM_HU(2, rec) - cx, y = MEM_HU(4, rec) - cy;
+        if (x < left || x > right || y < bottom || y > top) continue;
+        MEM_H(2, rec) = static_cast<int16_t>(tx + cx);
+        MEM_H(4, rec) = static_cast<int16_t>(ty + cy);
+        if (trace_on()) std::fprintf(stderr, "[p2trace] gem %03X at %d,%d goes to player 1\n", kind, x + cx, y + cy);
+    }
+    for (int s = 1; s < 0xD0; ++s) {
+        const gpr a = addr(kActors + static_cast<uint32_t>(s) * kStride);
+        if (MEM_W(0x80, a) == 0 || MEM_HU(0xD2, a) != kGemActor) continue;
+        const int x = MEM_H(0x88, a), y = MEM_H(0x8C, a);
+        if (x < left || x > right || y < bottom || y > top) continue;
+        MEM_W(0x88, a) = tx << 16;
+        MEM_W(0x8C, a) = ty << 16;
+        MEM_W(0xEC, a) = 0;
+        MEM_W(0xF0, a) = 0;
+        if (trace_on()) std::fprintf(stderr, "[p2trace] gem actor %d goes to player 1\n", s);
+    }
+}
+
+void place_test(uint8_t* rdram, int32_t x, int32_t y) {
+    const int p2 = slot(rdram);
+    if (p2 <= 0) return;
+    const gpr b = addr(kActors + static_cast<uint32_t>(p2) * kStride);
+    MEM_W(0x88, b) = x - MEM_W(0, addr(kCameraX));
+    MEM_W(0x8C, b) = y - MEM_W(0, addr(kCameraY));
+    MEM_W(0, addr(kP2Globals + global_offset(kWorldX))) = x;
+    MEM_W(0, addr(kP2Globals + global_offset(kWorldY))) = y;
 }
 
 void clamp_x(uint8_t* rdram, int32_t centre, int32_t half_width) {
@@ -368,8 +577,11 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
     std::memcpy(&p1_flags, p1_record.data() + 0x80, 4);   // host-endian word, as MEM_W stores it
     copy_globals_out(rdram, p1_globals.data());
 
-    // Player 2 in.
+    // Player 2 in, with the shared health (player 1's: the HUD's bar).
     std::memcpy(slot_ptr(rdram, 0), slot_ptr(rdram, slot), kStride);
+    int16_t shared_health;
+    std::memcpy(&shared_health, p1_record.data() + 0xE0, 2);
+    if (shared_health > 0) MEM_H(0xE0, addr(kActors)) = shared_health;
     MEM_H(0xD2, addr(kActors)) = static_cast<int16_t>(kMarinaType);
     (void)p1_flags;
     // Carrying player 1? The game recorded slot 0 as what she holds, but in
@@ -514,20 +726,14 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
     std::memcpy(slot_ptr(rdram, slot), slot_ptr(rdram, 0), kStride);
     MEM_H(0xD2, addr(kActors + static_cast<uint32_t>(slot) * kStride)) =
         static_cast<int16_t>(mm::custom_actors::type_id(kCustomIndex));
-    // Her colour: a cool blue added over Marina's own (the draw builder's
-    // prim-colour tint at +0x9C..+0x9F, func_80009BE8). Marina's update
-    // clears those bytes each frame and uses them for her hit flash, so the
-    // tint goes on only while she is not flashing.
-    {
-        const gpr pa = addr(kActors + static_cast<uint32_t>(slot) * kStride);
-        if (MEM_BU(0x9C, pa) == 0 && MEM_BU(0x9D, pa) == 0 && MEM_BU(0x9E, pa) == 0) {
-            MEM_B(0x9C, pa) = 0x00;
-            MEM_B(0x9D, pa) = 0x30;
-            MEM_B(0x9E, pa) = 0x5A;
-            MEM_B(0x9F, pa) = static_cast<int8_t>(0xFF);
-        }
-    }
+    if (!lead_swapped(rdram)) tint(rdram, slot);
     copy_globals_out(rdram, at(rdram, kP2Globals));
+    // What her update did to the shared health (a hit, a gem) is player 1's too.
+    if (shared_health > 0) {
+        const int16_t after = MEM_H(0xE0, addr(kActors + static_cast<uint32_t>(slot) * kStride));
+        const int16_t shared = std::max<int16_t>(0, after);
+        std::memcpy(p1_record.data() + 0xE0, &shared, 2);
+    }
     std::memcpy(slot_ptr(rdram, 0), p1_record.data(), kStride);
     MEM_H(0xD2, addr(kActors)) = static_cast<int16_t>(kMarinaType);
     copy_globals_in(rdram, p1_globals.data());
@@ -604,28 +810,31 @@ void update(uint8_t* rdram, recomp_context* ctx, int slot) {
 void publish_marker(uint8_t* rdram, int p2) {
     Marker m;
     if (p2 >= 0) {
-        const gpr a = addr(kActors + static_cast<uint32_t>(p2) * kStride);
+        // The tag goes over player 2's character: her slot, or slot 0 while
+        // she leads.
+        const bool lead = lead_swapped(rdram);
+        const gpr slot0 = addr(kActors), other = addr(kActors + static_cast<uint32_t>(p2) * kStride);
+        const gpr hers = lead ? slot0 : other;
+        // Positions in this machine's picture: the second camera's (player 2's
+        // slot) when it shows that one (far_coop.h).
+        int32_t dx = 0, dy = 0;
+        const bool far_apart = mm::faraway::p2_camera_offset(rdram, dx, dy);
+        const bool second_view = far_apart && mm::faraway::shows_second_view(rdram);
+        const auto view_x = [&](gpr a) { return (MEM_W(0x88, a) - (second_view ? dx : 0)) >> 16; };
+        const auto view_y = [&](gpr a) { return (MEM_W(0x8C, a) - (second_view ? dy : 0)) >> 16; };
         m.visible = true;
-        m.x = MEM_H(0x88, a);
-        m.top = MEM_H(0x8C, a) + MEM_H(0xAE, a);
-        // On her machine the picture is her own camera's.
-        if (int32_t dx, dy; mm::faraway::shows_p2_view(rdram) && mm::faraway::p2_camera_offset(rdram, dx, dy)) {
-            m.x = (MEM_W(0x88, a) - dx) >> 16;
-            m.top = ((MEM_W(0x8C, a) - dy) >> 16) + MEM_H(0xAE, a);
-        }
-        m.health = MEM_H(0xE0, a);
-        g.joined = false;
+        m.x = view_x(hers);
+        m.top = view_y(hers) + MEM_H(0xAE, hers);
+        m.health = MEM_H(0xE0, hers);
         m.max_health = MEM_H(0, addr(kP2FullHealth));
-        if (int32_t dx, dy; mm::faraway::p2_camera_offset(rdram, dx, dy)) {
+        g.joined = false;
+        if (far_apart) {
+            // The other character than the one this machine's camera follows.
+            const gpr partner = second_view ? slot0 : other;
             m.partner = true;
-            if (mm::faraway::shows_p2_view(rdram)) {   // her machine: player 1, seen from her camera
-                m.partner_is_p1 = true;
-                m.px = (MEM_W(0x88, addr(kActors)) - dx) >> 16;
-                m.py = (MEM_W(0x8C, addr(kActors)) - dy) >> 16;
-            } else {
-                m.px = MEM_W(0x88, a) >> 16;
-                m.py = MEM_W(0x8C, a) >> 16;
-            }
+            m.partner_person = partner == hers ? 2 : 1;
+            m.px = view_x(partner);
+            m.py = view_y(partner);
         }
     }
     std::lock_guard lock{g_marker_mutex};
@@ -710,7 +919,12 @@ void tick(uint8_t* rdram) {
         px = (MEM_W(0x88, a) - dx) >> 16;
         py = (MEM_W(0x8C, a) - dy) >> 16;
     }
-    const bool away = px > kLeashX || px < -kLeashX || py > kLeashY || py < -kLeashY;
+    // Not while player 1 is out of the game's view as well: a scripted
+    // camera (a boss's introduction, as Migen's) looks away from both.
+    const gpr m = addr(kActors);
+    const int mx = MEM_H(0x88, m), my = MEM_H(0x8C, m);
+    const bool p1_away = mx > kLeashX || mx < -kLeashX || my > kLeashY || my < -kLeashY;
+    const bool away = !p1_away && (px > kLeashX || px < -kLeashX || py > kLeashY || py < -kLeashY);
     int32_t away_frames = away ? MEM_W(0, addr(kP2AwayTimer)) + 1 : 0;
     if (away_frames >= kLeashFrames) {
         std::fprintf(stderr, "[player2] too far from player 1, rejoining\n");

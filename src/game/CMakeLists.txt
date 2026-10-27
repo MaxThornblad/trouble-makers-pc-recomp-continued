@@ -43,6 +43,7 @@ add_executable(troublemakers
     player2.cpp
     player2_draw.cpp
     player2_camera.cpp
+    player2_lead.cpp
     netplay.cpp
     steam_net.cpp
     net_enet.cpp

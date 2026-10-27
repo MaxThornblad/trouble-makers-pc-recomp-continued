@@ -255,6 +255,68 @@ the game gets a second camera for player 2, so neither is held to the other:
   player 2 crossing the whole first desert stage on her own with its enemies
   and blocks, while player 1's picture is unchanged.
 
+## Fourth round: one health bar, gems, stars and exits for both
+
+- **One health bar.** Player 2 starts each update with player 1's health
+  (the HUD's) and what her update did to it (a hit, a gem) goes back to
+  player 1's record: both play on one bar, and the game's own defeat ends it
+  for both.
+- **Gems for player 2.** Stage gems are item records the game collects
+  against Marina's hitbox only (func_800446F0 from func_800451E4), gems from
+  enemies are type-8 actors caught the same way. One that player 2 touches
+  goes to player 1's hitbox that frame, where the game collects it for the
+  team.
+- **Marina's request word is per player.** 0x800BE5F4 is a mailbox: what a
+  star teleporter asks of whoever holds it, and the flight Marina's update
+  then asks of herself, taken up by her next update. Shared, player 1 took
+  up player 2's requests (and flew instead of her), and player 2 took up the
+  stage's requests to player 1. It is now in player 2's copy of Marina's
+  globals (at the end of the list, so earlier offsets keep their place).
+- **The lead swap (src/game/player2_lead.cpp).** Some of the game answers
+  to slot 0 alone: a star's flight and the camera that follows it carry slot
+  0, and stage scripts may check slot 0's position. When player 2 does
+  something only the lead can, the two players swap characters: records,
+  Marina's globals, this frame's controls, and (far apart) cameras; from
+  then on Input_Update reads player 2's controller entry as player 1's. Each
+  person keeps playing the same character in the same place, and the tint,
+  the "2P" tag, the arrow and each machine's picture follow the person (the
+  host's machine builds the second picture while player 2 leads). Triggers,
+  all from game memory: player 2's character going into the star flight
+  (0x0301); and a probe every 4 frames (every frame while player 2 presses a
+  button or holds up) that runs the gameplay frame from a copy with the
+  characters swapped and puts memory back exactly; if that frame starts a
+  transition (the game state, the scene, the room-transition mode or target)
+  and the frame as it is does not (or does only with player 2's controller),
+  the two swap before the real frame. The lead stays 1.5 s before it may
+  change again, and goes back to player 1 with the next scene. A probe costs
+  about 1 ms on a 2.1 GHz Xeon (the game's 4.5 MB and player 2's block are
+  copied and compared), so about 0.3 ms a frame on average.
+- **Fixes found on the way.** The frame's matrix arena pointer (0x800EF4F4)
+  sat in Marina's globals and went stale in player 2's copy; it is no longer
+  copied in. When player 2 held something her held object updated with her
+  camera, and player 1 came back from the wait with a copy taken under the
+  other camera: she jumped 156 px when player 2 grabbed a star; she now comes
+  back from her rebased record. A boss's introduction (Migen) looks away from
+  both players; player 2 was taken for left behind and rejoined every few
+  seconds: the leash now waits while player 1 is out of view as well.
+- **Checked:** the star in 1-1's block pyramid flies player 2 (only her)
+  while player 1 stays at the start; the 2-3 stars move both players to the
+  next area; a boss with both players far-apart rules on (Lunar, 3-8,
+  fought and beaten; player 2 away from the arena and back in it); parallax backgrounds in player
+  2's picture match player 1's at the same spot; bot scenarios lead-star,
+  lead-controls and net-lead (identical fingerprints on both machines across
+  a swap).
+- **Not done: sounds by each machine's own camera.** The game decides
+  whether and how loud a sound plays from the game's camera
+  (Sound_PlaySfxAtActor: within +-0x90 x +-0x60 of it, pan and volume from
+  Sound_CalculatePanVol), and the sound engine's channels live in game
+  memory: the handle goes back to the actor that asked, and later code stops
+  or moves the sound by it. A machine deciding by its own camera would change
+  game memory on that machine alone. So both machines hear what is near the
+  game's camera (the lead's). Doing it per machine needs the sound engine's
+  state taken out of the shared memory (its own copy per machine, with the
+  game seeing the same handles on both), a bigger change.
+
 ## Transports: ENet and Steam
 
 `net_transport.h` is the connection netplay runs over: one partner, two
@@ -281,7 +343,8 @@ session resync once a second. Two no-ops now take their place.
 
 `tools/coop_bots.py` runs scripted two-player scenarios in the headless build
 (separating, carrying both ways, both grabbing, carry-jump-throw, random fuzz
-from eight save states) and netplay sessions between two processes, and checks
+from eight save states, far apart, the lead swap) and netplay sessions
+between two processes, and checks
 every frame: no position jumps, both on the shared screen, a carrier always
 carries a live object, bounded rejoins; online also identical fingerprints and
 no resync. It prints one line per scenario and ALL OK.

@@ -41,8 +41,10 @@ namespace mm::faraway {
 // test locally, with player 2 in the stage). Game thread.
 bool active(uint8_t* rdram);
 
-// Inside the shadow frame (host hooks with state of their own sit it out).
+// Inside a frame that is thrown away: the shadow frame, or a lead probe
+// (player2_lead.cpp). Host hooks with state of their own sit it out.
 bool in_shadow();
+void set_probing(bool on);
 
 // The roles are swapped: the game's camera follows player 2 (shadow frame).
 bool swapped();
@@ -59,7 +61,13 @@ bool p2_camera_offset(uint8_t* rdram, int32_t& dx, int32_t& dy);
 // again from the game's camera.
 void reset(uint8_t* rdram);
 
-// This machine shows player 2's camera (netplay guest, or MM_FAR_SHADOW=1).
-bool shows_p2_view(uint8_t* rdram);
+// This machine shows the second camera, the one following player 2's slot:
+// its person plays that slot (the netplay guest, or the host while player 2
+// leads, player2.h), or MM_FAR_SHADOW=1.
+bool shows_second_view(uint8_t* rdram);
+
+// Swap the game's camera with the second one, keeping world positions (the
+// two players swapped characters, player2_lead.cpp). Between frames.
+void exchange_cameras(uint8_t* rdram);
 
 } // namespace mm::faraway

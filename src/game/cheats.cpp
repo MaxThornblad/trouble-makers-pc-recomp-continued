@@ -11,6 +11,7 @@
 
 #include "gem_compass.h"
 #include "grab_blocks.h"
+#include "player2.h"
 
 extern "C" int mm_far_in_shadow(void);
 #include "inspector.h"
@@ -457,6 +458,7 @@ extern "C" void mm_item_list_hook(uint8_t* rdram, uint32_t list) {
     if (mm_far_in_shadow()) return;
     mm::gem_compass::scan_items(rdram, list);
     mm::grab_blocks::on_item_list(rdram, list);
+    mm::player2::collect_pickups(rdram, list);
     mm::inspector::note_item_list(list);
     mm::cheats::gem_magnet(rdram, list);
 }

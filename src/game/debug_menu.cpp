@@ -501,7 +501,7 @@ extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
     mm::actors::tick(rdram);
     mm::player2::tick(rdram);
     mm::dev_harness::tick(rdram);
-    if (!mm::faraway::shows_p2_view(rdram)) mm::enemy_bars::publish(rdram);
+    if (!mm::faraway::shows_second_view(rdram)) mm::enemy_bars::publish(rdram);
     mm::cheats::set_active(g_enabled.load(std::memory_order_acquire));
     if (g_enabled.load(std::memory_order_acquire)) mm::inspector::publish(rdram);
 

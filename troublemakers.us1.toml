@@ -290,6 +290,14 @@ hook = [
     { func = "func_8001EC1C", before_vram = 0x8001F884, text = '{ extern void mm_p2_contacts_end(uint8_t*); mm_p2_contacts_end(rdram); }' },
     # Co-op: while player 2 carries player 1, player 1's update runs after player 2's (player2.cpp).
     { func = "func_8004ED10", text = '{ extern int mm_marina_update_hook(uint8_t*); if (mm_marina_update_hook(rdram)) return; }' },
+    # Co-op lead swap (src/game/player2_lead.cpp): player 2 can take slot 0
+    # (exits, doors and teleporters answer to it). Input_Update, after both
+    # controller reads: her controller entry is read as player 1's while she
+    # leads. GameState_Gameplay's entry: the swaps and the probe.
+    { func = "Input_Update", before_vram = 0x80001000, text = '{ extern void mm_lead_route_pads(uint8_t*); mm_lead_route_pads(rdram); }' },
+    { func = "GameState_Gameplay", text = '{ extern void mm_lead_frame(uint8_t*, recomp_context*); mm_lead_frame(rdram, ctx); }' },
+    # Test (player2_lead.cpp, MM_TRACE_STARS): the star teleporters.
+    { func = "func_800418A8", text = '{ extern void mm_test_star(uint8_t*, uint32_t); mm_test_star(rdram, (uint32_t)ctx->r4); }' },
     # Test (dev_harness.cpp, MM_TEST_P1DIFF): what Marina's update writes.
     # Far-apart co-op (src/game/far_coop.cpp): a second camera for player 2,
     # the world kept alive around it, each actor run with its nearest camera.

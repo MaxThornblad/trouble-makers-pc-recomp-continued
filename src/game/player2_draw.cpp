@@ -156,11 +156,11 @@ void draw_overlay() {
             const ImVec2 dir(fx / len, -fy / len), side(-dir.y, dir.x);
             const float as = std::max(8.0f, 7.0f * scale);
             const ImVec2 back(tip.x - dir.x * as, tip.y - dir.y * as);
-            const ImU32 col = m.partner_is_p1 ? IM_COL32(220, 60, 60, 230) : IM_COL32(20, 90, 200, 230);
+            const ImU32 col = m.partner_person == 1 ? IM_COL32(220, 60, 60, 230) : IM_COL32(20, 90, 200, 230);
             dl->AddTriangleFilled(tip, ImVec2(back.x + side.x * as * 0.6f, back.y + side.y * as * 0.6f),
                                   ImVec2(back.x - side.x * as * 0.6f, back.y - side.y * as * 0.6f), col);
             char label[32];
-            std::snprintf(label, sizeof label, "%s %dm", m.partner_is_p1 ? "1P" : "2P", static_cast<int>(len / 16.0f));
+            std::snprintf(label, sizeof label, "%s %dm", m.partner_person == 1 ? "1P" : "2P", static_cast<int>(len / 16.0f));
             ImFont* f = ImGui::GetFont();
             const float size = std::max(10.0f, 5.0f * scale);
             const ImVec2 ts = f->CalcTextSizeA(size, FLT_MAX, 0.0f, label);

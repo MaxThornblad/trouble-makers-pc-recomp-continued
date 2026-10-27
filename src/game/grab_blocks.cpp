@@ -139,12 +139,13 @@ void on_item_list(uint8_t* rdram, uint32_t list) {
         std::fprintf(stderr, "[gb-debug] p1 %d,%d blocks:", cx + MEM_H(0x88, slot_addr(0)), cy + MEM_H(0x8C, slot_addr(0)));
         uint32_t l = list;
         int shown = 0;
-        for (int i = 0; i < kMaxItems && shown < 12; ++i, l += 6) {
+        for (int i = 0; i < kMaxItems && shown < 40; ++i, l += 6) {
             const uint16_t kind = MEM_HU(0, addr(l));
             if (kind == 0) break;
             if ((kind & 0xC000u) != 0 || shape_of(rdram, kind) == nullptr) continue;
             const int bx = MEM_HU(2, addr(l)), by = MEM_HU(4, addr(l));
-            if (std::abs(bx - cx) > 400) continue;
+            static const bool red_only = std::getenv("MM_GB_DEBUG_RED") != nullptr;
+            if (red_only ? (kind & 0xF) != 1 : std::abs(bx - cx) > 400) continue;
             std::fprintf(stderr, " %03X@%d,%d", kind, bx, by);
             ++shown;
         }

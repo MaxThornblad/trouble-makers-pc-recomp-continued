@@ -43,8 +43,26 @@ void held_swap_end(uint8_t* rdram);
 // ended, far_coop.cpp).
 void bring_back(uint8_t* rdram);
 
+// The stage's item list, before the game handles it (func_800451E4): gems
+// player 2 touches go to player 1, who collects them for both.
+void collect_pickups(uint8_t* rdram, uint32_t list);
+
+// Test: put player 2 at a world position (Q16.16).
+void place_test(uint8_t* rdram, int32_t x, int32_t y);
+
 // Slot of the live player 2, or -1.
 int slot(uint8_t* rdram);
+
+// Who plays which character. Slot 0 (the game's Marina) is the lead: what
+// stage scripts, doors and teleporters answer to. Normally player 1; when
+// player 2 does something only the lead can (walks into an exit, rides a
+// star teleporter), the two swap characters (player2_lead.cpp): their
+// controllers, tint, tags and cameras follow the people. Back to player 1
+// with the next scene. Game memory, so replays and netplay carry it.
+bool lead_swapped(uint8_t* rdram);
+
+// After the actor loop: player 2's tint on slot 0 while she leads.
+void after_actors(uint8_t* rdram);
 
 // Game thread, once a frame (debug menu tick): with co-op on, player 2 joins
 // a moment into every scene, is pulled back next to player 1 after wandering
