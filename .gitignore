@@ -22,3 +22,6 @@ linuxdeploy*
 
 # Python bytecode (tools/*.py)
 __pycache__/
+
+# Written by the game at run time for Steam (src/game/steam_net.cpp)
+steam_appid.txt
