@@ -35,8 +35,11 @@ constexpr uint32_t kWorldX = 0x800BE5D8u, kWorldY = 0x800BE5DCu;   // Marina's w
 struct Range {
     uint32_t start, size;
 };
-constexpr std::array<Range, 2> kCameraSet{{{0x800BE544u, 0x34u}, {0x800BE61Cu, 8u}}};
-constexpr uint32_t kSetSize = 0x3Cu;
+// 0x801782B0/B4: how far the camera leads ahead of Marina (func_80046498 and
+// func_8004667C ease it towards +-0x40 by her input and speed). Shared, the
+// two cameras pulled it each their way and player 2's lagged behind her.
+constexpr std::array<Range, 3> kCameraSet{{{0x800BE544u, 0x34u}, {0x800BE61Cu, 8u}, {0x801782B0u, 8u}}};
+constexpr uint32_t kSetSize = 0x44u;
 constexpr uint32_t kSetCamX = kCamX - 0x800BE544u;   // offsets of the centre inside the set
 constexpr uint32_t kSetCamY = kCamY - 0x800BE544u;
 
@@ -354,6 +357,9 @@ extern "C" void mm_far_after_camera(uint8_t* rdram, recomp_context* ctx) {
     if (locked && std::abs(tx - cx) < kNearX && std::abs(ty - cy) < kNearY) {
         std::memcpy(at(rdram, kStoreSet), loaded, kSetSize);
     } else {
+        // Whom it follows stands in for Marina, all of her: the camera leads
+        // by which way she faces and moves, not just where she is.
+        if (!g_swapped) mm::player2::stand_in_begin(rdram);
         write_set(rdram, at(rdram, kStoreSet));
         MEM_W(0, addr(kWorldX)) = tx;
         MEM_W(0, addr(kWorldY)) = ty;
@@ -369,6 +375,7 @@ extern "C" void mm_far_after_camera(uint8_t* rdram, recomp_context* ctx) {
         MEM_H(0, addr(kLockX)) = static_cast<int16_t>(lock_x);
         MEM_H(0, addr(kLockY)) = static_cast<int16_t>(lock_y);
         read_set(rdram, at(rdram, kStoreSet));
+        mm::player2::stand_in_end(rdram);
     }
     write_set(rdram, loaded);
     MEM_W(0x88, m) = m_x;
@@ -456,12 +463,30 @@ int holder_set(uint8_t* rdram, int slot) {
 } // namespace
 
 
+namespace {
+// Repeating scenery (docs/README.md 12.1): one copy of a tree, a dune panel,
+// that puts itself within 256 px of the camera every frame. It belongs to
+// whichever picture is being made: the game's camera (player 1's, or in the
+// shadow frame player 2's), never to the camera it happens to be nearest.
+// Run with the nearest, it stayed by player 1 and player 2's picture had no
+// foreground dunes or cacti.
+bool wrapping_scenery(uint8_t* rdram, int slot) {
+    const gpr a = slot_addr(slot);
+    const uint16_t type = MEM_HU(0xD2, a), state = MEM_HU(0xD0, a);
+    return (type == 0x181C && state == 2) || (type == 0x000D && state == 0x50);
+}
+} // namespace
+
 extern "C" void mm_far_actor(uint8_t* rdram, uint32_t slot) {
     const int s = static_cast<int>(slot & 0xFFFF);
     trace_exit(rdram, "actor", s);
     mm::player2::held_swap_begin(rdram, s);
     if (!g_frame_on) return;
     const int held = holder_set(rdram, s);
+    if (held < 0 && wrapping_scenery(rdram, s)) {
+        switch_to(rdram, 0);
+        return;
+    }
     switch_to(rdram, held >= 0 ? held : nearest(rdram, s));
 }
 

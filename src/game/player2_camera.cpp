@@ -15,12 +15,14 @@
 // carrying any shift the camera code applied meanwhile.
 namespace {
 bool g_camera_swapped = false;
+bool g_stood_in = false;
 int32_t g_saved_x, g_saved_y, g_saved_wx, g_saved_wy, g_mid_x, g_mid_y;
 }
 
 extern "C" void mm_camera_begin(uint8_t* rdram) {
     using namespace mm::player2;
     g_camera_swapped = false;
+    g_stood_in = false;
     if (mm::faraway::secondary_pass()) return;   // the second camera: its target is set up already
     if (!mm::cheats::coop_enabled()) return;
     const int p2 = slot(rdram);
@@ -29,6 +31,13 @@ extern "C" void mm_camera_begin(uint8_t* rdram) {
     // 2 in her machine's shadow frame; no midpoint.
     const bool far_apart = mm::faraway::active(rdram);
     if (far_apart && !mm::faraway::swapped()) return;
+    if (far_apart) {
+        // Player 2's own picture (the shadow frame): the camera follows her,
+        // all of her (which way she faces and moves), as it follows Marina.
+        stand_in_begin(rdram);
+        g_stood_in = true;
+        return;
+    }
     const gpr m = static_cast<gpr>(static_cast<int32_t>(0x800EF510u));
     const gpr b = static_cast<gpr>(static_cast<int32_t>(0x800EF510u + static_cast<uint32_t>(p2) * 0x198u));
     g_saved_x = MEM_W(0x88, m);
@@ -45,6 +54,11 @@ extern "C" void mm_camera_begin(uint8_t* rdram) {
 }
 
 extern "C" void mm_camera_end(uint8_t* rdram) {
+    if (g_stood_in) {
+        g_stood_in = false;
+        mm::player2::stand_in_end(rdram);
+        return;
+    }
     if (!g_camera_swapped) return;
     g_camera_swapped = false;
     const gpr m = static_cast<gpr>(static_cast<int32_t>(0x800EF510u));

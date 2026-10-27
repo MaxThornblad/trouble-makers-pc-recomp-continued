@@ -317,6 +317,26 @@ the game gets a second camera for player 2, so neither is held to the other:
   state taken out of the shared memory (its own copy per machine, with the
   game seeing the same handles on both), a bigger change.
 
+## Fixes from the first far-apart session
+
+- **Foreground scenery in player 2's picture.** The repeating trees, cacti
+  and dune panels (docs/README.md 12.1) are one copy each that puts itself
+  within 256 px of the camera every frame. Run with the camera it was
+  nearest to, it stayed by player 1, and player 2's picture had none (in 4:3,
+  whole patches of ground missing). They now always run with the game's
+  camera: player 1's in the real frame, player 2's in her shadow frame.
+- **The camera's look-ahead is per camera.** How far the camera leads
+  Marina (0x801782B0/B4, eased towards +-0x40 by her input and speed in
+  func_80046498 / func_8004667C) was shared: player 1's camera pulled it back
+  while player 2 ran, and hers lagged and settled off her. It is now part of
+  each camera's saved set, and both passes (the second camera's, and the
+  shadow frame's) run with all of player 2 standing in for Marina (record and
+  globals), not just her position.
+- **Player 2's health after a throw.** When she threw player 1, player 1's
+  next update wrote a value of its own (30) into player 2's health field,
+  kept from then on: the tag showed an all but empty bar. Her health is set
+  back to the shared bar at the end of each of her updates.
+
 ## Transports: ENet and Steam
 
 `net_transport.h` is the connection netplay runs over: one partner, two

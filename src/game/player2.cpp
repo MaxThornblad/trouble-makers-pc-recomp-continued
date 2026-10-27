@@ -318,6 +318,38 @@ void after_actors(uint8_t* rdram) {
     if (lead_swapped(rdram) && slot(rdram) > 0) tint(rdram, 0);
 }
 
+// Player 2 as Marina for a moment (the second camera's pass, far_coop.cpp):
+// her record in slot 0 and her globals in Marina's, player 1's kept aside.
+// The camera reads more of Marina than her position (which way she faces and
+// moves, for its look-ahead); with only her position it framed player 2 with
+// player 1's, lagging behind her and settling to her one side.
+namespace {
+struct StandIn {
+    bool on = false;
+    std::array<uint8_t, kStride> p1_record;
+    std::array<uint8_t, globals_size()> p1_globals;
+};
+StandIn g_stand_in;
+}
+
+void stand_in_begin(uint8_t* rdram) {
+    const int p2 = slot(rdram);
+    if (p2 <= 0 || g_stand_in.on) return;
+    g_stand_in.on = true;
+    std::memcpy(g_stand_in.p1_record.data(), slot_ptr(rdram, 0), kStride);
+    copy_globals_out(rdram, g_stand_in.p1_globals.data());
+    std::memcpy(slot_ptr(rdram, 0) + 0x80, slot_ptr(rdram, p2) + 0x80, kStride - 0x80);   // (not the render matrices)
+    MEM_H(0xD2, addr(kActors)) = static_cast<int16_t>(kMarinaType);
+    copy_globals_in(rdram, at(rdram, kP2Globals));
+}
+
+void stand_in_end(uint8_t* rdram) {
+    if (!g_stand_in.on) return;
+    g_stand_in.on = false;
+    std::memcpy(slot_ptr(rdram, 0), g_stand_in.p1_record.data(), kStride);
+    copy_globals_in(rdram, g_stand_in.p1_globals.data());
+}
+
 // Player 1's and player 2's controller entries trade places (Input_Update,
 // while player 2 leads): the game reads player 2's as player 1's.
 void route_pads(uint8_t* rdram) {
@@ -751,6 +783,12 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
         g_in_own_call = false;
         ctx->r4 = a0;
     }
+    // One health bar: hers is player 1's again. (Player 1's update just
+    // above, thrown by her, wrote a value of its own into her health field:
+    // 30, kept from then on, so her tag showed an all but empty bar.)
+    if (MEM_H(0xE0, addr(kActors)) > 0) {
+        MEM_H(0xE0, addr(kActors + static_cast<uint32_t>(slot) * kStride)) = MEM_H(0xE0, addr(kActors));
+    }
 }
 
 // Test (MM_P2_BISECT): the first time player 2 starts a grab (0x011F)
@@ -877,8 +915,8 @@ void tick(uint8_t* rdram) {
             std::fprintf(stderr, "[p2trace] p%d holds %02X type %04X st %04X at %d,%d fl %08X\n", who + 1, h, MEM_HU(0xD2, ha),
                          MEM_HU(0xD0, ha), MEM_W(0x88, ha) >> 16, MEM_W(0x8C, ha) >> 16, static_cast<uint32_t>(MEM_W(0x80, ha)));
         }
-        std::fprintf(stderr, "[p2trace] held_ok %d %d hp %d %d\n", held_ok(m), p2 >= 0 ? held_ok(b) : 1,
-                     MEM_H(0xE0, m), p2 >= 0 ? MEM_H(0xE0, b) : 0);
+        std::fprintf(stderr, "[p2trace] held_ok %d %d hp %d %d full %d\n", held_ok(m), p2 >= 0 ? held_ok(b) : 1,
+                     MEM_H(0xE0, m), p2 >= 0 ? MEM_H(0xE0, b) : 0, MEM_H(0, addr(kP2FullHealth)));
         std::fprintf(stderr, "[p2trace] %ld cam %d,%d p1 %d,%d st %04X fl %08X hold %04X | p2(%d) %d,%d st %04X fl %08X hold %04X\n",
                      n++, MEM_W(0, addr(kCameraX)) >> 16, MEM_W(0, addr(kCameraY)) >> 16,
                      MEM_W(0x88, m) >> 16, MEM_W(0x8C, m) >> 16, MEM_HU(0xD0, m), static_cast<uint32_t>(MEM_W(0x80, m)), MEM_HU(0xD6, m),
