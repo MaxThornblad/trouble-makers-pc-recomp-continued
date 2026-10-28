@@ -117,3 +117,38 @@ Looked at and left alone, with the reason:
 - Debug tools that change the game (the spawn tool in actors.cpp): phase 2
   turns those into commands in the input stream.
 - Netplay's own session state: not game state.
+
+## Phase 2: one input stream (src/game/frame_input.h)
+
+Today the game reaches its inputs by three different routes: a local game
+polls SDL whenever the game reads the controllers; a replay answers each
+poll from a list of recorded polls; netplay substitutes per-frame values
+through a filter. Settings reach the game by a fourth: atomics toggled from
+the menu thread at any moment, with netplay sending the host's once per
+frame. Debug actions (warps, the spawn tool) are a fifth. Every one of these
+has to be made deterministic, replayable and rollback-safe on its own, and
+each time one is forgotten there is a bug (the cheats that could not be
+toggled online; a warp that a replay cannot reproduce).
+
+The design: everything that can change the game in a frame is one value,
+`frame_input::Frame`, built once at the frame point from the active source
+and latched for the frame:
+
+- both controllers (buttons, stick, connected);
+- the settings in force (`cheats::SessionSettings`: cheats, live, hold to
+  dash, gem hints, widescreen);
+- up to a few commands: a warp, a spawn, a clear of spawned actors.
+
+Sources: *local* (SDL pads sampled at the frame point, the local settings,
+debug requests queued by the menu), *replay* (frames from the recording, one
+per frame, so a rewind is an index), *netplay* (the local pad merged with
+the partner's for that frame number; the host's settings and commands
+travel in its input packet, as the settings already do). The game's
+controller reads return the latched pads, the cheats read the latched
+settings, and the commands run at the latch. A new cheat, option or debug
+action is then automatically the same on both machines, in every replay,
+and across a rollback, with no netcode of its own.
+
+What changes for the player: nothing visible. A menu toggle takes effect at
+the next frame rather than mid-frame; a joiner's own warps and spawns are
+refused during a session as its cheats already are.
