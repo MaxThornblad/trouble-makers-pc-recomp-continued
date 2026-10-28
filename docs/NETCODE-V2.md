@@ -152,3 +152,14 @@ and across a rollback, with no netcode of its own.
 What changes for the player: nothing visible. A menu toggle takes effect at
 the next frame rather than mid-frame; a joiner's own warps and spawns are
 refused during a session as its cheats already are.
+
+Built (2026-10-28): `frame_input.{h,cpp}`. The game's controller reads go
+through one permanent filter that returns the latched pads; replays record
+one Frame per frame (input.bin, v2; a rewind is `feed(frame)`); netplay's
+input packet is one side's Frame contribution (protocol 3) and `run_frame`
+latches the merged frame; the debug menu's warp and the spawn tool are
+commands; cheats read the latched settings in every mode (`SessionSettings`
+grew a `coop` flag so a local game is not mistaken for an online one). One
+lesson from the tests: the bots' pad script for online runs must apply to
+session frames only, or the host's game has already changed by the time
+the session starts.

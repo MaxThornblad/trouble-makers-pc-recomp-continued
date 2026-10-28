@@ -70,13 +70,15 @@ std::atomic<bool> g_active{false};
 std::filesystem::path g_path;
 std::mutex g_file_mutex;
 
-// Netplay session settings (set_session_settings): while present they stand
-// in for this player's own choices, so both machines run the same rules.
+// The settings in force this frame (set_session_settings, from the latched
+// frame: frame_input.h). Locally they are the player's own choices as of the
+// frame point; online the host's, so both machines run the same rules.
 std::atomic<bool> g_session{false};
 std::atomic<uint32_t> g_session_cheats{0};
 std::atomic<bool> g_session_active{false};
 std::atomic<bool> g_session_hold_dash{true};
 std::atomic<bool> g_session_gem_hints{true};
+std::atomic<bool> g_session_coop{false};
 std::atomic<bool> g_session_follow{false};   // this machine is the guest: the host's settings rule
 
 // The guest's menu cannot change what the host decides for the session.
@@ -633,7 +635,7 @@ void toggle_enemy_bars() {
 }
 
 bool coop_enabled() {
-    if (g_session.load(std::memory_order_acquire)) return true;   // netplay is co-op
+    if (g_session.load(std::memory_order_acquire)) return g_session_coop.load(std::memory_order_relaxed);
     return g_coop.load(std::memory_order_acquire);
 }
 
@@ -707,6 +709,7 @@ SessionSettings capture_session_settings() {
     out.active = g_active.load() ? 1 : 0;
     out.hold_dash = g_hold_dash.load() ? 1 : 0;
     out.gem_hints = g_gem_hints.load() ? 1 : 0;
+    out.coop = g_coop.load() ? 1 : 0;
     return out;
 }
 
@@ -721,11 +724,8 @@ void set_session_settings(const SessionSettings* settings, bool from_host) {
     g_session_active.store(settings->active != 0, std::memory_order_relaxed);
     g_session_hold_dash.store(settings->hold_dash != 0, std::memory_order_relaxed);
     g_session_gem_hints.store(settings->gem_hints != 0, std::memory_order_relaxed);
+    g_session_coop.store(settings->coop != 0, std::memory_order_relaxed);
     g_session.store(true, std::memory_order_release);
-}
-
-bool session_settings_active() {
-    return g_session.load(std::memory_order_acquire);
 }
 
 bool settings_from_host() {

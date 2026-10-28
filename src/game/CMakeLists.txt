@@ -51,6 +51,7 @@ add_executable(troublemakers
     net_delay.cpp
     rollback_test.cpp
     state_registry.cpp
+    frame_input.cpp
     widescreen.cpp
 )
 

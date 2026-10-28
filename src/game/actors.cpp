@@ -1,4 +1,5 @@
 #include "actors.h"
+#include "frame_input.h"
 
 #include <algorithm>
 #include <cstring>
@@ -50,8 +51,6 @@ struct Request {
     uint16_t type;
     uint32_t param;
 };
-std::vector<Request> g_spawn_queue;
-bool g_clear_requested = false;
 std::string g_last_result = "Nothing spawned yet";
 std::atomic<int> g_count{0};
 
@@ -72,15 +71,20 @@ bool alive(uint8_t* rdram, const Owned& o) {
 
 } // namespace
 
+// Requests go through the input stream (frame_input.h), so a spawn is on the
+// same frame in a replay and, online, the host's spawns reach both machines.
 void request_spawn(uint16_t type, uint32_t param) {
-    std::lock_guard lock{g_mutex};
-    if (g_spawn_queue.size() < 4) g_spawn_queue.push_back({type, param});
+    mm::frame_input::Command c;
+    c.kind = mm::frame_input::Cmd::Spawn;
+    c.a = type;
+    c.b = param;
+    mm::frame_input::request(c);
 }
 
 void request_clear() {
-    std::lock_guard lock{g_mutex};
-    g_clear_requested = true;
-    g_spawn_queue.clear();
+    mm::frame_input::Command c;
+    c.kind = mm::frame_input::Cmd::ClearSpawns;
+    mm::frame_input::request(c);
 }
 
 int spawned_count() {
@@ -227,10 +231,14 @@ void tick(uint8_t* rdram) {
     std::vector<Request> queue;
     bool clear = false;
     {
-        std::lock_guard lock{g_mutex};
-        queue.swap(g_spawn_queue);
-        clear = g_clear_requested;
-        g_clear_requested = false;
+        mm::frame_input::Command c;
+        while (mm::frame_input::take_command(mm::frame_input::Cmd::Spawn, &c)) {
+            queue.push_back({static_cast<uint16_t>(c.a), c.b});
+        }
+        if (mm::frame_input::take_command(mm::frame_input::Cmd::ClearSpawns, &c)) {
+            clear = true;
+            queue.clear();
+        }
     }
 
     g_owned.erase(std::remove_if(g_owned.begin(), g_owned.end(),

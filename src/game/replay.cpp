@@ -1,5 +1,6 @@
 #include "replay.h"
 #include "rollback_test.h"
+#include "frame_input.h"
 #include "state_registry.h"
 
 #include <algorithm>
@@ -63,15 +64,9 @@ constexpr std::array<Range, 4> kRendererRanges{{
     {0x80460000u, 0x80480000u},   // frame arenas: display lists and view matrices
 }};
 
-struct Poll {
-    uint32_t frame;
-    uint8_t controller;
-    uint8_t connected;
-    uint16_t buttons;
-    float x;
-    float y;
-};
-static_assert(sizeof(Poll) == 16);
+// A recording: one frame_input::Frame per frame in input.bin (what the game
+// was given at each frame point: both pads, the settings, any commands).
+using Frame = mm::frame_input::Frame;
 
 std::filesystem::path g_folder;
 std::atomic<Mode> g_mode{Mode::Idle};
@@ -83,107 +78,27 @@ std::atomic<Request> g_request{Request::None};
 
 // Game thread only from here on.
 std::filesystem::path g_dir;
-std::vector<Poll> g_polls;           // recorded (Recording) or to answer (Playing)
-size_t g_cursor = 0;
-bool g_poll_mismatch_reported = false;
+std::vector<Frame> g_frames;         // to play
 std::ofstream g_hash_out;
-std::ofstream g_input_out;           // recording: polls as they happen
+std::ofstream g_input_out;           // recording: frames as they are latched
 size_t g_recorded = 0;
 std::vector<uint64_t> g_expected;    // recorded hashes while playing, kBlocks per frame
 long g_length = -1;
 std::vector<long> g_dumps;
 long g_global_frame = 0;
 
-// Synthetic pad script (recording only).
-struct PadStep { long frames; uint16_t buttons; float x, y; };
-std::vector<PadStep> g_pad;
-std::vector<PadStep> g_pad2;    // controller 2 (player 2)
-
-constexpr uint16_t kA = 0x8000, kB = 0x4000, kZ = 0x2000, kStart = 0x1000;
-constexpr uint16_t kDUp = 0x0800, kDDown = 0x0400, kDLeft = 0x0200, kDRight = 0x0100;
-
-void parse_pad(const char* script, std::vector<PadStep>& g_pad) {
-    g_pad.clear();
-    for (const char* p = script; p && *p;) {
-        PadStep step{0, 0, 0.0f, 0.0f};
-        step.frames = std::strtol(p, const_cast<char**>(&p), 10);
-        if (*p == ':') ++p;
-        for (; *p && *p != ','; ++p) {
-            switch (*p) {
-                case 'A': step.buttons |= kA; break;
-                case 'B': step.buttons |= kB; break;
-                case 'Z': step.buttons |= kZ; break;
-                case 'S': step.buttons |= kStart; break;
-                case 'U': step.y = 1.0f; break;
-                case 'D': step.y = -1.0f; break;
-                case 'L': step.x = -1.0f; break;
-                case 'R': step.x = 1.0f; break;
-                case 'u': step.buttons |= kDUp; break;
-                case 'd': step.buttons |= kDDown; break;
-                case 'l': step.buttons |= kDLeft; break;
-                case 'r': step.buttons |= kDRight; break;
-                default: break;
-            }
-        }
-        if (*p == ',') ++p;
-        g_pad.push_back(step);
-    }
-}
-
-bool pad_input(const std::vector<PadStep>& pad, long frame, uint16_t* buttons, float* x, float* y) {
-    long at = 0;
-    for (const PadStep& s : pad) {
-        if (frame < at + s.frames) {
-            *buttons = s.buttons;
-            *x = s.x;
-            *y = s.y;
-            return true;
-        }
-        at += s.frames;
-    }
-    *buttons = 0;
-    *x = 0.0f;
-    *y = 0.0f;
-    return true;
-}
-
-bool filter(int controller, uint16_t* buttons, float* x, float* y) {
-    const long frame = g_frame.load(std::memory_order_relaxed);
-    const Mode mode = g_mode.load(std::memory_order_relaxed);
-    if (mode == Mode::Recording) {
-        bool connected = controller == 0;
-        if (controller == 0 && !g_pad.empty()) connected = pad_input(g_pad, frame, buttons, x, y);
-        if (controller == 1 && !g_pad2.empty()) connected = pad_input(g_pad2, frame, buttons, x, y);
-        if (!connected) {
-            *buttons = 0;
-            *x = *y = 0.0f;
-        }
-        const Poll poll{static_cast<uint32_t>(frame), static_cast<uint8_t>(controller),
-                        static_cast<uint8_t>(connected ? 1 : 0), *buttons, *x, *y};
-        g_input_out.write(reinterpret_cast<const char*>(&poll), sizeof poll);
+// The frame the game is given at frame point `frame`.
+void feed(long frame) {
+    if (g_mode.load() == Mode::Recording) {
+        const Frame f = mm::frame_input::sample_local(frame);
+        g_input_out.write(reinterpret_cast<const char*>(&f), sizeof f);
         ++g_recorded;
-        return connected;
+        mm::frame_input::latch(f, false);
+    } else if (g_mode.load() == Mode::Playing) {
+        Frame f;
+        if (frame >= 0 && static_cast<size_t>(frame) < g_frames.size()) f = g_frames[static_cast<size_t>(frame)];
+        mm::frame_input::latch(f, false);
     }
-    if (mode == Mode::Playing) {
-        if (g_cursor < g_polls.size()) {
-            const Poll& p = g_polls[g_cursor++];
-            if ((p.frame != static_cast<uint32_t>(frame) || p.controller != controller) &&
-                !g_poll_mismatch_reported) {
-                g_poll_mismatch_reported = true;
-                std::fprintf(stderr,
-                    "[replay] poll %zu: recorded at frame %u controller %u, now frame %ld controller %d\n",
-                    g_cursor - 1, p.frame, p.controller, frame, controller);
-            }
-            *buttons = p.buttons;
-            *x = p.x;
-            *y = p.y;
-            return p.connected != 0;
-        }
-        *buttons = 0;
-        *x = *y = 0.0f;
-        return controller == 0;
-    }
-    return controller == 0;
 }
 
 uint64_t hash_block(const uint8_t* p) {
@@ -259,17 +174,18 @@ void stop(const char* why) {
     mm_virtual_audio_clock(false);
     ultramodern::set_deterministic_events(false);
     if (mode == Mode::Playing) recomp::end_save_sandbox();
-    mm_audio_input::set_input_filter(nullptr);
+    mm::frame_input::set_pad_script(0, nullptr);
+    mm::frame_input::set_pad_script(1, nullptr);
     g_mode.store(Mode::Idle);
-    std::fprintf(stderr, "[replay] %s stopped (%s) after %ld frames, %zu polls%s\n",
+    std::fprintf(stderr, "[replay] %s stopped (%s) after %ld frames, %zu frame inputs%s\n",
                  mode == Mode::Recording ? "recording" : "playback", why, g_frame.load(),
-                 mode == Mode::Recording ? g_recorded : g_cursor,
+                 mode == Mode::Recording ? g_recorded : g_frames.size(),
                  mode == Mode::Playing
                      ? (g_first_mismatch.load() < 0 ? "; memory matched every frame"
                                                     : ("; memory first differed at frame " +
                                                        std::to_string(g_first_mismatch.load())).c_str())
                      : "");
-    g_polls.clear();
+    g_frames.clear();
     g_expected.clear();
 }
 
@@ -298,24 +214,23 @@ bool start_recording(uint8_t* rdram, recomp_context* ctx, const std::filesystem:
         f.write(reinterpret_cast<const char*>(save.data()), static_cast<std::streamsize>(save.size()));
     }
     g_dir = dir;
-    g_polls.clear();
-    g_cursor = 0;
+    g_frames.clear();
     g_frame.store(0);
     g_first_mismatch.store(-1);
     g_hash_out.open(dir / "hashes.bin", std::ios::binary | std::ios::trunc);
     g_input_out.open(dir / "input.bin", std::ios::binary | std::ios::trunc);
     g_recorded = 0;
-    if (const char* pad = std::getenv("MM_REPLAY_PAD")) parse_pad(pad, g_pad);
-    if (const char* pad = std::getenv("MM_REPLAY_PAD2")) parse_pad(pad, g_pad2);
+    mm::frame_input::set_pad_script(0, std::getenv("MM_REPLAY_PAD"));
+    mm::frame_input::set_pad_script(1, std::getenv("MM_REPLAY_PAD2"));
     mm_virtual_audio_clock(true);
     g_mode.store(Mode::Recording);
-    mm_audio_input::set_input_filter(filter);
+    feed(0);
     std::fprintf(stderr, "[replay] recording into %s\n", dir.string().c_str());
     return true;
 }
 
 bool start_playing(uint8_t* rdram, recomp_context* ctx, const std::filesystem::path& dir) {
-    std::vector<Poll> polls;
+    std::vector<Frame> frames;
     {
         std::ifstream f(dir / "input.bin", std::ios::binary | std::ios::ate);
         if (!f) {
@@ -323,9 +238,9 @@ bool start_playing(uint8_t* rdram, recomp_context* ctx, const std::filesystem::p
             return false;
         }
         const auto size = static_cast<size_t>(f.tellg());
-        polls.resize(size / sizeof(Poll));
+        frames.resize(size / sizeof(Frame));
         f.seekg(0);
-        f.read(reinterpret_cast<char*>(polls.data()), static_cast<std::streamsize>(polls.size() * sizeof(Poll)));
+        f.read(reinterpret_cast<char*>(frames.data()), static_cast<std::streamsize>(frames.size() * sizeof(Frame)));
     }
     std::vector<uint64_t> expected;
     {
@@ -366,10 +281,8 @@ bool start_playing(uint8_t* rdram, recomp_context* ctx, const std::filesystem::p
 #endif
     }
     g_dir = dir;
-    g_polls = std::move(polls);
+    g_frames = std::move(frames);
     g_expected = std::move(expected);
-    g_cursor = 0;
-    g_poll_mismatch_reported = false;
     g_frame.store(0);
     g_first_mismatch.store(-1);
     std::error_code ec;
@@ -377,8 +290,8 @@ bool start_playing(uint8_t* rdram, recomp_context* ctx, const std::filesystem::p
     g_hash_out.open(dir / "play" / "hashes.bin", std::ios::binary | std::ios::trunc);
     mm_virtual_audio_clock(true);
     g_mode.store(Mode::Playing);
-    mm_audio_input::set_input_filter(filter);
-    std::fprintf(stderr, "[replay] playing %s (%zu polls)\n", dir.string().c_str(), g_polls.size());
+    feed(0);
+    std::fprintf(stderr, "[replay] playing %s (%zu frames)\n", dir.string().c_str(), g_frames.size());
     return true;
 }
 
@@ -428,16 +341,10 @@ uint64_t memory_fingerprint(uint8_t* rdram) {
 
 void rewind_to(long frame) {
     if (g_mode.load() != Mode::Playing) return;
-    // Polls made while the game ran the frame after frame point `frame` are
-    // tagged with it; the cursor goes back to the first of them.
-    size_t lo = 0, hi = g_polls.size();
-    while (lo < hi) {
-        const size_t mid = (lo + hi) / 2;
-        if (g_polls[mid].frame < static_cast<uint32_t>(frame)) lo = mid + 1;
-        else hi = mid;
-    }
-    g_cursor = lo;
+    // The game is back at frame point `frame`: it gets that frame's input
+    // again and the playback continues from there.
     g_frame.store(frame);
+    feed(frame);
 }
 
 void configure(const std::filesystem::path& folder) {
@@ -479,12 +386,13 @@ void on_frame(uint8_t* rdram, recomp_context* ctx) {
         if (g_length >= 0 && next > g_length) {
             stop("length reached");
             mode = Mode::Idle;
-        } else if (mode == Mode::Playing && g_cursor >= g_polls.size() &&
+        } else if (mode == Mode::Playing && static_cast<size_t>(next) >= g_frames.size() &&
                    static_cast<size_t>(next) * kBlocks > g_expected.size() && !g_expected.empty()) {
             stop("end of recording");
             mode = Mode::Idle;
         } else {
             g_frame.store(next);
+            feed(next);
         }
     }
 

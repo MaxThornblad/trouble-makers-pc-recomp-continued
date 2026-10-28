@@ -1,6 +1,7 @@
 #include "savestate.h"
 #include "audio_clock.h"
 #include "state_registry.h"
+#include "frame_input.h"
 #include "netplay.h"
 
 #include <algorithm>
@@ -845,6 +846,7 @@ extern "C" void mm_savestate_frame_hook(unsigned char* rdram, recomp_context* ct
 
     mm::replay::on_frame(rdram, ctx);
     mm::netplay::on_frame(rdram, ctx);
+    mm::frame_input::tick(rdram);   // the local source, when neither of those latched a frame
     const Op op = static_cast<Op>(g_pending_op.exchange(static_cast<int>(Op::None)));
     if (op == Op::None) return;
     const int slot = g_pending_slot.load();

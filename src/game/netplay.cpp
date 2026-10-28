@@ -16,6 +16,7 @@
 
 
 #include "cheats.h"
+#include "frame_input.h"
 #include "net_delay.h"
 #include "net_transport.h"
 #include "librecomp/game.hpp"
@@ -44,14 +45,14 @@ namespace {
 // ---------------------------------------------------------------- protocol
 
 constexpr uint32_t kMagic = 0x504E4D54u;   // "TMNP"
-constexpr uint32_t kProtocol = 2;   // 2: the host's settings ride with its input
+constexpr uint32_t kProtocol = 3;   // 3: one side's frame_input (pad, settings, commands) per input
 // Channels: 0 control (hello, refuse, desync), 1 start + input + fingerprints + pings.
 constexpr int kHashEvery = 60;             // frames between fingerprint checks
 
 enum Msg : uint8_t {
     kHello = 1,    // guest -> host: magic, protocol, build
     kStart = 2,    // host -> guest: epoch, delay, settings, eeprom, state
-    kInput = 3,    // both: epoch, frame, buttons, x, y, settings (the host's; zero from the guest)
+    kInput = 3,    // both: epoch, frame, pad, settings and commands (the host's count; the guest's are ignored)
     kHash = 4,     // both: epoch, frame, fingerprint
     kDesync = 5,   // guest -> host: epoch, frame (please resync)
     kRefuse = 6,   // host -> guest: reason text
@@ -100,29 +101,39 @@ uint64_t now_us() {
 
 // ------------------------------------------------------------------- state
 
+// One side's contribution to a frame: its pad, and (the host) the settings
+// and commands in force for that frame, so a menu change on the host takes
+// effect on both machines on the same frame.
 struct Input {
-    uint16_t buttons = 0;
-    int8_t x = 0, y = 0;
-    // The host's cheats and settings for this frame (SessionSettings), so a
-    // change in its menu takes effect on both machines on the same frame.
-    uint32_t cheats = 0;
-    uint8_t flags = 0;   // kFlag*
+    mm::frame_input::Pad pad;
+    mm::cheats::SessionSettings settings;
+    uint8_t command_count = 0;
+    mm::frame_input::Command commands[mm::frame_input::kMaxCommands];
 };
-constexpr uint8_t kFlagActive = 1, kFlagHoldDash = 2, kFlagGemHints = 4;
 
-void put_settings(Input& in, const mm::cheats::SessionSettings& s) {
-    in.cheats = s.cheats;
-    in.flags = static_cast<uint8_t>((s.active ? kFlagActive : 0) | (s.hold_dash ? kFlagHoldDash : 0) |
-                                    (s.gem_hints ? kFlagGemHints : 0));
+void write_input(Writer& w, const Input& in) {
+    w.put(in.pad);
+    w.put(in.settings);
+    w.put(in.command_count);
+    for (int i = 0; i < in.command_count && i < mm::frame_input::kMaxCommands; ++i) w.put(in.commands[i]);
 }
 
-mm::cheats::SessionSettings settings_of(const Input& in) {
-    mm::cheats::SessionSettings s;
-    s.cheats = in.cheats;
-    s.active = (in.flags & kFlagActive) ? 1 : 0;
-    s.hold_dash = (in.flags & kFlagHoldDash) ? 1 : 0;
-    s.gem_hints = (in.flags & kFlagGemHints) ? 1 : 0;
-    s.widescreen = 1;   // online play is always widescreen
+bool read_input(Reader& r, Input& in) {
+    if (!r.get(in.pad) || !r.get(in.settings) || !r.get(in.command_count)) return false;
+    if (in.command_count > mm::frame_input::kMaxCommands) return false;
+    for (int i = 0; i < in.command_count; ++i) {
+        if (!r.get(in.commands[i])) return false;
+    }
+    return true;
+}
+
+// The host's settings for the session: its own, with the rules online play
+// imposes (always widescreen: each player's own view moves the picture
+// sideways and the wings keep the moved edges filled; always co-op).
+mm::cheats::SessionSettings host_settings() {
+    mm::cheats::SessionSettings s = mm::cheats::capture_session_settings();
+    s.widescreen = 1;
+    s.coop = 1;
     return s;
 }
 
@@ -156,9 +167,8 @@ uint32_t g_last_sent = 0;           // the last frame this side's input went out
 std::atomic<int> g_shown_ping{-1}, g_shown_delay{0};   // for the overlay (render thread)
 long g_long_waits = 0;              // frames this session that waited over a frame for the partner
 double g_longest_wait_ms = 0;
-long g_frame = 0;                   // session frame; inputs for it are in g_cur
+long g_frame = 0;                   // session frame
 std::map<uint32_t, Input> g_local, g_remote;
-Input g_cur[2];                     // this frame: controller 0 (host), 1 (guest)
 std::map<uint32_t, uint64_t> g_local_hash, g_remote_hash;
 uint32_t g_seen_load_generation = 0;
 int g_resyncs = 0;
@@ -172,9 +182,9 @@ std::vector<EnvSave> g_env_saved;
 constexpr const char* kWideEnv[] = {"MM_WIDESCREEN_ACTIVE", "MM_BAND_WINGS", "MM_STATIC_WINGS",
                                     "MM_ENV_WINGS", "MM_MID_WINGS"};
 
-// Test scripting.
-struct PadStep { long frames; uint16_t buttons; int8_t x, y; };
-std::vector<PadStep> g_pad;
+// Test scripting (MM_NET_PAD: frame_input's pad script for this side, for
+// the session's frames).
+const char* g_pad_script = nullptr;
 long g_length = -1;
 std::FILE* g_log = nullptr;
 
@@ -215,67 +225,31 @@ void restore_widescreen() {
     g_env_saved.clear();
 }
 
-void parse_pad(const char* script) {
-    g_pad.clear();
-    for (const char* p = script; p && *p;) {
-        PadStep step{0, 0, 0, 0};
-        step.frames = std::strtol(p, const_cast<char**>(&p), 10);
-        if (*p == ':') ++p;
-        for (; *p && *p != ','; ++p) {
-            switch (*p) {
-                case 'A': step.buttons |= 0x8000; break;
-                case 'B': step.buttons |= 0x4000; break;
-                case 'Z': step.buttons |= 0x2000; break;
-                case 'S': step.buttons |= 0x1000; break;
-                case 'u': step.buttons |= 0x0800; break;
-                case 'd': step.buttons |= 0x0400; break;
-                case 'l': step.buttons |= 0x0200; break;
-                case 'r': step.buttons |= 0x0100; break;
-                case 'U': step.y = 127; break;
-                case 'D': step.y = -127; break;
-                case 'L': step.x = -127; break;
-                case 'R': step.x = 127; break;
-                default: break;
-            }
-        }
-        if (*p == ',') ++p;
-        g_pad.push_back(step);
-    }
-}
-
+// This side's contribution for session frame `frame`: its pad (the host's
+// pad is controller 1, the guest's controller 2), and from the host the
+// settings and commands.
 Input local_input(long frame) {
+    const mm::frame_input::Frame f = mm::frame_input::sample_local(frame);
     Input in;
-    if (!g_pad.empty()) {
-        long at = 0;
-        for (const PadStep& s : g_pad) {
-            if (frame < at + s.frames) return Input{s.buttons, s.x, s.y};
-            at += s.frames;
-        }
-        return in;
-    }
-    uint16_t b = 0;
-    float x = 0, y = 0;
-    if (mm_audio_input::sample_local_input(&b, &x, &y)) {
-        in.buttons = b;
-        in.x = static_cast<int8_t>(std::lround(std::clamp(x, -1.0f, 1.0f) * 127.0f));
-        in.y = static_cast<int8_t>(std::lround(std::clamp(y, -1.0f, 1.0f) * 127.0f));
+    in.pad = f.pad[0];
+    if (g_is_host) {
+        in.settings = host_settings();
+        in.command_count = f.command_count;
+        for (int i = 0; i < f.command_count; ++i) in.commands[i] = f.commands[i];
     }
     return in;
 }
 
-// The game's controller polls during a session: both players' input for this
-// frame, whoever is local.
-bool filter(int controller, uint16_t* buttons, float* x, float* y) {
-    if (controller == 0 || controller == 1) {
-        const Input& in = g_cur[controller];
-        *buttons = in.buttons;
-        *x = in.x / 127.0f;
-        *y = in.y / 127.0f;
-        return true;
-    }
-    *buttons = 0;
-    *x = *y = 0.0f;
-    return false;
+// Hands the game both sides' contributions for frame f (frame_input.h).
+void latch_frame(const Input& host, const Input& guest) {
+    mm::frame_input::Frame f;
+    f.pad[0] = host.pad;
+    f.pad[1] = guest.pad;
+    f.pad[0].connected = f.pad[1].connected = 1;
+    f.settings = host.settings;
+    f.command_count = host.command_count;
+    for (int i = 0; i < host.command_count; ++i) f.commands[i] = host.commands[i];
+    mm::frame_input::latch(f, !g_is_host);
 }
 
 void send(int channel, const Writer& w) {
@@ -297,7 +271,7 @@ void reset_frames() {
     // The first `delay` frames have no input from either side yet: nothing
     // pressed, under the settings the session (re)started with.
     Input start;
-    put_settings(start, g_start_settings);
+    start.settings = g_start_settings;
     for (int f = 0; f < g_delay; ++f) {
         g_local[static_cast<uint32_t>(f)] = g_is_host ? start : Input{};
         g_remote[static_cast<uint32_t>(f)] = g_is_host ? Input{} : start;
@@ -311,8 +285,8 @@ void begin_running() {
         g_longest_wait_ms = 0;
     }
     reset_frames();
+    mm::frame_input::set_pad_script(0, g_pad_script);
     mm_virtual_audio_clock(true);
-    mm_audio_input::set_input_filter(filter);
     g_seen_load_generation = mm::savestate::load_generation();
     g_active.store(true);
     g_status.store(Status::Connected);
@@ -324,7 +298,7 @@ void end_session(const char* why) {
     if (was_active) {
         std::fprintf(stderr, "[netplay] frames that waited over a frame for the partner: %ld, longest %.0f ms\n",
                      g_long_waits, g_longest_wait_ms);
-        mm_audio_input::set_input_filter(nullptr);
+        mm::frame_input::set_pad_script(0, nullptr);
         mm_virtual_audio_clock(false);
         mm::cheats::set_session_settings(nullptr);
         restore_widescreen();
@@ -369,11 +343,7 @@ bool host_start(uint8_t* rdram, recomp_context* ctx) {
     const std::vector<uint8_t> eeprom = recomp::get_save_data();
     // The host's settings now; from here on each frame's input carries them,
     // so its menu changes reach both machines on the same frame.
-    mm::cheats::SessionSettings s_settings = mm::cheats::capture_session_settings();
-    // Online play is always widescreen: each player's own view moves the
-    // picture sideways, and the widescreen wings (and wider activity around
-    // the camera) keep the moved edges filled.
-    s_settings.widescreen = 1;
+    const mm::cheats::SessionSettings s_settings = host_settings();
     mm::cheats::set_session_settings(&s_settings);
     g_start_settings = s_settings;
     follow_widescreen(true);
@@ -484,9 +454,7 @@ void on_packet(uint8_t* rdram, recomp_context* ctx, const uint8_t* data, size_t 
         case kInput: {
             uint32_t epoch, frame;
             Input in;
-            if (!r.get(epoch) || !r.get(frame) || !r.get(in.buttons) || !r.get(in.x) || !r.get(in.y) ||
-                !r.get(in.cheats) || !r.get(in.flags))
-                return;
+            if (!r.get(epoch) || !r.get(frame) || !read_input(r, in)) return;
             if (epoch != g_epoch || !g_active.load()) return;
             if (static_cast<long>(frame) >= g_frame) g_remote[frame] = in;
             return;
@@ -670,18 +638,13 @@ void run_frame(uint8_t* rdram, recomp_context* ctx) {
     // frames in between get the same input; when it shrank, nothing goes out
     // until the frames already sent are passed.
     for (uint32_t ahead = g_last_sent + 1; ahead <= f + static_cast<uint32_t>(g_delay); ++ahead) {
-        Input in = local_input(static_cast<long>(ahead));
-        if (g_is_host) put_settings(in, mm::cheats::capture_session_settings());
+        const Input in = local_input(static_cast<long>(ahead));
         g_local[ahead] = in;
         Writer w;
         w.put<uint8_t>(kInput);
         w.put<uint32_t>(g_epoch);
         w.put<uint32_t>(ahead);
-        w.put(in.buttons);
-        w.put(in.x);
-        w.put(in.y);
-        w.put(in.cheats);
-        w.put(in.flags);
+        write_input(w, in);
         send(1, w);
         g_last_sent = ahead;
     }
@@ -770,17 +733,16 @@ void run_frame(uint8_t* rdram, recomp_context* ctx) {
     }
 
     const Input mine = g_local[f], theirs = g_remote[f];
-    g_cur[g_is_host ? 0 : 1] = mine;
-    g_cur[g_is_host ? 1 : 0] = theirs;
+    const Input& host = g_is_host ? mine : theirs;
+    const Input& guest = g_is_host ? theirs : mine;
+    latch_frame(host, guest);
     {
-        // The host's settings for this frame, on both machines.
-        const mm::cheats::SessionSettings s = settings_of(g_cur[0]);
-        mm::cheats::set_session_settings(&s, !g_is_host);
-        static Input s_last;
-        if (f > 0 && (g_cur[0].cheats != s_last.cheats || g_cur[0].flags != s_last.flags))
+        static mm::cheats::SessionSettings s_last;
+        if (f > 0 && std::memcmp(&host.settings, &s_last, sizeof s_last) != 0)
             std::fprintf(stderr, "[netplay] settings changed at frame %u (cheats %x, flags %x)\n", f,
-                         g_cur[0].cheats, g_cur[0].flags);
-        s_last = g_cur[0];
+                         host.settings.cheats,
+                         host.settings.active | host.settings.hold_dash << 1 | host.settings.gem_hints << 2);
+        s_last = host.settings;
     }
     g_local.erase(g_local.begin(), g_local.lower_bound(f));
     g_remote.erase(g_remote.begin(), g_remote.lower_bound(f));
@@ -895,7 +857,7 @@ void on_frame(uint8_t* rdram, recomp_context* ctx) {
             g_delay = std::clamp(std::atoi(d), 1, 30);
             g_delay_fixed = true;
         }
-        if (const char* p = std::getenv("MM_NET_PAD")) parse_pad(p);
+        g_pad_script = std::getenv("MM_NET_PAD");   // applied to session frames only (begin_running)
         if (const char* l = std::getenv("MM_NET_LENGTH")) g_length = std::strtol(l, nullptr, 10);
     }
     if (global == host_at) {

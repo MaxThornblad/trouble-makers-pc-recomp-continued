@@ -32,7 +32,7 @@ void set_input_filter(InputFilter filter);
 // This player's own controller 1 input right now (keyboard / first pad;
 // zero while a menu holds input), whatever the filter does. Netplay samples
 // it once per frame on the game thread.
-bool sample_local_input(uint16_t* buttons, float* x, float* y);
+bool sample_local_input(int controller, uint16_t* buttons, float* x, float* y);   // 0 or 1 (co-op)
 // Co-op: report controller 2 to the game (second game controller, or the
 // keyboard's T F G H / numpad, Y jump, U grab). Off = only controller 1, as
 // the game always had.

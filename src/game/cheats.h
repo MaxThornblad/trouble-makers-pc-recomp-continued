@@ -100,11 +100,12 @@ struct SessionSettings {
     uint8_t hold_dash = 1;
     uint8_t gem_hints = 1;
     uint8_t widescreen = 0;   // filled by netplay (not a cheats.cfg setting)
+    uint8_t coop = 0;         // a second player (online: always)
+    uint8_t pad_[3]{};
 };
 SessionSettings capture_session_settings();
 // from_host: this machine is the guest, so its menu cannot change these.
 void set_session_settings(const SessionSettings* settings, bool from_host = false);
-bool session_settings_active();
 bool settings_from_host();   // the guest in an online session: the host's settings rule
 
 } // namespace mm::cheats

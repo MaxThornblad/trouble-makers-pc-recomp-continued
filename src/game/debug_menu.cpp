@@ -13,6 +13,7 @@
 #include "rumble.h"
 #include "replay.h"
 #include "netplay.h"
+#include "frame_input.h"
 #include "player2.h"
 
 #include <algorithm>
@@ -157,7 +158,6 @@ int spawn_row_count() {
                 ? mm::spawn_catalog::kSafeTypeCount
                 : mm::spawn_catalog::kCatalogCount) + 2;
 }
-std::atomic<int> g_pending_warp{-1};
 std::atomic<int> g_current_stage{-1};
 std::atomic<int> g_current_scene{-1};
 std::atomic<int> g_current_game_state{-1};
@@ -340,9 +340,18 @@ void activate_selection() {
     if (page != kPageWarp) {
         return;
     }
-    g_pending_warp.store(
-        g_selected_warp.load(std::memory_order_relaxed),
-        std::memory_order_release);
+    {
+        // A command in the input stream (frame_input.h): the same frame in a
+        // replay, and online the host's warp reaches both machines.
+        const int i = g_selected_warp.load(std::memory_order_relaxed);
+        if (i >= 0 && i < static_cast<int>(kWarps.size())) {
+            mm::frame_input::Command c;
+            c.kind = mm::frame_input::Cmd::Warp;
+            c.a = kWarps[i].stage;
+            c.b = static_cast<uint32_t>(kWarps[i].scene);
+            mm::frame_input::request(c);
+        }
+    }
     close_overlay();
 }
 
@@ -524,13 +533,21 @@ extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
         static int frames = 0;
         if (++frames == 300) {
             for (int i = 0; i < static_cast<int>(kWarps.size()); ++i) {
-                if (std::string_view{kWarps[i].label} == test_warp) g_pending_warp.store(i);
+                if (std::string_view{kWarps[i].label} == test_warp) {
+                    mm::frame_input::Command c;
+                    c.kind = mm::frame_input::Cmd::Warp;
+                    c.a = kWarps[i].stage;
+                    c.b = static_cast<uint32_t>(kWarps[i].scene);
+                    mm::frame_input::request(c);
+                }
             }
         }
     }
-    const int selected = g_pending_warp.exchange(-1, std::memory_order_acq_rel);
-    if (selected >= 0 && selected < static_cast<int>(kWarps.size())) {
-        const WarpEntry& warp = kWarps[selected];
+    if (mm::frame_input::Command cmd; mm::frame_input::take_command(mm::frame_input::Cmd::Warp, &cmd)) {
+        WarpEntry warp{cmd.a, static_cast<int>(cmd.b), "?", "warp"};
+        for (const WarpEntry& w : kWarps) {
+            if (w.stage == warp.stage && w.scene == warp.scene) warp = w;
+        }
 
         // From this point through process exit, EEPROM writes become successful
         // no-ops. Reads still use the original on-disk save buffer, so a debug
@@ -629,7 +646,7 @@ void draw_overlay() {
                 "used for both players; only the host can change them. Your own "
                 "settings come back when you leave.");
             ImGui::PopStyleColor();
-        } else if (mm::cheats::session_settings_active()) {
+        } else if (mm::netplay::active()) {
             ImGui::TextWrapped("Online: your changes apply to both players a few frames later.");
         }
         ImGui::Spacing();
