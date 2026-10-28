@@ -1,4 +1,5 @@
 #include "far_coop.h"
+#include "replay.h"
 
 #include <algorithm>
 #include <chrono>
@@ -290,9 +291,14 @@ extern "C" void mm_far_after_camera(uint8_t* rdram, recomp_context* ctx) {
     }
     if (!in_shadow()) {   // test: MM_TEST_PLACE="<frame>:<x>,<y>[,2]" puts player 1 (or 2) at a world spot
         static const char* place = std::getenv("MM_TEST_PLACE");
-        static uint32_t frames = 0;
+        static uint32_t counted = 0;
         if (place && MEM_HU(0, addr(kGameState)) == 6) {
-            ++frames;
+            // In a replay, its frame: a rollback rewinds it with the game, so
+            // a playback places her on the same frame the recording did.
+            ++counted;
+            const uint32_t frames = mm::replay::mode() != mm::replay::Mode::Idle
+                                        ? static_cast<uint32_t>(mm::replay::frame()) + 1
+                                        : counted;
             unsigned long at = 0;
             int x = 0, y = 0, who = 1;
             if (std::sscanf(place, "%lu:%d,%d,%d", &at, &x, &y, &who) >= 3 && frames == at) {

@@ -10,6 +10,7 @@
 
 #include "recomp.h"
 #include "presentation.h"
+#include "state_registry.h"
 #include "ultramodern/config.hpp"
 #ifdef MM_HAS_GRAPHICS
 #include "mm_graphics.h"
@@ -167,7 +168,25 @@ int g_gameplay_wide_active = 0;
 // from scratch, so two processes that load the same state (a replay and its
 // recording, two netplay peers) track identically from there. The widescreen
 // state decides the expanded cull bounds, which the game logic sees.
-int g_ws_tracking_gen = 0;
+// The gameplay/cinema mode trackers (raw_gameplay_active and
+// mm_widescreen_sync_mode): their hysteresis decides when the expanded view,
+// and with it the wider actor activity, switches, so they are registered
+// state (state_registry.h): saved, sent to a joiner, restored by a rollback.
+struct WsMode {
+    // raw_gameplay_active
+    int previous_stage_time = -1;
+    int frames_since_stage_time_changed = 1000;
+    int tracked_scene = -1;
+    int gameplay_cinema_state = -1;
+    int cinema_candidate = -1;
+    int cinema_candidate_frames = 0;
+    // mm_widescreen_sync_mode
+    int previous_active = -1;
+    int candidate_active = -1;
+    int candidate_frames = 0;
+    bool was_paused = false;
+};
+mm::state::Pod<WsMode> g_ws_mode{"widescreen-mode", 1};
 float g_backdrop_stretch = 0.0f;
 
 // These gameplay scenes transform or composite an authored 320x240 canvas
@@ -240,22 +259,12 @@ void report_gameplay_ready(uint8_t* rdram, int scene) {
 }
 
 int raw_gameplay_active(uint8_t* rdram) {
-    static int previous_stage_time = -1;
-    static int frames_since_stage_time_changed = 1000;
-    static int tracked_scene = -1;
-    static int gameplay_cinema_state = -1;
-    static int cinema_candidate = -1;
-    static int cinema_candidate_frames = 0;
-    static int gen = 0;
-    if (gen != g_ws_tracking_gen) {
-        gen = g_ws_tracking_gen;
-        previous_stage_time = -1;
-        frames_since_stage_time_changed = 1000;
-        tracked_scene = -1;
-        gameplay_cinema_state = -1;
-        cinema_candidate = -1;
-        cinema_candidate_frames = 0;
-    }
+    int& previous_stage_time = g_ws_mode->previous_stage_time;
+    int& frames_since_stage_time_changed = g_ws_mode->frames_since_stage_time_changed;
+    int& tracked_scene = g_ws_mode->tracked_scene;
+    int& gameplay_cinema_state = g_ws_mode->gameplay_cinema_state;
+    int& cinema_candidate = g_ws_mode->cinema_candidate;
+    int& cinema_candidate_frames = g_ws_mode->cinema_candidate_frames;
     if (!env_enabled("MM_WIDESCREEN_ACTIVE")) {
         tracked_scene = -1;
         gameplay_cinema_state = -1;
@@ -685,18 +694,10 @@ extern "C" void mm_fix_rotation_material(
 // gameplay/cinema boundary changes. The user's --widescreen preference remains
 // untouched; this is a transient presentation gate, not a config toggle.
 extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
-    static int previous_active = -1;
-    static int candidate_active = -1;
-    static int candidate_frames = 0;
-    static bool was_paused = false;
-    static int gen = 0;
-    if (gen != g_ws_tracking_gen) {
-        gen = g_ws_tracking_gen;
-        previous_active = -1;
-        candidate_active = -1;
-        candidate_frames = 0;
-        was_paused = false;
-    }
+    int& previous_active = g_ws_mode->previous_active;
+    int& candidate_active = g_ws_mode->candidate_active;
+    int& candidate_frames = g_ws_mode->candidate_frames;
+    bool& was_paused = g_ws_mode->was_paused;
     bool mode_changed = false;
     const int scene = static_cast<int16_t>(MEM_HU(
         0, static_cast<gpr>(static_cast<int32_t>(kCurrentScene))));
@@ -2240,6 +2241,7 @@ extern "C" void mm_ws_set_host_bank_end(uint32_t value) {
 }
 
 extern "C" void mm_ws_after_state_load() {
+    // The mode trackers come with the state (g_ws_mode); only the derived
+    // fill cache is rebuilt.
     g_layer_fill_state.valid = false;
-    ++g_ws_tracking_gen;
 }

@@ -234,6 +234,33 @@ def check_extra(extra, out, moved):
     return problems
 
 
+def play_with_rollback(args, rec_dir, frames, extra_env=None):
+    """Plays `rec_dir` back with a rollback every 30 frames (8 frames back): the
+    frames run again must match the recording, which is what netcode-v2
+    needs of every piece of state (docs/NETCODE-V2.md)."""
+    env = dict(os.environ, **BASE_ENV, HOME=args.home, MM_REPLAY_PLAY="%s@200" % rec_dir,
+               MM_REPLAY_SPEED="1000", MM_TEST_ROLLBACK=args.rollback, **(extra_env or {}))
+    try:
+        out = subprocess.run([args.bin, args.rom], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             timeout=60 + frames // 10).stdout.decode(errors="replace")
+    except subprocess.TimeoutExpired as e:
+        out = (e.stdout or b"").decode(errors="replace")
+    problems = []
+    if "memory matched every frame" not in out:
+        m = re.search(r"memory (?:first )?differ(?:s|ed) (?:from the recording )?at frame (\d+)", out)
+        problems.append("rollback: memory differed at frame %s" % (m.group(1) if m else "?"))
+    m = re.search(r"\[rollback-test\] (\d+) rollbacks, (\d+) mismatched", out)
+    if not m:
+        problems.append("rollback: no rollbacks ran")
+    elif int(m.group(2)):
+        problems.append("rollback: %s of %s rollbacks mismatched" % (m.group(2), m.group(1)))
+    for line in out.splitlines():
+        if "restore failed" in line or "snapshot failed" in line:
+            problems.append(line.strip())
+            break
+    return problems
+
+
 def run_local(args, name, slot, frames, pad1, pad2, allowed, extra_env=None, far=False, want_apart=0):
     with tempfile.TemporaryDirectory() as tmp:
         env = dict(os.environ, **BASE_ENV, HOME=args.home, MM_P2_TRACE="1",
@@ -246,6 +273,7 @@ def run_local(args, name, slot, frames, pad1, pad2, allowed, extra_env=None, far
                                  timeout=timeout).stdout.decode(errors="replace")
         except subprocess.TimeoutExpired as e:
             out = (e.stdout or b"").decode(errors="replace")
+        rollback_problems = play_with_rollback(args, "%s/rec" % tmp, frames, extra_env) if args.rollback else []
     # Only the recorded part counts (from the recorder's load on).
     start = out.find("[replay] recording into")
     end = out.find("[replay] recording stopped")
@@ -253,6 +281,7 @@ def run_local(args, name, slot, frames, pad1, pad2, allowed, extra_env=None, far
     if start < 0:
         return ["did not start recording"], 0
     problems, traced, apart = check_trace(section, allowed, far)
+    problems += rollback_problems
     if want_apart and apart < want_apart:
         problems.append("only %d px apart at most (want %d)" % (apart, want_apart))
     return problems, traced
@@ -278,6 +307,10 @@ def run_far(args, name, slot, frames, pad1, pad2, want_apart, extra=None):
                 out = (e.stdout or b"").decode(errors="replace")
             h = Path(tmp) / "rec" / "hashes.bin"
             hashes.append(h.read_bytes() if h.exists() else b"")
+            rollback_problems = []
+            if shadow and args.rollback:
+                rollback_problems = play_with_rollback(args, str(Path(tmp) / "rec"), frames,
+                                                       dict(extra.get("env", {}), MM_FAR="1", MM_FAR_SHADOW="1"))
         start = out.find("[replay] recording into")
         end = out.find("[replay] recording stopped")
         if start < 0:
@@ -289,6 +322,7 @@ def run_far(args, name, slot, frames, pad1, pad2, want_apart, extra=None):
             if "shadow frame too big" in out:
                 problems.append("shadow frame overflowed its mirror")
             problems += check_extra(extra, out, check_trace.moved)
+            problems += rollback_problems
     n = min(len(hashes[0]), len(hashes[1]))
     if n == 0 or abs(len(hashes[0]) - len(hashes[1])) > 0:
         problems.append("recordings differ in length (%d / %d bytes)" % (len(hashes[0]), len(hashes[1])))
@@ -375,6 +409,8 @@ def main():
     ap.add_argument("--home", required=True)
     ap.add_argument("--only", default="", help="run only scenarios whose name contains this (comma-separated: any of these)")
     ap.add_argument("--no-net", action="store_true")
+    ap.add_argument("--rollback", default="", metavar="EVERY:DEPTH",
+                    help="also play each local and far recording back with rollbacks (e.g. 30:8): netcode-v2")
     ap.add_argument("--steam-mock", default="", help="the Steam stand-in library (cc -shared -fPIC "
                     "-o libsteam_api.so tools/steam_mock/mock_steam.c); without it net-steam is skipped")
     args = ap.parse_args()

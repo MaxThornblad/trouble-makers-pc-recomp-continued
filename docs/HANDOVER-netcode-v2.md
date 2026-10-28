@@ -157,7 +157,9 @@ Gotchas from this project:
 
 - Never `pkill -f` a pattern that matches your own shell command; it killed
   the session's shell once. Use TaskStop or `timeout -k`.
-- Rebuilding the binary while a test batch runs changes the binary under it.
+- Rebuilding the binary while a test batch runs changes the binary under it:
+  copy it first (`cp build_headless/src/game/troublemakers /tmp/.../tm_audit`,
+  it links only system libraries) and point `--bin` at the copy.
 - The pad scripts: d-pad `r`/`l` moves characters (the stick does not), Z
   advances dialog.
 - Regenerating RecompiledFuncs can add files: re-run cmake configure.

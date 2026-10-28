@@ -1,5 +1,6 @@
 #include "savestate.h"
 #include "audio_clock.h"
+#include "state_registry.h"
 #include "netplay.h"
 
 #include <algorithm>
@@ -80,7 +81,8 @@ constexpr char kMagic[8] = {'T', 'M', 'S', 'T', 'A', 'T', 'E', '\0'};
 // 0xF80-0xFFF carries into the next audio task, and replays must restore it.
 // 4: adds the virtual audio clock (audio_clock.h): put back, a state's frames
 // run again read the audio level they read the first time (rollback).
-constexpr uint32_t kFormatVersion = 4;
+// 5: adds the registered host-side state modules (state_registry.h).
+constexpr uint32_t kFormatVersion = 5;
 constexpr const char* kExtension = ".tmstate";
 
 struct Snapshot {
@@ -103,6 +105,7 @@ struct Snapshot {
     std::vector<uint8_t> dmem;   // RSP DMEM (version 3); empty if none
     mm_audio_clock_state audio_clock{};   // (version 4) the virtual audio clock, when it ran
     uint8_t has_audio_clock = 0;
+    std::vector<mm::state::Blob> modules;   // (version 5) registered host-side state (state_registry.h)
 };
 
 // ---------------------------------------------------------------------------
@@ -200,6 +203,14 @@ std::vector<uint8_t> serialize(const Snapshot& s) {
     w.put(s.audio_clock.drained);
     w.put(s.audio_clock.remainder);
     w.put(s.audio_clock.ai_len);
+    w.put<uint32_t>(static_cast<uint32_t>(s.modules.size()));
+    for (const mm::state::Blob& b : s.modules) {
+        w.put<uint32_t>(static_cast<uint32_t>(b.name.size()));
+        w.out.insert(w.out.end(), b.name.begin(), b.name.end());
+        w.put(b.version);
+        w.put<uint32_t>(static_cast<uint32_t>(b.bytes.size()));
+        w.out.insert(w.out.end(), b.bytes.begin(), b.bytes.end());
+    }
     return std::move(w.out);
 }
 
@@ -249,6 +260,21 @@ bool deserialize(const std::vector<uint8_t>& payload, Snapshot& s, uint32_t vers
         if (!(r.get(s.has_audio_clock) && r.get(s.audio_clock.submitted) && r.get(s.audio_clock.drained) &&
               r.get(s.audio_clock.remainder) && r.get(s.audio_clock.ai_len)))
             return false;
+    }
+    s.modules.clear();
+    if (version >= 5) {
+        uint32_t count = 0;
+        if (!r.get(count) || count > 256) return false;
+        for (uint32_t i = 0; i < count; ++i) {
+            mm::state::Blob b;
+            uint32_t n = 0;
+            std::vector<uint8_t> name;
+            if (!r.get(n) || n > 64 || !r.bytes_raw(name, n) || !r.get(b.version) || !r.get(n) || n > (1u << 24) ||
+                !r.bytes_raw(b.bytes, n))
+                return false;
+            b.name.assign(name.begin(), name.end());
+            s.modules.push_back(std::move(b));
+        }
     }
     return r.done();
 }
@@ -412,6 +438,7 @@ bool capture(uint8_t* rdram, recomp_context* ctx, Snapshot& s, std::string& erro
     s.dmem.assign(dmem, dmem + kDmemSize);
     mm_virtual_audio_get(&s.audio_clock);
     s.has_audio_clock = 1;
+    s.modules = mm::state::save_all();
     return true;
 }
 
@@ -465,6 +492,10 @@ bool apply(uint8_t* rdram, recomp_context* ctx, const Snapshot& s, std::string& 
     ultramodern::set_deferred_external_messages(s.deferred);
     if (s.dmem.size() == kDmemSize) std::memcpy(dmem, s.dmem.data(), kDmemSize);
     if (s.has_audio_clock) mm_virtual_audio_set(&s.audio_clock);
+    for (const std::string& name : mm::state::load_all(s.modules)) {
+        static int reported = 0;
+        if (reported++ < 8) std::fprintf(stderr, "[savestate] the state has no \"%s\": reset\n", name.c_str());
+    }
     mm_ws_set_host_bank_end(s.ws_bank_end);
     mm_ws_after_state_load();
 #ifdef MM_HAS_GRAPHICS

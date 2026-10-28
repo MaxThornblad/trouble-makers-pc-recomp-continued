@@ -74,3 +74,46 @@ still send their display lists to the renderer. Rollback needs a way to run
 a frame with no presentation at all. And the replay's fingerprint is far
 more expensive than the game frame itself, so rollback's own consistency
 checks should hash less, less often, or incrementally.
+
+## Phase 1: one place for host-side state (src/game/state_registry.h)
+
+The rule: anything kept outside game memory that the game's behaviour
+depends on is registered, once, as a `mm::state::Pod<T>`; the registry puts
+it in every save state (format 5, as named, versioned blobs), so it goes to
+a joiner with the host's game, comes back with a rollback, and is folded
+into the replay and netplay fingerprint (the last block's hash), so drift
+in it shows as a desync instead of hiding. A state that lacks a module (an
+older file) resets it. New state should go into game memory instead, where
+none of this is needed (player 2's block at 0x807F0000 is the example).
+
+How the candidates were found: not by reading. `coop_bots.py --rollback
+30:8` plays every local and far-apart recording back with a rollback every
+30 frames, and any state the snapshot lacks shows up as the frames run
+again differing from the recording (`play_with_rollback`). Running that
+audit over the 33 scenarios is now the check that the registry is complete,
+and it stays in the suite.
+
+Converted so far:
+
+- **Mortal NPCs** (cheats.cpp): the per-slot shadow health that decides when
+  a refilling NPC is beaten. It reset on every state load, so a joiner (who
+  starts from the host's state) and a rollback both forgot the damage dealt
+  so far: with the cheat on, the two machines could beat an NPC on
+  different frames. Registered as "mortal-npcs".
+- **Widescreen mode** (widescreen.cpp): the hysteresis counters that decide
+  when the expanded view, and with it the wider actor activity around the
+  camera, switches on and off. They were function-local statics reset by a
+  generation counter after a load. Registered as "widescreen-mode"; the
+  generation counter is gone.
+
+Looked at and left alone, with the reason:
+
+- Intra-frame scratch (set and used within one frame): player 2's stand-in,
+  held-swap and contact bookkeeping, far_coop's wall save, draw and camera
+  swap flags, lead probing.
+- Presentation and output only: markers and tags, gem compass scan, enemy
+  bars and damage numbers, rumble (its watch resyncs from game memory on a
+  load), the inspector.
+- Debug tools that change the game (the spawn tool in actors.cpp): phase 2
+  turns those into commands in the input stream.
+- Netplay's own session state: not game state.

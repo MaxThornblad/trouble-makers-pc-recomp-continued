@@ -12,6 +12,7 @@
 #include "gem_compass.h"
 #include "grab_blocks.h"
 #include "player2.h"
+#include "state_registry.h"
 
 
 extern "C" int mm_far_in_shadow(void);
@@ -406,8 +407,12 @@ struct Shadow {
     int pending = 0;                             // drop seen last frame, not yet classed
     int health = 0;
 };
-std::array<Shadow, 0x90> g_shadow;
-uint32_t g_shadow_generation = 0;
+// Registered: a save state, a joiner and a rollback all carry how hurt each
+// NPC is (state_registry.h); it used to reset on every load.
+struct Shadows {
+    std::array<Shadow, 0x90> slots;
+};
+mm::state::Pod<Shadows> g_shadows{"mortal-npcs", 1};
 
 void beat(uint8_t* rdram, int slot, uint16_t type) {
     recomp_context ctx{};
@@ -418,14 +423,9 @@ void beat(uint8_t* rdram, int slot, uint16_t type) {
 }
 
 void apply_mortal_refills(uint8_t* rdram) {
-    const uint32_t generation = mm::savestate::load_generation();
-    if (generation != g_shadow_generation) {
-        g_shadow = {};
-        g_shadow_generation = generation;
-    }
     for (int slot = 1; slot < 0x90; ++slot) {
         const gpr a = addr(0x800EF510u + static_cast<uint32_t>(slot) * 0x198u);
-        Shadow& sh = g_shadow[slot];
+        Shadow& sh = g_shadows->slots[slot];
         const uint16_t type = MEM_W(0x80, a) != 0 ? MEM_HU(0xD2, a) : 0;
         if (type == 0 || (type >> 8) == 0x7F || type == 0x63) {
             sh = {};

@@ -1,5 +1,6 @@
 #include "replay.h"
 #include "rollback_test.h"
+#include "state_registry.h"
 
 #include <algorithm>
 #include <array>
@@ -233,6 +234,9 @@ void fingerprint(uint8_t* rdram, std::array<uint64_t, kBlocks>& out) {
     for (size_t i = 0; i < masked.size(); ++i) {
         *reinterpret_cast<uint32_t*>(rdram + (masked[i] - 0x80000000u)) = saved[i];
     }
+    // Registered host-side state (state_registry.h) counts as part of the
+    // game: folded into the last block, so drift in it shows as a mismatch.
+    out[kBlocks - 1] = mm::state::hash_all(out[kBlocks - 1]);
 }
 
 void write_dump(uint8_t* rdram, const std::filesystem::path& dir, long frame) {
