@@ -1,0 +1,154 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -39,7 +39,20 @@
+     endif()
+ endfunction()
+ 
+-if (WIN32)
++if (WIN32 AND CMAKE_CROSSCOMPILING AND CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
++    # MinGW cross build from Linux. DXIL libraries are linked at runtime with
++    # entry points compiled by the bundled Windows dxcompiler.dll, and D3D12
++    # rejects libraries from a different DXC build, so prefer the Windows
++    # dxc.exe through a host wrapper (e.g. Wine) when one is given.
++    if (RT64_HOST_DXC)
++        set (DXC "${RT64_HOST_DXC}")
++    else()
++        set (DXC "LD_LIBRARY_PATH=${PROJECT_SOURCE_DIR}/src/contrib/dxc/lib/x64" "${PROJECT_SOURCE_DIR}/src/contrib/dxc/bin/x64/dxc-linux")
++    endif()
++    add_compile_definitions(NOMINMAX)
++    configure_file("${PROJECT_SOURCE_DIR}/src/contrib/dxc/bin/x64/dxcompiler.dll" "dxcompiler.dll" COPYONLY)
++    configure_file("${PROJECT_SOURCE_DIR}/src/contrib/dxc/bin/x64/dxil.dll" "dxil.dll" COPYONLY)
++elseif (WIN32)
+     set (DXC "${PROJECT_SOURCE_DIR}/src/contrib/dxc/bin/x64/dxc.exe")
+     add_compile_definitions(NOMINMAX)
+ 
+@@ -70,7 +83,13 @@
+ set(ZSTD_BUILD_STATIC ON)
+ set(ZSTD_BUILD_SHARED OFF)
+ 
+-add_subdirectory(src/tools/file_to_c)
++if (CMAKE_CROSSCOMPILING AND RT64_HOST_FILE_TO_C)
++    # Build-time tool must run on the build machine, not the target.
++    add_executable(file_to_c IMPORTED)
++    set_property(TARGET file_to_c PROPERTY IMPORTED_LOCATION "${RT64_HOST_FILE_TO_C}")
++else()
++    add_subdirectory(src/tools/file_to_c)
++endif()
+ add_subdirectory(src/contrib/re-spirv)
+ add_subdirectory(src/contrib/nativefiledialog-extended)
+ add_subdirectory(src/contrib/zstd/build/cmake)
+@@ -279,12 +298,16 @@
+ endfunction()
+ 
+ # Point cmake at src/contrib/mupen64plus-win32-deps/SDL2-2.26.3 for SDL2 on windows, look for an installed package on other systems
+-if (WIN32)
++if (WIN32 AND NOT MINGW)
+     set(SDL2_INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/src/contrib/mupen64plus-win32-deps/SDL2-2.26.3/include")
+     set(SDL2_LIBRARIES "SDL2" "SDL2main")
+     link_directories("${PROJECT_SOURCE_DIR}/src/contrib/mupen64plus-win32-deps/SDL2-2.26.3/lib/x64")
+ else()
+     find_package(SDL2 REQUIRED)
++    if (MINGW)
++        # The host defines SDL_MAIN_HANDLED; SDL2main's WinMain would need SDL_main.
++        set(SDL2_LIBRARIES SDL2::SDL2)
++    endif()
+ endif()
+ 
+ message(STATUS "${SDL2_INCLUDE_DIRS} ${SDL2_LIBRARIES}")
+@@ -463,12 +486,34 @@
+         "${PROJECT_SOURCE_DIR}/src/contrib/imgui/backends/imgui_impl_dx12.cpp"
+         "${PROJECT_SOURCE_DIR}/src/contrib/imgui/backends/imgui_impl_win32.cpp"
+     )
++    if (MINGW)
++        # MinGW-w64's own d3d12.h predates the interfaces RT64 uses.
++        if (RT64_DIRECTX_HEADERS)
++            target_include_directories(rt64 BEFORE PRIVATE
++                ${RT64_DIRECTX_HEADERS}/include/directx ${RT64_DIRECTX_HEADERS}/include)
++            target_sources(rt64 PRIVATE ${RT64_DIRECTX_HEADERS}/src/dxguids.cpp)
++        endif()
++        # DirectX-Headers asks for rpcndr.h >= 501; MinGW's is 475 but compatible.
++        # Pulling in windows.h first satisfies the include guard before the check.
++        if (RT64_MINGW_COMPAT_DIR)
++            set_source_files_properties(
++                "${PROJECT_SOURCE_DIR}/src/contrib/imgui/backends/imgui_impl_dx12.cpp"
++                "${PROJECT_SOURCE_DIR}/src/d3d12/rt64_d3d12.cpp"
++                PROPERTIES COMPILE_OPTIONS "-include;${RT64_MINGW_COMPAT_DIR}/mingw_d3d12_guids.h")
++            set_source_files_properties("${PROJECT_SOURCE_DIR}/src/render/rt64_shader_compiler.cpp"
++                PROPERTIES COMPILE_OPTIONS "-include;${RT64_MINGW_COMPAT_DIR}/mingw_dxc_uuids.h")
++        endif()
++        target_link_libraries(rt64 d3dcompiler_47 dwmapi)
++        target_link_libraries(rt64 d3d12 dxgi shcore
++            ${PROJECT_SOURCE_DIR}/src/contrib/dxc/bin/x64/dxcompiler.dll)
++    else()
+     target_link_libraries(rt64
+         delayimp.lib
+         D3D12
+         DXGI
+         Shcore.lib
+         ${PROJECT_SOURCE_DIR}/src/contrib/dxc/lib/x64/dxcompiler.lib)
++    endif()
+ 
+     target_include_directories(rt64 PRIVATE ${zstd_SOURCE_DIR}/lib)
+ endif()
+--- a/src/common/rt64_tmem_hasher.h
++++ b/src/common/rt64_tmem_hasher.h
+@@ -23,7 +23,7 @@
+         __assume(0);
+     }
+ #endif
+-#elif defined(__GNUC__) && (__GNUC__ >= 4) && defined(__LP64__)
++#elif defined(__GNUC__) && (__GNUC__ >= 4) && (defined(__LP64__) || defined(_WIN64))
+     return (unsigned)__builtin_ctzll(val);
+ #elif defined(__ICCARM__)
+     return (unsigned)__builtin_ctzll(val);
+--- a/src/d3d12/rt64_d3d12.cpp
++++ b/src/d3d12/rt64_d3d12.cpp
+@@ -40,6 +40,28 @@
+ #endif
+ 
+ namespace RT64 {
++    // MinGW (GCC) uses the out-parameter form of these COM methods to match
++    // the MSVC struct-return ABI.
++    static D3D12_CPU_DESCRIPTOR_HANDLE heapStartCPU(ID3D12DescriptorHeap *heap) {
++#   if defined(__MINGW32__)
++        D3D12_CPU_DESCRIPTOR_HANDLE handle;
++        heap->GetCPUDescriptorHandleForHeapStart(&handle);
++        return handle;
++#   else
++        return heap->GetCPUDescriptorHandleForHeapStart();
++#   endif
++    }
++
++    static D3D12_GPU_DESCRIPTOR_HANDLE heapStartGPU(ID3D12DescriptorHeap *heap) {
++#   if defined(__MINGW32__)
++        D3D12_GPU_DESCRIPTOR_HANDLE handle;
++        heap->GetGPUDescriptorHandleForHeapStart(&handle);
++        return handle;
++#   else
++        return heap->GetGPUDescriptorHandleForHeapStart();
++#   endif
++    }
++
+     static const uint32_t ShaderDescriptorHeapSize = 65536;
+     static const uint32_t SamplerDescriptorHeapSize = 1024;
+     static const uint32_t TargetDescriptorHeapSize = 16384;
+@@ -706,7 +728,7 @@
+             return;
+         }
+ 
+-        hostCPUDescriptorHandle = hostHeap->GetCPUDescriptorHandleForHeapStart();
++        hostCPUDescriptorHandle = heapStartCPU(hostHeap);
+ 
+         const bool shaderVisible = (heapType == D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV) || (heapType == D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
+         if (shaderVisible) {
+@@ -717,8 +739,8 @@
+                 return;
+             }
+ 
+-            shaderCPUDescriptorHandle = shaderHeap->GetCPUDescriptorHandleForHeapStart();
+-            shaderGPUDescriptorHandle = shaderHeap->GetGPUDescriptorHandleForHeapStart();
++            shaderCPUDescriptorHandle = heapStartCPU(shaderHeap);
++            shaderGPUDescriptorHandle = heapStartGPU(shaderHeap);
+         }
+ 
+         addFreeBlock(0, heapSize);

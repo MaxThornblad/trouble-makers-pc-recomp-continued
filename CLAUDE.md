@@ -2,6 +2,8 @@
 
 Guidance for AI agents (and humans) working in this repository. Read this
 first; the consolidated ROM and engine reference is [`docs/README.md`](docs/README.md).
+Co-op and netplay: [`docs/NETPLAY.md`](docs/NETPLAY.md); the current plan and how to
+rebuild a working environment: [`docs/HANDOVER-netcode-v2.md`](docs/HANDOVER-netcode-v2.md).
 
 ## What this project is
 

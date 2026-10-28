@@ -1,0 +1,16 @@
+#!/bin/bash
+# Runs RT64's Windows dxc.exe under Wine, translating Linux paths to Z:\ paths.
+# D3D12 rejects DXIL libraries from a different DXC build than the bundled
+# dxcompiler.dll, so the Windows compiler must build the shaders.
+DXC_DIR=${TM_REPO:-/home/claude/src/trouble-makers-pc-recomp}/lib/rt64/src/contrib/dxc/bin/x64
+conv() { local p="$1"; echo "Z:${p//\//\\}"; }
+args=()
+for a in "$@"; do
+  case "$a" in
+    /*) args+=("$(conv "$a")") ;;
+    -I/*) args+=("-I$(conv "${a#-I}")") ;;
+    *) args+=("$a") ;;
+  esac
+done
+export WINEPREFIX=${TM_WINEPREFIX:-/tmp/claude-0/wt/prefix} WINEDEBUG=-all
+exec wine "$DXC_DIR/dxc.exe" "${args[@]}"
