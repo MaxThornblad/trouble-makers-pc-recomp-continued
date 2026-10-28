@@ -499,3 +499,19 @@ now leave the riders alone (the stage keeps them in view, out to ~240 px). All o
 memory, so states, rollbacks, replays and resyncs carry it. Cerberus still
 aims at the stage's cat (it reads slot 96 directly); both players can
 still grab its parts.
+
+## Fixes from the fourth session (owner's reports, 2026-10-28)
+
+- Player 2 carrying player 1 walked and slid at half speed once the camera
+  moved (normal at a stage's left edge). Her update zeroed the camera's
+  step for Marina's carry code (right for her own camera far apart); on
+  the shared camera, carrying player 1, the step is the carry's own (the
+  camera follows player 1 in her hands) and the code needs it. Bot
+  scenario p2-carries-p1-walk.
+- Gem magnet pulled toward player 1 only: gems now go toward the nearer
+  player (cheats.cpp player_centres); player 2's pickup pass collects them.
+- Mortal NPCs stayed mortal after the cheat was turned off: the hook
+  cleared each character's immortal bit (+0x150 0x80) for good. It now
+  notes which characters it changed (registered "mortal-npcs-bit") and
+  gives them the bit back when the cheat goes off. Bot scenario
+  net-mortal-off.

@@ -283,8 +283,9 @@ void apply_no_clip(uint8_t* rdram) {
 // a draw slot at world - camera and tests that box (+/-6 px) against
 // Marina's hitbox (actor +0xAA..+0xB0, relative to her +0x88/+0x8C).
 // The generated hook at func_800451E4's entry calls mm_cheat_gem_magnet with
-// the list, which moves gem records near Marina toward the centre of her
-// hitbox; the game then collects them itself.
+// the list, which moves gem records near a player toward the centre of the
+// nearer one's hitbox (Marina's or player 2's); the game, or player 2's
+// pickup pass (player2.cpp collect_pickups), then collects them.
 //
 // Gems knocked out of enemies are actors of type 8 (SpawnGemActor); the
 // magnet pulls those too, in camera-relative 16.16 coordinates.
@@ -303,11 +304,30 @@ bool magnet_live(uint8_t* rdram) {
            MEM_W(0x80, addr(kMarina)) != 0;
 }
 
-// Centre of Marina's hitbox, camera-relative pixels.
-void marina_centre(uint8_t* rdram, int& x, int& y) {
-    const gpr m = addr(kMarina);
-    x = MEM_H(0x88, m) + (MEM_H(0xAA, m) + MEM_H(0xAC, m)) / 2;
-    y = MEM_H(0x8C, m) + (MEM_H(0xAE, m) + MEM_H(0xB0, m)) / 2;
+// Centres of the players' hitboxes, camera-relative pixels: Marina's and
+// player 2's (online the host's cheats are both players'). Returns how many.
+int player_centres(uint8_t* rdram, int xs[2], int ys[2]) {
+    int n = 0;
+    const int p2 = mm::player2::slot(rdram);
+    for (const int slot : {0, p2}) {
+        if (slot < 0 || (n > 0 && slot == 0)) continue;
+        const gpr m = addr(kMarina + static_cast<uint32_t>(slot) * kActorStride);
+        if (MEM_W(0x80, m) == 0) continue;
+        xs[n] = MEM_H(0x88, m) + (MEM_H(0xAA, m) + MEM_H(0xAC, m)) / 2;
+        ys[n] = MEM_H(0x8C, m) + (MEM_H(0xAE, m) + MEM_H(0xB0, m)) / 2;
+        ++n;
+    }
+    return n;
+}
+
+// Towards the nearer player: the offset to her centre.
+void nearest(const int xs[2], const int ys[2], int n, int x, int y, int& dx, int& dy) {
+    dx = xs[0] - x;
+    dy = ys[0] - y;
+    for (int i = 1; i < n; ++i) {
+        const int ex = xs[i] - x, ey = ys[i] - y;
+        if (ex * ex + ey * ey < dx * dx + dy * dy) { dx = ex; dy = ey; }
+    }
 }
 
 // One step of the pull: fast enough to feel like suction, accelerating as the
@@ -325,13 +345,15 @@ bool pull_step(int dx, int dy, int& sx, int& sy) {
 }
 
 void pull_gem_actors(uint8_t* rdram) {
-    int tx, ty;
-    marina_centre(rdram, tx, ty);
+    int xs[2], ys[2];
+    const int n = player_centres(rdram, xs, ys);
+    if (n == 0) return;
     for (uint32_t slot = 1; slot < kActorCount; ++slot) {
         const gpr a = addr(kMarina + slot * kActorStride);
         if (MEM_W(0x80, a) == 0 || MEM_HU(0xD2, a) != kGemActorType) continue;
-        int sx, sy;
-        if (!pull_step(tx - MEM_H(0x88, a), ty - MEM_H(0x8C, a), sx, sy)) continue;
+        int dx, dy, sx, sy;
+        nearest(xs, ys, n, MEM_H(0x88, a), MEM_H(0x8C, a), dx, dy);
+        if (!pull_step(dx, dy, sx, sy)) continue;
         MEM_W(0x88, a) = MEM_W(0x88, a) + (sx << 16);
         MEM_W(0x8C, a) = MEM_W(0x8C, a) + (sy << 16);
         MEM_W(0xEC, a) = 0;
@@ -343,12 +365,15 @@ void pull_gem_actors(uint8_t* rdram) {
 
 void gem_magnet(uint8_t* rdram, uint32_t list) {
     if (!magnet_live(rdram)) return;
-    int tx, ty;
-    marina_centre(rdram, tx, ty);
+    int xs[2], ys[2];
+    const int n = player_centres(rdram, xs, ys);
+    if (n == 0) return;
     const int cam_x = MEM_H(0, addr(kCameraX));
     const int cam_y = MEM_H(0, addr(kCameraY));
-    tx += cam_x;                                   // to world pixels
-    ty += cam_y;
+    for (int i = 0; i < n; ++i) {                  // to world pixels
+        xs[i] += cam_x;
+        ys[i] += cam_y;
+    }
     for (int i = 0; i < kMaxItems; ++i, list += 6) {
         const gpr rec = addr(list);
         const uint16_t kind = MEM_HU(0, rec);
@@ -358,8 +383,9 @@ void gem_magnet(uint8_t* rdram, uint32_t list) {
             MEM_W(((kind & 0xFFF0u) >> 4) * 4, addr(kItemHandlers)));
         if (handler != kGemHandler) continue;
         const int x = MEM_HU(2, rec), y = MEM_HU(4, rec);
-        int sx, sy;
-        if (!pull_step(tx - x, ty - y, sx, sy)) continue;
+        int dx, dy, sx, sy;
+        nearest(xs, ys, n, x, y, dx, dy);
+        if (!pull_step(dx, dy, sx, sy)) continue;
         MEM_H(2, rec) = static_cast<uint16_t>(x + sx);
         MEM_H(4, rec) = static_cast<uint16_t>(y + sy);
     }
@@ -374,13 +400,28 @@ void gem_magnet(uint8_t* rdram, uint32_t list) {
 // (state >= 0x51) it sets it back to 0x4000 if bit 0x80 is set in +0x150:
 // that bit is what makes a character immortal (the 1-3 hoppers have 1 health
 // and the bit). Clearing it before the check lets them die normally.
+// Each slot whose bit the cheat cleared keeps the type it had then, so
+// turning the cheat off gives those characters their bit back (they stayed
+// mortal). Registered, as the bit itself is game memory.
+namespace mm::cheats {
+namespace {
+struct MadeMortal {
+    std::array<uint16_t, 208> type{};   // 0: not cleared by the cheat
+};
+mm::state::Pod<MadeMortal> g_made_mortal{"mortal-npcs-bit", 1};
+constexpr uint32_t kImmortalBit = 0x80;   // +0x150
+} // namespace
+} // namespace mm::cheats
+
 extern "C" void mm_mortal_hook(uint8_t* rdram, uint32_t slot) {
     if (mm_far_in_shadow()) return;   // its record of health is host state (far_coop.h)
     if (!mm::cheats::g_active_for_hooks() || !mm::cheats::enabled(mm::cheats::Cheat::MortalNpcs)) return;
     slot &= 0xFFFF;
     if (slot == 0 || slot >= 208) return;
     const gpr a = static_cast<gpr>(static_cast<int32_t>(0x800EF510u + slot * 0x198u));
-    MEM_W(0x150, a) = MEM_W(0x150, a) & ~0x80;
+    if ((MEM_W(0x150, a) & mm::cheats::kImmortalBit) == 0) return;
+    MEM_W(0x150, a) = MEM_W(0x150, a) & ~mm::cheats::kImmortalBit;
+    mm::cheats::g_made_mortal->type[slot] = MEM_HU(0xD2, a);
 }
 
 // The other kind of immortal: characters whose update puts their health
@@ -422,6 +463,23 @@ void beat(uint8_t* rdram, int slot, uint16_t type) {
     ctx.r4 = static_cast<gpr>(slot);
     func_8006CFDC(rdram, &ctx);
     std::fprintf(stderr, "[cheats] mortal NPCs: slot %d (type %04X) beaten\n", slot, type);
+}
+
+// The cheat off: the characters it made mortal (still the same actor, not
+// beaten) are immortal again.
+void restore_immortals(uint8_t* rdram) {
+    int n = 0;
+    for (int slot = 1; slot < 208; ++slot) {
+        uint16_t& was = g_made_mortal->type[slot];
+        if (was == 0) continue;
+        const gpr a = addr(0x800EF510u + static_cast<uint32_t>(slot) * 0x198u);
+        if (MEM_W(0x80, a) != 0 && MEM_HU(0xD2, a) == was) {
+            MEM_W(0x150, a) = MEM_W(0x150, a) | kImmortalBit;
+            ++n;
+        }
+        was = 0;
+    }
+    if (n > 0) std::fprintf(stderr, "[cheats] mortal NPCs off: %d immortal again\n", n);
 }
 
 void apply_mortal_refills(uint8_t* rdram) {
@@ -737,6 +795,12 @@ void set_active(bool active) {
 }
 
 void apply(uint8_t* rdram) {
+    if (g_active_for_hooks() && enabled(Cheat::MortalNpcs)) {
+        apply_mortal_refills(rdram);
+    } else if (!mm_far_in_shadow()) {
+        restore_immortals(rdram);
+        g_shadows->slots = {};   // the refillers' shadow health starts over next time
+    }
     if (enabled(Cheat::NoClip)) {
         apply_no_clip(rdram);
         if (magnet_live(rdram)) pull_gem_actors(rdram);
@@ -752,7 +816,6 @@ void apply(uint8_t* rdram) {
         if (enabled(Cheat::EndlessJet)) apply_endless_jet(r);
         if (enabled(Cheat::MoonJump)) apply_moon_jump(r, 1);
     });
-    if (enabled(Cheat::MortalNpcs)) apply_mortal_refills(rdram);
 }
 
 } // namespace mm::cheats

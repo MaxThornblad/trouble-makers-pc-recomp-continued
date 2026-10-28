@@ -53,6 +53,11 @@ SCENARIOS = [
     ("apart-9", 9, 700, "60:,600:r", "60:,600:l", 0),
     ("p1-carries-p2", 1, 500, "80:,6:l,10:B,20:,60:r,30:,60:l,20:,10:B,200:", "500:", 0),
     ("p2-carries-p1", 1, 500, "500:", "80:,6:r,10:B,20:,60:l,30:,60:r,20:,10:B,200:", 0),
+    # Player 2 carries player 1 to the right across the stage: at Marina's
+    # carry speed (2 px a frame), also once the camera moves (it follows the
+    # player being carried; she walked at half speed).
+    ("p2-carries-p1-walk", 1, 520, "520:", "80:,6:r,10:B,30:,400:r", 0,
+     dict(final=lambda s0, s2: s2[0] > 650)),
     ("both-grab", 1, 400, "80:,6:l,10:B,100:,10:B,200:", "80:,6:r,10:B,100:,10:B,200:", 0),
     ("carry-jump-throw", 4, 500, "80:,6:r,10:B,20:,10:A,40:,30:r,10:B,300:", "500:", 0),
     ("p2-carry-jump", 4, 500, "500:", "80:,6:l,10:B,20:,10:A,40:,30:l,10:B,300:", 0),
@@ -122,6 +127,10 @@ NETPLAY = [
     # run must give the same game.
     ("net-synctest", 1, 900, "60:,400:r,440:l", "60:,400:l,440:r",
      dict(env={"MM_NET_SYNC_TEST": "1"}, host_re=[r"rollbacks: [5-9]\d\d "])),
+    # Mortal NPCs on (as the test home's cheats.cfg has it), then off at
+    # frame 500: the characters it made mortal are immortal again.
+    ("net-mortal-off", 6, 700, "60:,300:r,300:l", "700:",
+     dict(env={"MM_NET_TOGGLE": "5@500"}, host_re=[r"mortal NPCs off: \d+ immortal again"])),
     # Lockstep stays as a fallback (without lag; net-lag is lockstep with lag).
     ("net-lockstep", 1, 900, "60:,400:r,440:l", "60:,400:l,440:r", dict(env={"MM_NET_LOCKSTEP": "1"})),
     ("net-far", 1, 1500, "60:,1440:r", "60:,1440:l"),
@@ -495,10 +504,12 @@ def main():
     args = ap.parse_args()
     failed = 0
     port = args.port
-    for name, slot, frames, p1, p2, allowed in SCENARIOS:
+    for name, slot, frames, p1, p2, allowed, *extra in SCENARIOS:
         if args.only and not any(o in name for o in args.only.split(',')):
             continue
         problems, traced = run_local(args, name, slot, frames, p1, p2, allowed)
+        if extra and not problems:
+            problems += check_extra(extra[0], "", check_trace.moved)
         print("%-18s %s (%d frames)%s" % (name, "ok  " if not problems else "FAIL", traced,
                                           "" if not problems else ": " + "; ".join(problems[:4])), flush=True)
         failed += bool(problems)

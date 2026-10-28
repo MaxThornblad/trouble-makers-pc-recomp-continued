@@ -750,9 +750,17 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
     // rebased between cameras (far_coop.cpp), so she got it twice: carrying
     // something, she ran ahead of her camera, it followed, she ran further
     // (super speed, super jumps).
+    // That is her camera's step (far apart). On the shared camera, carrying
+    // player 1, the step is the one the carry makes (the camera follows
+    // player 1, who is in her hands), and the carry code needs it as it
+    // does for Marina: zeroed, she walked at half speed once the camera
+    // moved (normal at a stage's left edge, where it does not).
     const int32_t prev_x = MEM_W(0, addr(kCameraPrevX)), prev_y = MEM_W(0, addr(kCameraPrevY));
-    MEM_W(0, addr(kCameraPrevX)) = MEM_W(0, addr(kCameraX));
-    MEM_W(0, addr(kCameraPrevY)) = MEM_W(0, addr(kCameraY));
+    const bool own_step = holding_p1 && !mm::faraway::active(rdram);
+    if (!own_step) {
+        MEM_W(0, addr(kCameraPrevX)) = MEM_W(0, addr(kCameraX));
+        MEM_W(0, addr(kCameraPrevY)) = MEM_W(0, addr(kCameraY));
+    }
     g_in_own_call = true;
     func_8004ED10(rdram, ctx);
     g_in_own_call = false;
@@ -767,8 +775,10 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
             std::memcpy(rdram, snapshot.data(), snapshot.size());
             *ctx = ctx_before;
             MEM_W(0x88, addr(kActors + static_cast<uint32_t>(slot) * kStride)) -= moved;
-            MEM_W(0, addr(kCameraPrevX)) = MEM_W(0, addr(kCameraX));
-            MEM_W(0, addr(kCameraPrevY)) = MEM_W(0, addr(kCameraY));
+            if (!own_step) {
+                MEM_W(0, addr(kCameraPrevX)) = MEM_W(0, addr(kCameraX));
+                MEM_W(0, addr(kCameraPrevY)) = MEM_W(0, addr(kCameraY));
+            }
             g_in_own_call = true;
             func_8004ED10(rdram, ctx);
             g_in_own_call = false;
