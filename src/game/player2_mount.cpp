@@ -25,7 +25,6 @@ constexpr uint32_t kP2MountType = 0x807F041Cu;
 // target after it, 0x800BE5A8..B4, which LookAt_Update reads).
 constexpr uint32_t kCamera = 0x800BE544u;
 constexpr uint32_t kCameraSize = 0x74u;
-constexpr int kScreenEdge = 180;   // px either side of the shared camera, as player2.cpp keeps the players
 
 // A mount: the stage's type, the slot its code answers to, and how many
 // slots it spans (controller first, then the part sprites it moves, which
@@ -123,18 +122,10 @@ void update(uint8_t* rdram, recomp_context* ctx, int slot) {
     copy_records(rdram, slot, m->slot, m->span);
     MEM_H(0xD2, slot_addr(slot)) = static_cast<int16_t>(mm::custom_actors::type_id(kCustomIndex));
     for (int i = 0; i < m->span; ++i) std::memcpy(slot_ptr(rdram, m->slot + i) + 0x80, theirs.data() + i * (kStride - 0x80), kStride - 0x80);
-    // The screen edge carries her mount as it carries her (player2.cpp
-    // keep_on_screen): the game holds Marina's at the edge, hers ran on past
-    // it after a hit, and the leash then pulled her back every few seconds.
-    if (!mm::faraway::active(rdram)) {
-        const int32_t limit = kScreenEdge << 16;
-        const int32_t x = MEM_W(0x88, slot_addr(slot + 1));   // the body, which carries her (func_801A22AC)
-        const int32_t want = x > limit ? limit : x < -limit ? -limit : x;
-        if (want != x) {
-            for (int i = slot; i < slot + m->span; ++i) MEM_W(0x88, slot_addr(i)) = MEM_W(0x88, slot_addr(i)) + (want - x);
-            MEM_W(0x88, slot_addr(p2)) = MEM_W(0x88, slot_addr(p2)) + (want - x);
-        }
-    }
+}
+
+bool riding(uint8_t* rdram) {
+    return stage_mount(rdram) != nullptr;
 }
 
 void tick(uint8_t* rdram) {

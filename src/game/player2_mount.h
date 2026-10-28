@@ -29,6 +29,10 @@ constexpr uint8_t kCustomIndex = 0x03;   // custom actor type 0x7F03
 // slot of player 2's mount.
 void update(uint8_t* rdram, recomp_context* ctx, int slot);
 
+// The stage puts Marina on a mount (its code places her; the screen-edge
+// clamp must leave the riders alone, or it pulls them off their mounts).
+bool riding(uint8_t* rdram);
+
 // Once a frame from player2::tick: gives player 2 a mount when the stage
 // has one for Marina and she has none; takes hers away when she is gone.
 void tick(uint8_t* rdram);

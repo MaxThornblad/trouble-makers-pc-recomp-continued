@@ -303,6 +303,10 @@ void clamp_player(uint8_t* rdram, uint32_t record, uint32_t world_x_global) {
 
 void keep_on_screen(uint8_t* rdram, int slot) {
     if (mm::faraway::active(rdram)) return;   // far apart allowed: each has her own camera (far_coop.h)
+    // On a mount (3-12's cats) the mount places its rider and the stage
+    // keeps it in view; the clamp held player 1 at the edge while her cat
+    // ran on (she looked gone: off her cat, behind player 2).
+    if (mm::player2_mount::riding(rdram)) return;
     clamp_player(rdram, kActors, kWorldX);
     clamp_player(rdram, kActors + static_cast<uint32_t>(slot) * kStride, kP2Globals + global_offset(kWorldX));
 }
@@ -1019,7 +1023,8 @@ void tick(uint8_t* rdram) {
     const gpr m = addr(kActors);
     const int mx = MEM_H(0x88, m), my = MEM_H(0x8C, m);
     const bool p1_away = mx > kLeashX || mx < -kLeashX || my > kLeashY || my < -kLeashY;
-    const bool away = !p1_away && (px > kLeashX || px < -kLeashX || py > kLeashY || py < -kLeashY);
+    // (On a mount the stage keeps both riders in view itself, up to ~230 px out.)
+    const bool away = !p1_away && !mm::player2_mount::riding(rdram) && (px > kLeashX || px < -kLeashX || py > kLeashY || py < -kLeashY);
     int32_t away_frames = away ? MEM_W(0, addr(kP2AwayTimer)) + 1 : 0;
     if (away_frames >= kLeashFrames) {
         std::fprintf(stderr, "[player2] too far from player 1, rejoining\n");

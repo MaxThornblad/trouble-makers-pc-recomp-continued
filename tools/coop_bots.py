@@ -139,7 +139,12 @@ BASE_ENV = {"MM_HEADLESS_GFX": "1", "SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER
 # carrier turns), reaching (0x11F), carrying / throwing (0x122, 0x126).
 CARRY_STATES = {0x16, 0x2F, 0x11F, 0x122, 0x126}
 # Scripted moves: a star teleporter's flight (0x301).
-SCRIPTED_STATES = {0x301}
+SCRIPTED_STATES = {0x301, 0x231}   # 0x231: back onto her cat (3-12) after a fall
+# Riding a mount (3-12's cats: 0x003, getting on / off and bucked 0x230,
+# 0x231, 0x233, 0x531): the stage keeps riders in view itself, out to
+# about 240 px from the camera, so the shared-screen check allows that
+# for the rest of a trace once player 1 rode.
+RIDING_STATES = {0x003, 0x230, 0x231, 0x233, 0x531}
 
 
 def timeline(text):
@@ -178,6 +183,7 @@ def check_trace(text, allowed_rejoins, far=False):
     defeats = sum("defeated, rejoining" in l for l in lines)
     first = last = None
     max_step = [0, 0]
+    riding = False   # a mount stage (once seen, for the rest of the trace)
     for line in lines:
         if "leads now" in line or "leads again" in line:
             # The two swapped characters (player2_lead.cpp): the trace's
@@ -206,6 +212,7 @@ def check_trace(text, allowed_rejoins, far=False):
         cx, cy = int(m.group(2)), int(m.group(3))
         states = (int(m.group(6), 16) & 0xFFF, int(m.group(12), 16) & 0xFFF)
         p2slot = int(m.group(9))
+        riding = riding or states[0] in RIDING_STATES
         p1 = (cx + int(m.group(4)), cy + int(m.group(5)))
         p2 = (cx + int(m.group(10)), cy + int(m.group(11)))
         if p2slot < 0:
@@ -218,8 +225,9 @@ def check_trace(text, allowed_rejoins, far=False):
         last = (p1, p2)
         apart = max(apart, abs(p1[0] - p2[0]))
         if not far:
-            for who, rel in (("p1", int(m.group(4))), ("p2", int(m.group(10)))):
-                if abs(rel) > 181 and joined_recently == 0:
+            for k, who, rel in ((0, "p1", int(m.group(4))), (1, "p2", int(m.group(10)))):
+                edge = 250 if riding else 181
+                if abs(rel) > edge and joined_recently == 0:
                     problems.append("%s off the shared screen at frame %d (x %d)" % (who, n, rel))
         if prev and joined_recently == 0:
             for k, who, a, b in ((0, "p1", prev[0], p1), (1, "p2", prev[1], p2)):
@@ -325,6 +333,10 @@ def run_local(args, name, slot, frames, pad1, pad2, allowed, extra_env=None, far
         except subprocess.TimeoutExpired as e:
             out = (e.stdout or b"").decode(errors="replace")
         rollback_problems = play_with_rollback(args, "%s/rec" % tmp, frames, extra_env) if args.rollback else []
+    if args.keep:   # the log, for a look after a failure
+        keep = Path(args.keep) / name
+        keep.mkdir(parents=True, exist_ok=True)
+        (keep / "local.log").write_text(out)
     # Only the recorded part counts (from the recorder's load on).
     start = out.find("[replay] recording into")
     end = out.find("[replay] recording stopped")
@@ -479,7 +491,7 @@ def main():
     ap.add_argument("--steam-mock", default="", help="the Steam stand-in library (cc -shared -fPIC "
                     "-o libsteam_api.so tools/steam_mock/mock_steam.c); without it net-steam is skipped")
     ap.add_argument("--port", type=int, default=7900, help="first port for the netplay scenarios")
-    ap.add_argument("--keep", default="", metavar="DIR", help="keep each netplay scenario's host and guest logs under DIR/<name>/")
+    ap.add_argument("--keep", default="", metavar="DIR", help="keep each scenario's logs under DIR/<name>/")
     args = ap.parse_args()
     failed = 0
     port = args.port

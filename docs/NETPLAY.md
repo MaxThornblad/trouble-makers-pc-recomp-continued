@@ -492,8 +492,10 @@ func_80016E70 runs slot 96, then the copies go back and player 1's cat and
 record are restored. What the code does to the camera words
 (0x800BE544..0x800BE5B8; the cat drives the stage's scroll through them,
 and two cats scrolled it twice as fast) is put back, and her cat is held
-at the screen edge as she is (the game holds Marina's there; hers ran past
-after a hit and the leash kept pulling her back). All of it is game
+The "invisible host" in the same report: the co-op screen-edge clamp
+(180 px) held player 1 at the edge while her cat ran on to ~223 px, so she
+stood off her cat behind player 2's. On a mount the clamp and the leash
+now leave the riders alone (the stage keeps them in view, out to ~240 px). All of it is game
 memory, so states, rollbacks, replays and resyncs carry it. Cerberus still
 aims at the stage's cat (it reads slot 96 directly); both players can
 still grab its parts.
