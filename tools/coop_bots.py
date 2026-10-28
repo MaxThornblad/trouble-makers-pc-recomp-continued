@@ -104,6 +104,12 @@ NETPLAY = [
      dict(env={"MM_NET_TOGGLE": "1@400,1@800"},
           same=("settings changed at", 2),
           guest=["is set by the host during online play"])),
+    # A slow, jittery connection (each side holds its sends back 60 +-15 ms):
+    # the delay grows to cover it and both games stay identical.
+    ("net-lag", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r",
+     dict(env={"MM_NET_LAG": "60,15,0"}, host_re=[r"delay now ([5-9]|10) frames"])),
+    # Lost packets (resent, holding up the ones behind them): no resyncs.
+    ("net-loss", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r", dict(env={"MM_NET_LAG": "20,5,1"})),
     ("net-far", 1, 1500, "60:,1440:r", "60:,1440:l"),
     ("net-steam", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r"),   # over the Steam stand-in (--steam-mock)
     ("net-carry", 1, 1200, "80:,6:l,10:B,20:,60:r,30:,60:l,20:,10:B,900:", "600:,6:r,10:B,20:,60:l,30:,60:r,20:,10:B,400:"),
@@ -352,6 +358,9 @@ def run_netplay(args, name, slot, frames, pad1, pad2, port, extra=None):
             gl = [l for l in gout.splitlines() if text in l]
             if len(hl) != count or hl != gl:
                 problems.append("%r lines: host %s, guest %s" % (text, hl, gl))
+        for pattern in extra.get("host_re", []):
+            if not re.search(pattern, hout):
+                problems.append("host: no %r" % pattern)
         for text in extra.get("guest", []):
             if text not in gout:
                 problems.append("guest: missing %r" % text)

@@ -310,8 +310,11 @@ The game runs as Valve's free sample app 480, so you both show as playing
 7845 must be reachable:
 on the same network use the host's local address; over the internet a VPN
 such as Tailscale is the simple way (use the host's Tailscale address). The
-host's cheats and settings apply to both; once a second the two games are
-compared and, if they ever differ, the host's is sent again (a "resync").
+host's cheats and settings apply to both, and the host can change them
+during play; once a second the two games are compared and, if they ever
+differ, the host's is sent again (a "resync"). Controls answer a few frames
+late online: as few as the connection allows (shown bottom right as the ping
+and the delay in frames; 2 on a LAN, more on a slow link).
 See [docs/NETPLAY.md](docs/NETPLAY.md).
 **Golden gem compass**
 (a setting on the same page, off by default, and working with the debug menu

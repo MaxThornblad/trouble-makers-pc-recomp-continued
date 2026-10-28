@@ -77,7 +77,9 @@ build next.
   until the next scene. A sandboxed probe on GameState_Gameplay entry
   decides whether player 2's input would trigger such a transition.
 - Netplay (`netplay.cpp`, transports `net_enet.cpp`, `steam_net.cpp` behind
-  `net_transport.h`): delay-based lockstep, `g_delay` = 4 frames. The host
+  `net_transport.h`, test lag wrapper `net_lag.cpp`): delay-based lockstep;
+  each side's delay comes from its measured round trip (`net_delay.cpp`,
+  2..10 frames; NETPLAY.md "Input delay from the measured connection"). The host
   takes a save state, loads it back, and sends it with its EEPROM and
   settings (kStart); each side sends its input for frame f+delay (kInput,
   which since protocol 2 also carries the host's cheats and settings, applied
@@ -156,16 +158,14 @@ Gotchas from this project:
 
 ## 4. The approved plan
 
-### Step 1 (on `save-states`, released as update 6): the easy fix
+### Step 1 (on `save-states`, released as update 6): the easy fix — DONE
 
-- Adaptive input delay: measure RTT in the handshake and during play
-  (ping/pong on the input channel), pick the delay from it (about RTT/2 in
-  frames plus a margin for jitter, clamped 2..10), and change it only at an
-  agreed future frame announced by the host, so both machines switch on the
-  same frame. Show ping and delay in the netplay overlay.
-- A lag simulator for the transport (delay, jitter, loss; env-driven, for
-  tests) and bot scenarios using it (e.g. 80 ms ±20 ms, 1% loss): no
-  resyncs, fingerprints identical, the delay adapts.
+Adaptive input delay (`net_delay.cpp`; each side picks its own, no
+agreement needed since inputs are frame-numbered), ping and delay in the
+overlay, the lag simulator (`net_lag.cpp`, `MM_NET_LAG`) and the bot
+scenarios net-lag and net-loss. The simulator found a start race (inputs
+overtaking the start message across channels); the start now goes on the
+input channel. See NETPLAY.md.
 
 ### Step 2: branch `netcode-v2` (from `save-states`)
 

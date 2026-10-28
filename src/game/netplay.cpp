@@ -16,6 +16,7 @@
 
 
 #include "cheats.h"
+#include "net_delay.h"
 #include "net_transport.h"
 #include "librecomp/game.hpp"
 #include "mm_audio_input.hpp"
@@ -44,7 +45,7 @@ namespace {
 
 constexpr uint32_t kMagic = 0x504E4D54u;   // "TMNP"
 constexpr uint32_t kProtocol = 2;   // 2: the host's settings ride with its input
-// Channels: 0 control (state), 1 input + fingerprints.
+// Channels: 0 control (hello, refuse, desync), 1 start + input + fingerprints + pings.
 constexpr int kHashEvery = 60;             // frames between fingerprint checks
 
 enum Msg : uint8_t {
@@ -54,6 +55,8 @@ enum Msg : uint8_t {
     kHash = 4,     // both: epoch, frame, fingerprint
     kDesync = 5,   // guest -> host: epoch, frame (please resync)
     kRefuse = 6,   // host -> guest: reason text
+    kPing = 7,     // both: sender's clock (us), answered with kPong
+    kPong = 8,     // both: the clock from the ping, back to its sender
 };
 
 struct Writer {
@@ -86,6 +89,14 @@ struct Reader {
         return true;
     }
 };
+
+long g_global = 0;                  // frames since launch
+long global_frame() { return g_global; }
+
+uint64_t now_us() {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+}
 
 // ------------------------------------------------------------------- state
 
@@ -136,8 +147,15 @@ bool g_partner = false;             // the transport reported the partner there
 bool g_is_host = false;
 bool g_peer_ok = false;             // host: hello accepted; guest: connected
 bool g_start_wanted = false;        // host: start (or resync) at this frame point
+long g_start_at = -1;               // host: start once this global frame comes (after the hello)
 uint32_t g_epoch = 0;
-int g_delay = 4;
+int g_delay = 4;                    // frames ahead this side sends its input (net_delay.h)
+bool g_delay_fixed = false;         // MM_NET_DELAY: no adapting
+DelayController g_delay_ctl;
+uint32_t g_last_sent = 0;           // the last frame this side's input went out for
+std::atomic<int> g_shown_ping{-1}, g_shown_delay{0};   // for the overlay (render thread)
+long g_long_waits = 0;              // frames this session that waited over a frame for the partner
+double g_longest_wait_ms = 0;
 long g_frame = 0;                   // session frame; inputs for it are in g_cur
 std::map<uint32_t, Input> g_local, g_remote;
 Input g_cur[2];                     // this frame: controller 0 (host), 1 (guest)
@@ -284,9 +302,14 @@ void reset_frames() {
         g_local[static_cast<uint32_t>(f)] = g_is_host ? start : Input{};
         g_remote[static_cast<uint32_t>(f)] = g_is_host ? Input{} : start;
     }
+    g_last_sent = static_cast<uint32_t>(g_delay - 1);
 }
 
 void begin_running() {
+    if (!g_active.load()) {
+        g_long_waits = 0;
+        g_longest_wait_ms = 0;
+    }
     reset_frames();
     mm_virtual_audio_clock(true);
     mm_audio_input::set_input_filter(filter);
@@ -299,6 +322,8 @@ void begin_running() {
 void end_session(const char* why) {
     const bool was_active = g_active.exchange(false);
     if (was_active) {
+        std::fprintf(stderr, "[netplay] frames that waited over a frame for the partner: %ld, longest %.0f ms\n",
+                     g_long_waits, g_longest_wait_ms);
         mm_audio_input::set_input_filter(nullptr);
         mm_virtual_audio_clock(false);
         mm::cheats::set_session_settings(nullptr);
@@ -361,7 +386,10 @@ bool host_start(uint8_t* rdram, recomp_context* ctx) {
     w.put(s_settings);
     w.bytes(eeprom.data(), eeprom.size());
     w.bytes(state.data(), state.size());
-    send(0, w);
+    // On the input channel: the inputs for the new epoch follow it there, so
+    // they cannot overtake it (small packets do overtake a large message on
+    // another channel) and be dropped by a guest not yet started.
+    send(1, w);
     flush();
     begin_running();
     std::fprintf(stderr, "[netplay] %s from the host's game (epoch %u, %zu KiB state)\n",
@@ -441,7 +469,7 @@ void on_packet(uint8_t* rdram, recomp_context* ctx, const uint8_t* data, size_t 
                 return;
             }
             g_peer_ok = true;
-            g_start_wanted = true;
+            g_start_at = global_frame() + 20;   // a third of a second of round-trip samples first
             return;
         }
         case kStart:
@@ -461,6 +489,25 @@ void on_packet(uint8_t* rdram, recomp_context* ctx, const uint8_t* data, size_t 
                 return;
             if (epoch != g_epoch || !g_active.load()) return;
             if (static_cast<long>(frame) >= g_frame) g_remote[frame] = in;
+            return;
+        }
+        case kPing: {
+            uint64_t t;
+            if (!r.get(t)) return;
+            Writer w;
+            w.put<uint8_t>(kPong);
+            w.put<uint64_t>(t);
+            send(1, w);
+            flush();
+            return;
+        }
+        case kPong: {
+            uint64_t t;
+            if (!r.get(t)) return;
+            const double ms = static_cast<double>(now_us() - t) / 1000.0;
+            if (g_active.load() && g_frame < 60) return;   // sent before this (re)start
+            g_delay_ctl.add_rtt(ms);
+            g_shown_ping.store(static_cast<int>(std::lround(g_delay_ctl.rtt_ms())));
             return;
         }
         case kHash: {
@@ -512,6 +559,7 @@ bool service(uint8_t* rdram, recomp_context* ctx, uint32_t timeout_ms) {
                 g_partner = false;
                 if (g_is_host && !g_active.load()) {
                     g_peer_ok = false;
+                    g_start_at = -1;
                     set_text(g_net->waiting_text());
                 } else {
                     end_session("the other player left");
@@ -536,7 +584,11 @@ void begin(std::unique_ptr<Transport> net, const std::string& error, bool host) 
         std::fprintf(stderr, "[netplay] %s\n", error.c_str());
         return;
     }
-    g_net = std::move(net);
+    g_net = with_test_lag(std::move(net));
+    g_start_at = -1;
+    g_delay_ctl = DelayController{};
+    if (!g_delay_fixed) g_delay = 4;   // until the first round trips are in
+    g_shown_ping.store(-1);
     g_partner = false;
     g_is_host = host;
     g_peer_ok = false;
@@ -603,9 +655,21 @@ void run_frame(uint8_t* rdram, recomp_context* ctx) {
     g_restarted = false;
     const uint32_t f = static_cast<uint32_t>(g_frame);
 
-    // This side's input, `delay` frames ahead.
-    {
-        const uint32_t ahead = f + static_cast<uint32_t>(g_delay);
+    // How far ahead to send, from the measured round trip.
+    if (!g_delay_fixed) {
+        const int d = g_delay_ctl.update(g_delay);
+        if (d != g_delay) {
+            std::fprintf(stderr, "[netplay] delay now %d frames (round trip %.0f ms, worst %.0f ms)\n", d,
+                         g_delay_ctl.rtt_ms(), g_delay_ctl.rtt_high_ms());
+            g_delay = d;
+        }
+    }
+    g_shown_delay.store(g_delay);
+
+    // This side's input, `delay` frames ahead. When the delay grew, the
+    // frames in between get the same input; when it shrank, nothing goes out
+    // until the frames already sent are passed.
+    for (uint32_t ahead = g_last_sent + 1; ahead <= f + static_cast<uint32_t>(g_delay); ++ahead) {
         Input in = local_input(static_cast<long>(ahead));
         if (g_is_host) put_settings(in, mm::cheats::capture_session_settings());
         g_local[ahead] = in;
@@ -618,6 +682,16 @@ void run_frame(uint8_t* rdram, recomp_context* ctx) {
         w.put(in.y);
         w.put(in.cheats);
         w.put(in.flags);
+        send(1, w);
+        g_last_sent = ahead;
+    }
+
+    // Four round-trip measurements a second, once the session is under way
+    // (the first answers would wait behind the guest loading the start state).
+    if (f >= 60 && f % 15 == 0) {
+        Writer w;
+        w.put<uint8_t>(kPing);
+        w.put<uint64_t>(now_us());
         send(1, w);
     }
 
@@ -689,6 +763,11 @@ void run_frame(uint8_t* rdram, recomp_context* ctx) {
         }
     }
     g_waiting.store(false);
+    {
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+        if (ms > 1000.0 / 60.0) ++g_long_waits;
+        g_longest_wait_ms = std::max(g_longest_wait_ms, ms);
+    }
 
     const Input mine = g_local[f], theirs = g_remote[f];
     g_cur[g_is_host ? 0 : 1] = mine;
@@ -801,13 +880,21 @@ std::string status_text() {
 void on_frame(uint8_t* rdram, recomp_context* ctx) {
     static bool env_read = false;
     static std::string env_host, env_join;
-    static long host_at = -1, join_at = -1, global = 0;
+    static long host_at = -1, join_at = -1;
+    long& global = g_global;
     ++global;
+    if (g_start_at >= 0 && global >= g_start_at) {
+        g_start_at = -1;
+        g_start_wanted = true;
+    }
     if (!env_read) {
         env_read = true;
         if (env_at("MM_NET_HOST", env_host, host_at) && host_at == 0) host_at = 1;
         if (env_at("MM_NET_JOIN", env_join, join_at) && join_at == 0) join_at = 1;
-        if (const char* d = std::getenv("MM_NET_DELAY")) g_delay = std::clamp(std::atoi(d), 1, 30);
+        if (const char* d = std::getenv("MM_NET_DELAY")) {
+            g_delay = std::clamp(std::atoi(d), 1, 30);
+            g_delay_fixed = true;
+        }
         if (const char* p = std::getenv("MM_NET_PAD")) parse_pad(p);
         if (const char* l = std::getenv("MM_NET_LENGTH")) g_length = std::strtol(l, nullptr, 10);
     }
@@ -869,8 +956,18 @@ void on_frame(uint8_t* rdram, recomp_context* ctx) {
     if (!g_active.load()) {
         // Connecting / waiting for a player.
         if (!service(rdram, ctx, 0)) return;
+        // The host measures the trip while the guest connects, so the
+        // session starts at the right delay.
+        if (g_is_host && g_peer_ok && g_partner && (global % 15) == 0) {
+            Writer w;
+            w.put<uint8_t>(kPing);
+            w.put<uint64_t>(now_us());
+            send(1, w);
+            flush();
+        }
         if (g_is_host && g_start_wanted && g_peer_ok) {
             g_start_wanted = false;
+            if (!g_delay_fixed && g_delay_ctl.wanted() > 0 && g_epoch == 0) g_delay = g_delay_ctl.wanted();
             if (!host_start(rdram, ctx)) end_session("could not take the start state");
             else {
                 set_text("Netplay: you are player 1 (host)");
@@ -909,7 +1006,28 @@ void draw_overlay() {
     if (g_status.load() == Status::Off) return;
     std::string text = status_text();
     if (g_waiting.load()) text = "Waiting for the other player...";
-    else if (g_active.load()) return;   // playing: nothing on screen
+    else if (g_active.load()) {
+        // Playing: the connection, small and out of the way.
+        const int ping = g_shown_ping.load();
+        char line[64];
+        if (ping < 0) std::snprintf(line, sizeof line, "delay %d", g_shown_delay.load());
+        else std::snprintf(line, sizeof line, "%d ms  delay %d", ping, g_shown_delay.load());
+        // Bottom right: the rank timer has the top right.
+        const ImVec2 size = ImGui::GetIO().DisplaySize;
+        ImGui::SetNextWindowPos(ImVec2(size.x - 8.0f, size.y - 8.0f), ImGuiCond_Always, ImVec2(1.0f, 1.0f));
+        ImGui::SetNextWindowBgAlpha(0.35f);
+        constexpr ImGuiWindowFlags small =
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs |
+            ImGuiWindowFlags_NoMove;
+        if (ImGui::Begin("##netplay_ping", nullptr, small)) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 0.7f));
+            ImGui::TextUnformatted(line);
+            ImGui::PopStyleColor();
+        }
+        ImGui::End();
+        return;
+    }
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetIO().DisplaySize.x - 16.0f, 16.0f), ImGuiCond_Always, ImVec2(1.0f, 0.0f));
     ImGui::SetNextWindowBgAlpha(0.75f);
     constexpr ImGuiWindowFlags flags =

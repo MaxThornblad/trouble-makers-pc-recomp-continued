@@ -47,6 +47,8 @@ add_executable(troublemakers
     netplay.cpp
     steam_net.cpp
     net_enet.cpp
+    net_lag.cpp
+    net_delay.cpp
     widescreen.cpp
 )
 

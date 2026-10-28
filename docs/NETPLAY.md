@@ -131,7 +131,8 @@ from the overlay's Session page.
   host's settings ride with each of its inputs, so menu changes on the host
   apply on both machines on the same frame.
 - **Lockstep**: each frame point, each side sends its own input for frame
-  f + delay (default 4) and waits until the other side's input for f is in.
+  f + delay and waits until the other side's input for f is in. The delay
+  is each side's own, from the measured round trip (below).
   The game's controller polls in frame f are answered with those two inputs
   (host = controller 1 = Marina, guest = controller 2 = player 2).
 - **Checks**: every 60 frames both send a memory fingerprint (the replay
@@ -380,6 +381,40 @@ the game gets a second camera for player 2, so neither is held to the other:
 - **Bot scenario net-cheats**: the host turns moon jump on and off
   mid-session (`MM_NET_TOGGLE=<cheat>@<frame>`), the guest tries and is
   refused; the change lines and the fingerprints match on both machines.
+
+## Input delay from the measured connection (src/game/net_delay.cpp)
+
+The delay used to be a fixed 4 frames: too much on a LAN, and on a slow
+link every late packet froze both games. Now each side measures the round
+trip (kPing/kPong on the input channel, four a second) and picks its own
+delay: the worst recent sample halved, plus 4 ms of slack, in frames, plus
+one; clamped to 2..10. It goes up at once when the trip needs more and
+steps down one frame after five seconds of needing less. The choice only
+shapes when inputs arrive, never what the game does with them (every input
+is tied to a frame number and both sides wait for both inputs of a frame),
+so the two sides can differ and change at any time and stay identical. When
+the delay grows, the frames in between get the same input; when it shrinks,
+nothing is sent until the frames already sent are passed. The host also
+measures while the guest connects (and starts a third of a second after the
+hello for that), so the session begins at the right delay; samples from the
+first second after a (re)start are ignored, since those answers wait behind
+the guest loading the start state. `MM_NET_DELAY=<n>` fixes the delay (tests).
+The overlay shows "<ping> ms  delay <n>" bottom right while playing, and the
+session's end prints how many frames waited over a frame for the partner.
+
+The start message moved to the input channel: the inputs for the new epoch
+follow it there and cannot overtake it. On separate channels a small input
+packet can arrive before the 1.7 MB start (ENet orders within a channel
+only), and a guest not yet started dropped it, then waited for it forever.
+The lag simulator found this on its first run.
+
+**Lag simulator** (`src/game/net_lag.cpp`): `MM_NET_LAG="<delay ms>[,<jitter
+ms>[,<loss %>]]"` wraps the transport so each side holds its sends back by
+the delay plus a random jitter, and now and then holds one back a further
+round trip as a lost packet's resend would (later messages on the channel
+wait behind it, as with a real reliable channel). Bot scenarios **net-lag**
+(60 ±15 ms each way: the delay must settle at 5 or more, no resyncs,
+identical fingerprints) and **net-loss** (20 ±5 ms, 1% loss).
 
 ## Transports: ENet and Steam
 

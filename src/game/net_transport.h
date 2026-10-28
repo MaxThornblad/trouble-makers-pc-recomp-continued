@@ -52,4 +52,8 @@ std::unique_ptr<Transport> steam_join(uint64_t lobby, std::string& error);   // 
 // accepted invite, Join Game). The lobby id once, or 0.
 uint64_t steam_join_request();
 
+// Tests: MM_NET_LAG="<delay ms>[,<jitter ms>[,<loss %>]]" wraps a transport
+// in a deliberately bad connection (net_lag.cpp); otherwise returns it as is.
+std::unique_ptr<Transport> with_test_lag(std::unique_ptr<Transport> net);
+
 } // namespace mm::netplay
