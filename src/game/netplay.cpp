@@ -43,14 +43,14 @@ namespace {
 // ---------------------------------------------------------------- protocol
 
 constexpr uint32_t kMagic = 0x504E4D54u;   // "TMNP"
-constexpr uint32_t kProtocol = 1;
+constexpr uint32_t kProtocol = 2;   // 2: the host's settings ride with its input
 // Channels: 0 control (state), 1 input + fingerprints.
 constexpr int kHashEvery = 60;             // frames between fingerprint checks
 
 enum Msg : uint8_t {
     kHello = 1,    // guest -> host: magic, protocol, build
     kStart = 2,    // host -> guest: epoch, delay, settings, eeprom, state
-    kInput = 3,    // both: epoch, frame, buttons, x, y
+    kInput = 3,    // both: epoch, frame, buttons, x, y, settings (the host's; zero from the guest)
     kHash = 4,     // both: epoch, frame, fingerprint
     kDesync = 5,   // guest -> host: epoch, frame (please resync)
     kRefuse = 6,   // host -> guest: reason text
@@ -92,7 +92,28 @@ struct Reader {
 struct Input {
     uint16_t buttons = 0;
     int8_t x = 0, y = 0;
+    // The host's cheats and settings for this frame (SessionSettings), so a
+    // change in its menu takes effect on both machines on the same frame.
+    uint32_t cheats = 0;
+    uint8_t flags = 0;   // kFlag*
 };
+constexpr uint8_t kFlagActive = 1, kFlagHoldDash = 2, kFlagGemHints = 4;
+
+void put_settings(Input& in, const mm::cheats::SessionSettings& s) {
+    in.cheats = s.cheats;
+    in.flags = static_cast<uint8_t>((s.active ? kFlagActive : 0) | (s.hold_dash ? kFlagHoldDash : 0) |
+                                    (s.gem_hints ? kFlagGemHints : 0));
+}
+
+mm::cheats::SessionSettings settings_of(const Input& in) {
+    mm::cheats::SessionSettings s;
+    s.cheats = in.cheats;
+    s.active = (in.flags & kFlagActive) ? 1 : 0;
+    s.hold_dash = (in.flags & kFlagHoldDash) ? 1 : 0;
+    s.gem_hints = (in.flags & kFlagGemHints) ? 1 : 0;
+    s.widescreen = 1;   // online play is always widescreen
+    return s;
+}
 
 enum class Req { None, Host, Join, Leave, HostSteam, JoinSteam };
 
@@ -124,7 +145,8 @@ std::map<uint32_t, uint64_t> g_local_hash, g_remote_hash;
 uint32_t g_seen_load_generation = 0;
 int g_resyncs = 0;
 bool g_sandboxed = false;
-bool g_restarted = false;           // a start was applied during this frame point
+bool g_restarted = false;
+mm::cheats::SessionSettings g_start_settings;   // the host's, from the last (re)start           // a start was applied during this frame point
 
 // Widescreen environment, as the guest had it before following the host.
 struct EnvSave { const char* name; std::string value; bool had; };
@@ -254,10 +276,13 @@ void reset_frames() {
     g_remote.clear();
     g_local_hash.clear();
     g_remote_hash.clear();
-    // The first `delay` frames have no input from either side yet: nothing pressed.
+    // The first `delay` frames have no input from either side yet: nothing
+    // pressed, under the settings the session (re)started with.
+    Input start;
+    put_settings(start, g_start_settings);
     for (int f = 0; f < g_delay; ++f) {
-        g_local[static_cast<uint32_t>(f)] = Input{};
-        g_remote[static_cast<uint32_t>(f)] = Input{};
+        g_local[static_cast<uint32_t>(f)] = g_is_host ? start : Input{};
+        g_remote[static_cast<uint32_t>(f)] = g_is_host ? Input{} : start;
     }
 }
 
@@ -317,17 +342,15 @@ bool host_start(uint8_t* rdram, recomp_context* ctx) {
     }
     const std::vector<uint8_t> state = read_file(path);
     const std::vector<uint8_t> eeprom = recomp::get_save_data();
-    // The host's settings as they were when the session began, all session
-    // long (its menu changes wait until the session ends).
-    static mm::cheats::SessionSettings s_settings;
-    if (!g_active.load()) {
-        s_settings = mm::cheats::capture_session_settings();
-        // Online play is always widescreen: each player's own view moves the
-        // picture sideways, and the widescreen wings (and wider activity
-        // around the camera) keep the moved edges filled.
-        s_settings.widescreen = 1;
-    }
+    // The host's settings now; from here on each frame's input carries them,
+    // so its menu changes reach both machines on the same frame.
+    mm::cheats::SessionSettings s_settings = mm::cheats::capture_session_settings();
+    // Online play is always widescreen: each player's own view moves the
+    // picture sideways, and the widescreen wings (and wider activity around
+    // the camera) keep the moved edges filled.
+    s_settings.widescreen = 1;
     mm::cheats::set_session_settings(&s_settings);
+    g_start_settings = s_settings;
     follow_widescreen(true);
 
     ++g_epoch;
@@ -367,7 +390,8 @@ void guest_start(uint8_t* rdram, recomp_context* ctx, Reader& r) {
     if (g_sandboxed) recomp::end_save_sandbox();
     recomp::begin_save_sandbox(eeprom);
     g_sandboxed = true;
-    mm::cheats::set_session_settings(&settings);
+    mm::cheats::set_session_settings(&settings, true);
+    g_start_settings = settings;
     follow_widescreen(settings.widescreen != 0);
     ultramodern::set_deterministic_events(true);
     std::string error;
@@ -432,7 +456,9 @@ void on_packet(uint8_t* rdram, recomp_context* ctx, const uint8_t* data, size_t 
         case kInput: {
             uint32_t epoch, frame;
             Input in;
-            if (!r.get(epoch) || !r.get(frame) || !r.get(in.buttons) || !r.get(in.x) || !r.get(in.y)) return;
+            if (!r.get(epoch) || !r.get(frame) || !r.get(in.buttons) || !r.get(in.x) || !r.get(in.y) ||
+                !r.get(in.cheats) || !r.get(in.flags))
+                return;
             if (epoch != g_epoch || !g_active.load()) return;
             if (static_cast<long>(frame) >= g_frame) g_remote[frame] = in;
             return;
@@ -580,7 +606,8 @@ void run_frame(uint8_t* rdram, recomp_context* ctx) {
     // This side's input, `delay` frames ahead.
     {
         const uint32_t ahead = f + static_cast<uint32_t>(g_delay);
-        const Input in = local_input(static_cast<long>(ahead));
+        Input in = local_input(static_cast<long>(ahead));
+        if (g_is_host) put_settings(in, mm::cheats::capture_session_settings());
         g_local[ahead] = in;
         Writer w;
         w.put<uint8_t>(kInput);
@@ -589,7 +616,29 @@ void run_frame(uint8_t* rdram, recomp_context* ctx) {
         w.put(in.buttons);
         w.put(in.x);
         w.put(in.y);
+        w.put(in.cheats);
+        w.put(in.flags);
         send(1, w);
+    }
+
+    // Test: MM_NET_TOGGLE=<cheat>@<frame>[,...] toggles a cheat in this side's
+    // menu at those session frames (the guest's toggles are refused).
+    static const std::vector<std::pair<int, long>> toggles = [] {
+        std::vector<std::pair<int, long>> out;
+        const char* v = std::getenv("MM_NET_TOGGLE");
+        for (const char* p = v; p && *p;) {
+            char* end;
+            const int cheat = static_cast<int>(std::strtol(p, &end, 10));
+            if (*end != '@') break;
+            out.emplace_back(cheat, std::strtol(end + 1, &end, 10));
+            p = *end == ',' ? end + 1 : end;
+            if (*end != ',') break;
+        }
+        return out;
+    }();
+    for (const auto& [cheat, at] : toggles) {
+        if (g_frame == at && cheat >= 0 && cheat < mm::cheats::kCheatCount)
+            mm::cheats::toggle(static_cast<mm::cheats::Cheat>(cheat));
     }
 
     // Test: MM_NET_POKE=<frame> makes this side differ there (resync check).
@@ -644,6 +693,16 @@ void run_frame(uint8_t* rdram, recomp_context* ctx) {
     const Input mine = g_local[f], theirs = g_remote[f];
     g_cur[g_is_host ? 0 : 1] = mine;
     g_cur[g_is_host ? 1 : 0] = theirs;
+    {
+        // The host's settings for this frame, on both machines.
+        const mm::cheats::SessionSettings s = settings_of(g_cur[0]);
+        mm::cheats::set_session_settings(&s, !g_is_host);
+        static Input s_last;
+        if (f > 0 && (g_cur[0].cheats != s_last.cheats || g_cur[0].flags != s_last.flags))
+            std::fprintf(stderr, "[netplay] settings changed at frame %u (cheats %x, flags %x)\n", f,
+                         g_cur[0].cheats, g_cur[0].flags);
+        s_last = g_cur[0];
+    }
     g_local.erase(g_local.begin(), g_local.lower_bound(f));
     g_remote.erase(g_remote.begin(), g_remote.lower_bound(f));
 

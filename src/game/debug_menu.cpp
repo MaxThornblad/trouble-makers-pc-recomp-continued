@@ -622,6 +622,16 @@ void draw_overlay() {
         ImGui::TextWrapped(
             "Cheats stay on between sessions until you turn them off. "
             "They only work while the debug menu is enabled in the launcher.");
+        if (mm::cheats::settings_from_host()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.35f, 1.0f));
+            ImGui::TextWrapped(
+                "Online: the host's cheats, hold to dash and gem hints are shown and "
+                "used for both players; only the host can change them. Your own "
+                "settings come back when you leave.");
+            ImGui::PopStyleColor();
+        } else if (mm::cheats::session_settings_active()) {
+            ImGui::TextWrapped("Online: your changes apply to both players a few frames later.");
+        }
         ImGui::Spacing();
         const int selected = g_selected_cheat.load(std::memory_order_relaxed);
         ImGui::BeginChild("##cheats", ImVec2(0.0f, -34.0f), true);

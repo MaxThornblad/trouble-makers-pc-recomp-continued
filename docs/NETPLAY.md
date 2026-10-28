@@ -127,7 +127,9 @@ from the overlay's Session page.
   does), and sends it with its cartridge save and its game-changing settings
   (`cheats::SessionSettings`: cheats and whether they are live, hold to dash,
   gem hints, widescreen). The guest plays in a save sandbox (its own save file
-  untouched), adopts the settings for the session and loads the state.
+  untouched), adopts the settings and loads the state. From then on the
+  host's settings ride with each of its inputs, so menu changes on the host
+  apply on both machines on the same frame.
 - **Lockstep**: each frame point, each side sends its own input for frame
   f + delay (default 4) and waits until the other side's input for f is in.
   The game's controller polls in frame f are answered with those two inputs
@@ -355,6 +357,29 @@ the game gets a second camera for player 2, so neither is held to the other:
   lands the other player joins her there (as through a door).
 - **Bot scenario p2-carry-block**: player 2 picks up a stage block and walks
   with it; no frame may move her more than 4 px.
+
+## Fixes from the third session: cheats for both, live from the host's menu
+
+- **Movement cheats for player 2.** Endless jet, moon jump and hold to dash
+  rewrote only slot 0 (whoever is Marina on that frame). They now also run
+  with player 2 standing in as Marina (`player2::as_marina`), and moon jump's
+  rises left are kept in game memory per player (0x807F0610 / 0x807F0614)
+  rather than in a host-side static, so save states and both machines agree.
+- **Live cheats online.** The host's settings were captured once at the start
+  and held all session, while its menu kept changing its own saved choices:
+  toggles did nothing until the session ended, and then the changed choices
+  showed up "out of nowhere". The guest's menu changed its own saved choices
+  too, which came back when it left. Protocol 2 sends the host's settings
+  (cheats bitmask, live, hold to dash, gem hints) with every one of its
+  inputs; both machines adopt them on the frame those inputs are used, so a
+  toggle on the host takes effect on the same frame on both, a few frames
+  later. The guest's menu shows the host's settings and refuses to change
+  them (rank timer, compass, enemy bars and damage numbers draw only on the
+  machine that has them and stay each player's own). Leaving restores each
+  machine's own choices, untouched by the session.
+- **Bot scenario net-cheats**: the host turns moon jump on and off
+  mid-session (`MM_NET_TOGGLE=<cheat>@<frame>`), the guest tries and is
+  refused; the change lines and the fingerprints match on both machines.
 
 ## Transports: ENet and Steam
 

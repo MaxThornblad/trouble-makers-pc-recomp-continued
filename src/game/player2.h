@@ -39,6 +39,10 @@ void clamp_x(uint8_t* rdram, int32_t centre, int32_t half_width);
 void held_swap_begin(uint8_t* rdram, int actor);
 void held_swap_end(uint8_t* rdram);
 
+// Run fn with player 2 as Marina (slot 0, Marina's globals), keeping what it
+// does to her: the movement cheats, written for Marina, act on her too.
+void as_marina(uint8_t* rdram, void (*fn)(uint8_t*));
+
 // Player 2 stands in for Marina (slot 0, Marina's globals) between these
 // two calls; nothing she does meanwhile is kept (the second camera's pass).
 void stand_in_begin(uint8_t* rdram);

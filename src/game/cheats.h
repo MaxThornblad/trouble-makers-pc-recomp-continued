@@ -102,7 +102,9 @@ struct SessionSettings {
     uint8_t widescreen = 0;   // filled by netplay (not a cheats.cfg setting)
 };
 SessionSettings capture_session_settings();
-void set_session_settings(const SessionSettings* settings);
+// from_host: this machine is the guest, so its menu cannot change these.
+void set_session_settings(const SessionSettings* settings, bool from_host = false);
 bool session_settings_active();
+bool settings_from_host();   // the guest in an online session: the host's settings rule
 
 } // namespace mm::cheats

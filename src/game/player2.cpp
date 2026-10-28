@@ -80,6 +80,8 @@ constexpr size_t globals_size() {
 // Layout at 0x807F0000 (keep in step): 0x000 globals copy, 0x400 previous
 // buttons, 0x404 join timer, 0x408 away timer, 0x40C full health, 0x410 frames
 // in her texture buffers (draw), 0x414 grab cooldown, 0x420 frame header,
+// 0x500 the second camera (far_coop.cpp), 0x600 the lead swap
+// (player2_lead.cpp), 0x610 moon jump rises left per player (cheats.cpp),
 // 0x1000 display lists, 0x2000 textures, 0x4000 packed frame.
 constexpr uint32_t kP2Globals = 0x807F0000u;
 constexpr uint32_t kP2PrevButtons = kP2Globals + 0x400u;
@@ -336,6 +338,26 @@ struct StandIn {
     std::array<uint8_t, globals_size()> p1_globals;
 };
 StandIn g_stand_in;
+}
+
+void as_marina(uint8_t* rdram, void (*fn)(uint8_t*)) {
+    const int p2 = slot(rdram);
+    if (p2 <= 0 || g_stand_in.on || !mm::cheats::coop_enabled()) return;
+    std::array<uint8_t, kStride> p1_record;
+    std::array<uint8_t, globals_size()> p1_globals;
+    std::memcpy(p1_record.data(), slot_ptr(rdram, 0), kStride);
+    copy_globals_out(rdram, p1_globals.data());
+    std::memcpy(slot_ptr(rdram, 0) + 0x80, slot_ptr(rdram, p2) + 0x80, kStride - 0x80);   // (not the render matrices)
+    MEM_H(0xD2, addr(kActors)) = static_cast<int16_t>(kMarinaType);
+    copy_globals_in(rdram, at(rdram, kP2Globals));
+    fn(rdram);
+    // What it did is hers.
+    std::memcpy(slot_ptr(rdram, p2) + 0x80, slot_ptr(rdram, 0) + 0x80, kStride - 0x80);
+    MEM_H(0xD2, addr(kActors + static_cast<uint32_t>(p2) * kStride)) =
+        static_cast<int16_t>(mm::custom_actors::type_id(kCustomIndex));
+    copy_globals_out(rdram, at(rdram, kP2Globals));
+    std::memcpy(slot_ptr(rdram, 0), p1_record.data(), kStride);
+    copy_globals_in(rdram, p1_globals.data());
 }
 
 void stand_in_begin(uint8_t* rdram) {

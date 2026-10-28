@@ -75,6 +75,14 @@ std::atomic<uint32_t> g_session_cheats{0};
 std::atomic<bool> g_session_active{false};
 std::atomic<bool> g_session_hold_dash{true};
 std::atomic<bool> g_session_gem_hints{true};
+std::atomic<bool> g_session_follow{false};   // this machine is the guest: the host's settings rule
+
+// The guest's menu cannot change what the host decides for the session.
+bool held_by_host(const char* what) {
+    if (!g_session.load(std::memory_order_acquire) || !g_session_follow.load(std::memory_order_relaxed)) return false;
+    std::fprintf(stderr, "[cheats] %s is set by the host during online play\n", what);
+    return true;
+}
 
 bool active_now() {
     return g_session.load(std::memory_order_acquire) ? g_session_active.load(std::memory_order_relaxed)
@@ -214,18 +222,22 @@ constexpr int kExtraRises = 3;
 constexpr int32_t kFallGravity = 0x6000;
 constexpr int32_t kMoonGravityRefund = 0x4000;
 
-void apply_moon_jump(uint8_t* rdram) {
-    static int rises_left = 0;
+// Rises left in this jump, one word per player in game memory (player 2's
+// block, player2.cpp's layout), so both machines of an online game agree.
+constexpr uint32_t kRisesLeft[2] = {0x807F0610u, 0x807F0614u};
+
+void apply_moon_jump(uint8_t* rdram, int player) {
     if (MEM_HU(0, addr(kGameState)) != 6) return;
     const gpr marina = addr(kMarina);
+    const gpr rises = addr(kRisesLeft[player]);
     const uint16_t state = MEM_HU(0xD0, marina);
-    if (state != kRiseState) rises_left = kExtraRises;
+    if (state != kRiseState) MEM_W(0, rises) = kExtraRises;
     if (state == kRiseState) {
         const bool held = (MEM_HU(0, addr(kMarinaHold)) & kJumpButton) != 0;
-        if (held && rises_left > 0 &&
+        if (held && MEM_W(0, rises) > 0 &&
             static_cast<uint32_t>(MEM_W(kJetTimer, marina)) == kRiseRearmAt) {
             MEM_W(kJetTimer, marina) = kRiseDuration;
-            --rises_left;
+            MEM_W(0, rises) = MEM_W(0, rises) - 1;
         }
     }
     else if (state == kFallState) {
@@ -490,6 +502,7 @@ bool enabled(Cheat cheat) {
 }
 
 void toggle(Cheat cheat) {
+    if (held_by_host(name(cheat))) return;
     auto& flag = g_enabled[static_cast<int>(cheat)];
     const bool now = !flag.load();
     flag.store(now, std::memory_order_release);
@@ -589,6 +602,7 @@ bool gem_hints_enabled() {
 }
 
 void toggle_gem_hints() {
+    if (held_by_host("gem hints")) return;
     const bool now = !g_gem_hints.load();
     g_gem_hints.store(now, std::memory_order_release);
     std::fprintf(stderr, "[cheats] gem hints %s\n", now ? "on" : "off");
@@ -636,6 +650,7 @@ bool hold_dash_enabled() {
 }
 
 void toggle_hold_dash() {
+    if (held_by_host("hold to dash")) return;
     const bool now = !g_hold_dash.load();
     g_hold_dash.store(now, std::memory_order_release);
     std::fprintf(stderr, "[cheats] hold to dash %s\n", now ? "on" : "off");
@@ -645,7 +660,9 @@ void toggle_hold_dash() {
 void apply_settings(uint8_t* rdram) {
     // Endless jet (a cheat) already covers this, and adds flight.
     if (active_now() && (enabled(Cheat::EndlessJet) || enabled(Cheat::NoClip))) return;
-    if (hold_dash_enabled()) apply_hold_dash(rdram);
+    if (!hold_dash_enabled()) return;
+    apply_hold_dash(rdram);
+    mm::player2::as_marina(rdram, [](uint8_t* r) { apply_hold_dash(r); });   // and player 2's
 }
 
 bool damage_numbers_enabled() {
@@ -692,11 +709,13 @@ SessionSettings capture_session_settings() {
     return out;
 }
 
-void set_session_settings(const SessionSettings* settings) {
+void set_session_settings(const SessionSettings* settings, bool from_host) {
     if (settings == nullptr) {
         g_session.store(false, std::memory_order_release);
+        g_session_follow.store(false, std::memory_order_relaxed);
         return;
     }
+    g_session_follow.store(from_host, std::memory_order_relaxed);
     g_session_cheats.store(settings->cheats, std::memory_order_relaxed);
     g_session_active.store(settings->active != 0, std::memory_order_relaxed);
     g_session_hold_dash.store(settings->hold_dash != 0, std::memory_order_relaxed);
@@ -706,6 +725,10 @@ void set_session_settings(const SessionSettings* settings) {
 
 bool session_settings_active() {
     return g_session.load(std::memory_order_acquire);
+}
+
+bool settings_from_host() {
+    return g_session.load(std::memory_order_acquire) && g_session_follow.load(std::memory_order_relaxed);
 }
 
 void set_active(bool active) {
@@ -719,8 +742,14 @@ void apply(uint8_t* rdram) {
         return;  // no clip owns Marina's movement
     }
     if (magnet_live(rdram)) pull_gem_actors(rdram);
+    // Marina's movement cheats, for player 1 and (as Marina for a moment)
+    // player 2: online the host's cheats are both players'.
     if (enabled(Cheat::EndlessJet)) apply_endless_jet(rdram);
-    if (enabled(Cheat::MoonJump)) apply_moon_jump(rdram);
+    if (enabled(Cheat::MoonJump)) apply_moon_jump(rdram, 0);
+    mm::player2::as_marina(rdram, [](uint8_t* r) {
+        if (enabled(Cheat::EndlessJet)) apply_endless_jet(r);
+        if (enabled(Cheat::MoonJump)) apply_moon_jump(r, 1);
+    });
     if (enabled(Cheat::MortalNpcs)) apply_mortal_refills(rdram);
 }
 

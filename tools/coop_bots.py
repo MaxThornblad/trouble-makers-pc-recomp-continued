@@ -98,6 +98,12 @@ NETPLAY = [
     # Player 2 leads from the middle on: the host's machine builds the second
     # picture from then on, and both stay identical.
     ("net-lead", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r", dict(env={"MM_TEST_LEAD_SWAP": "500"})),
+    # The host turns moon jump on and off mid-session; the guest's own toggle
+    # is refused. Both machines switch on the same frame and stay identical.
+    ("net-cheats", 1, 1200, "60:,300:r,20:A,100:,20:A,700:l", "60:,300:l,20:A,100:,20:A,700:r",
+     dict(env={"MM_NET_TOGGLE": "1@400,1@800"},
+          same=("settings changed at", 2),
+          guest=["is set by the host during online play"])),
     ("net-far", 1, 1500, "60:,1440:r", "60:,1440:l"),
     ("net-steam", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r"),   # over the Steam stand-in (--steam-mock)
     ("net-carry", 1, 1200, "80:,6:l,10:B,20:,60:r,30:,60:l,20:,10:B,900:", "600:,6:r,10:B,20:,60:l,30:,60:r,20:,10:B,400:"),
@@ -340,6 +346,15 @@ def run_netplay(args, name, slot, frames, pad1, pad2, port, extra=None):
             problems.append("fingerprints differ")
         start = hout.find("session started")
         end = hout.find("session ended", start)   # after it the host plays on alone
+        if "same" in extra:   # these lines, as many, identical on both machines
+            text, count = extra["same"]
+            hl = [l for l in hout.splitlines() if text in l]
+            gl = [l for l in gout.splitlines() if text in l]
+            if len(hl) != count or hl != gl:
+                problems.append("%r lines: host %s, guest %s" % (text, hl, gl))
+        for text in extra.get("guest", []):
+            if text not in gout:
+                problems.append("guest: missing %r" % text)
         more, traced, _ = check_trace(hout[start:end if end > 0 else None], 3, far=True)
         return problems + more, traced
 
