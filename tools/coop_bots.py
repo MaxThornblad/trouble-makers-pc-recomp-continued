@@ -49,13 +49,15 @@ SCENARIOS = [
     ("apart-1", 1, 700, "60:,600:r", "60:,600:l", 0),
     ("apart-4", 4, 700, "60:,600:l", "60:,600:r", 0),
     ("apart-6", 6, 700, "60:,600:r", "60:,600:l", 0),
+    ("apart-9", 9, 700, "60:,600:r", "60:,600:l", 0),
     ("p1-carries-p2", 1, 500, "80:,6:l,10:B,20:,60:r,30:,60:l,20:,10:B,200:", "500:", 0),
     ("p2-carries-p1", 1, 500, "500:", "80:,6:r,10:B,20:,60:l,30:,60:r,20:,10:B,200:", 0),
     ("both-grab", 1, 400, "80:,6:l,10:B,100:,10:B,200:", "80:,6:r,10:B,100:,10:B,200:", 0),
     ("carry-jump-throw", 4, 500, "80:,6:r,10:B,20:,10:A,40:,30:r,10:B,300:", "500:", 0),
     ("p2-carry-jump", 4, 500, "500:", "80:,6:l,10:B,20:,10:A,40:,30:l,10:B,300:", 0),
 ]
-for slot in (1, 2, 3, 4, 5, 6, 7, 8):
+# Slot 9: stage 3-12 (CERBERUS), where the owner saw trouble.
+for slot in (1, 2, 3, 4, 5, 6, 7, 8, 9):
     for seed in (1, 2):
         SCENARIOS.append(("fuzz-%d-%d" % (slot, seed), slot, 2400,
                           fuzz(seed * 100 + slot, grab_bias=True), fuzz(seed * 100 + slot + 50, grab_bias=True), 3))
@@ -72,6 +74,7 @@ FAR = [
     ("far-apart-1", 1, 900, "60:,840:r", "60:,840:l", 600),
     ("far-apart-4", 4, 900, "60:,840:l", "60:,840:r", 0),
     ("far-apart-6", 6, 900, "60:,840:r", "60:,840:l", 0),
+    ("far-apart-9", 9, 900, "60:,840:r", "60:,840:l", 0),
     ("far-there-and-back", 1, 1200, "60:,500:r,600:", "60:,300:l,300:r,500:", 400),
     ("far-fuzz-4", 4, 1800, fuzz(404, grab_bias=True), "60:," + fuzz(405), 0),
     ("far-fuzz-2", 2, 1800, fuzz(202), "60:,300:l," + fuzz(203), 0),
@@ -114,6 +117,7 @@ NETPLAY = [
     ("net-steam", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r"),   # over the Steam stand-in (--steam-mock)
     ("net-carry", 1, 1200, "80:,6:l,10:B,20:,60:r,30:,60:l,20:,10:B,900:", "600:,6:r,10:B,20:,60:l,30:,60:r,20:,10:B,400:"),
     ("net-fuzz", 4, 1800, fuzz(901, grab_bias=True), fuzz(902, grab_bias=True)),
+    ("net-fuzz-9", 9, 1800, fuzz(903, grab_bias=True), fuzz(904, grab_bias=True)),
 ]
 
 BASE_ENV = {"MM_HEADLESS_GFX": "1", "SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"}
@@ -131,6 +135,7 @@ def check_trace(text, allowed_rejoins, far=False):
     problems = []
     frames = present = apart = 0
     prev = None
+    prev_cam = (0, 0)
     joined_recently = 0
     held_bad = 0
     rejoins = text.count("rejoining")
@@ -182,6 +187,10 @@ def check_trace(text, allowed_rejoins, far=False):
                     problems.append("%s off the shared screen at frame %d (x %d)" % (who, n, rel))
         if prev and joined_recently == 0:
             for k, who, a, b in ((0, "p1", prev[0], p1), (1, "p2", prev[1], p2)):
+                # A looping arena (3-12, CERBERUS: about 785 px round) wraps a
+                # player's x back by a whole lap; not a jump.
+                if abs(a[0] - b[0]) > 600 and abs(a[1] - b[1]) <= 8:
+                    continue
                 if states[k] in CARRY_STATES or prev[2][k] in CARRY_STATES:
                     continue
                 if states[k] in SCRIPTED_STATES or prev[2][k] in SCRIPTED_STATES:
@@ -189,9 +198,15 @@ def check_trace(text, allowed_rejoins, far=False):
                 # Landing (a new state) may snap her up onto what she lands on.
                 max_step[k] = max(max_step[k], abs(a[0] - b[0]))
                 landing = states[k] != prev[2][k] and abs(a[0] - b[0]) <= 8 and 0 < b[1] - a[1] <= 32
-                if not landing and (abs(a[0] - b[0]) > 24 or abs(a[1] - b[1]) > 24):
+                # An auto-scrolling stage (3-12) carries the players with the
+                # screen: judge the step against the camera's as well.
+                dxc = (b[0] - a[0]) - (cx - prev_cam[0])
+                dyc = (b[1] - a[1]) - (cy - prev_cam[1])
+                big = (abs(a[0] - b[0]) > 24 or abs(a[1] - b[1]) > 24) and (abs(dxc) > 24 or abs(dyc) > 24)
+                if not landing and big:
                     problems.append("%s jumped at frame %d: %s -> %s" % (who, n, a, b))
         prev = (p1, p2, states)
+        prev_cam = (cx, cy)
         joined_recently = max(0, joined_recently - 1)
     if rejoins - defeats > allowed_rejoins:
         problems.append("%d leash rejoins (allowed %d)" % (rejoins - defeats, allowed_rejoins))

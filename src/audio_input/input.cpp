@@ -38,6 +38,7 @@ SDL_GameController* g_controller = nullptr;
 // input-polling path that owns g_controller: low motor << 48 | high motor << 32
 // | milliseconds.
 std::atomic<uint64_t> g_rumble_request{0};
+std::atomic<bool> g_rumble_muted{false};   // presentation off
 // Last time the player pressed anything (SDL ticks). Rumble is skipped when
 // nobody has touched the controls for a minute, so the attract-mode demo on
 // the title screen does not shake an idle controller.
@@ -280,6 +281,7 @@ bool live_input(int controller_num, uint16_t* buttons, float* x, float* y) {
 
 void set_rumble(int controller_num, bool on) {
     if (controller_num != 0 || g_controller == nullptr) return;
+    if (g_rumble_muted.load(std::memory_order_relaxed)) return;
     if (!SDL_GameControllerHasRumble(g_controller)) return;
     // N64 rumble is binary; use full-strength low-freq motor. A 0-length pulse
     // stops it; a long pulse sustains it (the runtime re-issues each VI).
@@ -301,8 +303,13 @@ ultramodern::input::connected_device_info_t get_connected_device_info(int contro
 
 } // namespace
 
+void set_rumble_muted(bool muted) {
+    g_rumble_muted.store(muted, std::memory_order_relaxed);
+}
+
 void request_rumble(uint16_t low, uint16_t high, uint32_t ms) {
     if (ms == 0 || (low == 0 && high == 0)) return;
+    if (g_rumble_muted.load(std::memory_order_relaxed)) return;
     g_rumble_request.store((static_cast<uint64_t>(low) << 48) |
                            (static_cast<uint64_t>(high) << 32) | ms,
                            std::memory_order_release);

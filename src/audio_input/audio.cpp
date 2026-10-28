@@ -71,9 +71,14 @@ void rebuild_converter() {
 // the device rate, and queue.
 std::atomic<uint64_t> g_submitted_bytes{0};
 
+std::atomic<bool> g_audio_muted{false};
+
 void queue_samples(int16_t* audio_data, size_t sample_count) {
+    // Counted even when muted: the game's virtual audio clock (and with it
+    // what the game reads as the DAC level) must not depend on presentation.
     g_submitted_bytes.fetch_add(sample_count * sizeof(int16_t), std::memory_order_relaxed);
     if (g_audio_device == 0 || sample_count < kInputChannels) return;
+    if (g_audio_muted.load(std::memory_order_relaxed)) return;
 
     uint32_t queued_before_bytes = SDL_GetQueuedAudioSize(g_audio_device);
     if (queued_before_bytes > queue_policy::kMaxQueuedBytes) {
@@ -161,6 +166,10 @@ void set_frequency(uint32_t freq) {
 // src/game/register_overlays.cpp); it is also the audio_callbacks value.
 void set_submitted_audio_bytes(uint64_t bytes) {
     g_submitted_bytes.store(bytes, std::memory_order_relaxed);
+}
+
+void set_audio_muted(bool muted) {
+    g_audio_muted.store(muted, std::memory_order_relaxed);
 }
 
 uint64_t submitted_audio_bytes() {

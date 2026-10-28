@@ -251,6 +251,20 @@ If phase 0 says rollback cannot fit, phases 1 to 3 still go ahead (they
 are what make new features cheap and fix sound), with adaptive delay as the
 netcode, and the owner decides.
 
+## 4b. Progress log
+
+- Phase 0 (go), phase 1 (registry; rollback audit in coop_bots --rollback),
+  phase 2 (frame_input), phase 3 (presentation switch) are done on
+  netcode-v2; see docs/NETCODE-V2.md for each. Next: phase 4, rollback.
+- Stage 3-12 (CERBERUS): the owner reported trouble there (details not
+  given yet). It is a looping auto-scrolling arena (about 785 px round,
+  10 px a frame). Save slot 9 in the test home is now a state at its start
+  (taken a few seconds in; see the save-state caveat in NETCODE-V2.md) and
+  scenarios apart-9, fuzz-9-1/2, far-apart-9, net-fuzz-9 run on it. The
+  session kit's test-home needs this slot 9 (copy from
+  /tmp/claude-0/t1/home_312 in this container, or remake it with
+  MM_TEST_WARP=3-12 MM_TEST_SAVESTATE_SLOT=9 MM_TEST_SAVESTATE=save@760).
+
 ## 5. Open questions for the owner (ask when relevant, not up front)
 
 - GekkoNet as a dependency (phase 4).

@@ -1,4 +1,5 @@
 #include "far_coop.h"
+#include "state_registry.h"
 #include "replay.h"
 
 #include <algorithm>
@@ -25,6 +26,7 @@ constexpr uint32_t kActors = 0x800EF510u;
 constexpr uint32_t kStride = 0x198u;
 constexpr int kSlots = 0xD0;
 constexpr uint32_t kGameState = 0x800BE4F0u;
+constexpr uint32_t kCurrentStage = 0x80178162u;
 constexpr uint32_t kCamX = 0x800BE558u, kCamY = 0x800BE55Cu;
 constexpr uint32_t kWorldX = 0x800BE5D8u, kWorldY = 0x800BE5DCu;   // Marina's world position (Q16.16)
 
@@ -46,10 +48,15 @@ constexpr uint32_t kSetCamY = kCamY - 0x800BE544u;
 
 constexpr uint32_t kLockX = 0x800BE62Cu, kLockY = 0x800BE630u;   // scroll locks (func_80012830)
 constexpr int32_t kNearX = 0x140 << 16, kNearY = 0xC0 << 16;         // "in the same arena"
+constexpr uint16_t kSharedCameraStages[] = {35};                      // 3-12 CERBERUS (see active())
 
 // The second camera in game memory (player 2's block, player2.cpp layout).
 constexpr uint32_t kStore = 0x807F0500u;          // +0 valid, +4 the set
 constexpr uint32_t kStoreSet = kStore + 4u;
+// The game's set as the last frame left it (+0 valid, +4 the set): a lap
+// wrap of the game's camera between frames is applied to the second too.
+constexpr uint32_t kLastSet = 0x807F0550u;
+constexpr int32_t kLapMin = 256 << 16;            // a camera jump this big in a frame is a lap, not a scroll
 
 // Onscreen-only actors (flag 0x4) die outside camera +-0x1C0 x +-0xA0
 // (func_80016D94, as patched for widescreen).
@@ -212,6 +219,16 @@ bool active(uint8_t* rdram) {
     if (!mm::cheats::coop_enabled()) return false;
     const uint16_t state = MEM_HU(0, addr(kGameState));
     if (state != 6 && state != 10) return false;
+    // Stages where the screen moves on its own (3-12, CERBERUS: a looping
+    // chase that scrolls at 10 px a frame and pushes Marina along) keep one
+    // shared camera: a second camera would not scroll, and a player left
+    // behind the loop's start is in a part of the world the lap wrap moves
+    // out from under her. On one screen the edge carries both players, as
+    // it carries Marina in the original game.
+    const uint16_t stage = MEM_HU(0, addr(kCurrentStage));
+    for (const uint16_t shared : kSharedCameraStages) {
+        if (stage == shared) return false;
+    }
     return mm::player2::slot(rdram) > 0;
 }
 
@@ -222,6 +239,7 @@ bool secondary_pass() { return g_secondary; }
 
 void reset(uint8_t* rdram) {
     MEM_W(0, addr(kStore)) = 0;
+    MEM_W(0, addr(kLastSet)) = 0;
 }
 
 bool p2_camera_offset(uint8_t* rdram, int32_t& dx, int32_t& dy) {
@@ -345,6 +363,22 @@ extern "C" void mm_far_after_camera(uint8_t* rdram, recomp_context* ctx) {
     if (!store_valid(rdram)) {
         std::memcpy(at(rdram, kStoreSet), loaded, kSetSize);
         MEM_W(0, addr(kStore)) = 1;
+        MEM_W(0, addr(kLastSet)) = 0;
+    }
+    // A looping stage (3-12, CERBERUS) wraps the game's camera back by a lap
+    // when it reaches the loop's end. The second camera sits at the same
+    // place in the world, so it wraps by the same amount, word for word
+    // (centre, last centre, look-ahead), or it would be a lap away from
+    // player 2 and drag her off.
+    if (MEM_W(0, addr(kLastSet)) == 1) {
+        uint8_t last[kSetSize];
+        std::memcpy(last, at(rdram, kLastSet + 4u), kSetSize);
+        for (uint32_t off = 0; off < kSetSize; off += 4) {
+            const int32_t d = set_word(loaded, off) - set_word(last, off);
+            if (d >= kLapMin || d <= -kLapMin) {
+                MEM_W(0, addr(kStoreSet + off)) = MEM_W(0, addr(kStoreSet + off)) + d;
+            }
+        }
     }
     const int p2 = mm::player2::slot(rdram);
     const gpr m = slot_addr(0), b = slot_addr(p2);
@@ -388,6 +422,8 @@ extern "C" void mm_far_after_camera(uint8_t* rdram, recomp_context* ctx) {
     MEM_W(0x8C, m) = m_y;
     MEM_W(0, addr(kWorldX)) = w_x;
     MEM_W(0, addr(kWorldY)) = w_y;
+    std::memcpy(at(rdram, kLastSet + 4u), loaded, kSetSize);
+    MEM_W(0, addr(kLastSet)) = 1;
 
     static const bool dbg = std::getenv("MM_FAR_DEBUG") != nullptr;
     static uint32_t dbg_n = 0;
@@ -725,6 +761,9 @@ extern "C" void mm_far_shadow(uint8_t* rdram, recomp_context* ctx, uint32_t task
     const auto t0 = std::chrono::steady_clock::now();
     g_backup.assign(rdram, rdram + kRam);
     const recomp_context saved = *ctx;
+    // Presentation only: nothing it does may reach host-side game state.
+    // Game memory is put back below; the registered state is checked here.
+    const uint64_t state_before = mm::state::hash_all(0xCBF29CE484222325ull);
     g_shadow = true;
     g_swapped = true;
     swap_roles(rdram);
@@ -732,6 +771,12 @@ extern "C" void mm_far_shadow(uint8_t* rdram, recomp_context* ctx, uint32_t task
     Graphics_Begin_Frame(rdram, ctx);
     g_swapped = false;
     g_shadow = false;
+    if (mm::state::hash_all(0xCBF29CE484222325ull) != state_before) {
+        static int reported = 0;
+        if (reported++ < 5)
+            std::fprintf(stderr, "[far] BUG: player 2's picture pass changed registered host state (the two "
+                                 "machines will drift apart)\n");
+    }
 
     // Which pages the shadow frame changed.
     g_dirty.assign(kRam / kPage, 0);

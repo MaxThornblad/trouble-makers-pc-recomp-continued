@@ -447,3 +447,26 @@ between two processes, and checks
 every frame: no position jumps, both on the shared screen, a carrier always
 carries a live object, bounded rejoins; online also identical fingerprints and
 no resync. It prints one line per scenario and ALL OK.
+
+## Stage 3-12 (CERBERUS): one shared camera
+
+The owner reported trouble in 3-12 online. The stage is a looping chase:
+the screen scrolls on its own at 10 px a frame and pushes Marina along,
+and every lap (about 785 px) the game wraps its camera back to the loop's
+start. Two things went wrong with a camera per player:
+
+- The second camera did not wrap with the game's, so once a lap it was a
+  whole loop away from player 2 and dragged her off (the "jumped" lines in
+  the bot traces). The second camera now wraps word for word with the
+  game's (far_coop.cpp, kLastSet: the game's set as the last frame left it).
+- The second camera never auto-scrolls (the chase drives the game's camera
+  only), so player 2 could simply be left behind at the loop's start, a
+  part of the world the lap wrap moves out from under her.
+
+So this stage keeps one shared camera even online (far_coop.cpp,
+kSharedCameraStages): the screen edge carries both players, as it carries
+Marina in the original game; the joiner sees the host's screen there. The
+lap-wrap fix stays for any other looping stage. Bot scenarios on a state
+at the stage's start (slot 9): apart-9, fuzz-9-1/2, far-apart-9,
+net-fuzz-9; the trace checks learnt about laps and about steps judged
+against a moving camera.

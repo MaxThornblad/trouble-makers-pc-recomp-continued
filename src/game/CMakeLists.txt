@@ -52,6 +52,7 @@ add_executable(troublemakers
     rollback_test.cpp
     state_registry.cpp
     frame_input.cpp
+    presentation_switch.cpp
     widescreen.cpp
 )
 

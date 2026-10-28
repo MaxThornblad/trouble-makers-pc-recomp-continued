@@ -21,6 +21,7 @@
 #include <memory>
 #include <string>
 
+#include "presentation_switch.h"
 #include "replay.h"
 #include "savestate.h"
 #include "ultramodern/ultramodern.hpp"
@@ -93,6 +94,7 @@ void on_frame(uint8_t* rdram, recomp_context* ctx, long frame) {
         g_again_ms += ms;
         g_again = false;
         ultramodern::set_speed_multiplier(g_speed_before);
+        mm::presentation::set_live(true);
         const bool same = fingerprint == g_target_fingerprint;
         if (!same) ++g_mismatches;
         std::fprintf(stderr, "[rollback-test] frame %ld: %ld frames again in %.2f ms%s\n", frame, g_depth, ms,
@@ -143,6 +145,7 @@ void on_frame(uint8_t* rdram, recomp_context* ctx, long frame) {
     g_again_started = Clock::now();
     g_speed_before = ultramodern::get_speed_multiplier();
     ultramodern::set_speed_multiplier(1000);   // the frames again as fast as they run
+    mm::presentation::set_live(false);         // and unseen, unheard
     // The ring now describes frames the game is about to run again: drop
     // them, they are snapshotted afresh on the way.
     for (Kept& k : g_ring) g_spare.push_back(std::move(k.snap));

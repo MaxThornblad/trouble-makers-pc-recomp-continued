@@ -1,0 +1,68 @@
+From 80e2ed13685b41482b1c246132a073f5ba5d7b35 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 19:21:50 +0100
+Subject: [PATCH] Presentation switch: graphics tasks completed without the
+ renderer
+
+For a rollback running frames again: set_presentation(false) completes
+graphics tasks at once (same completions, same order) without drawing.
+---
+ .../include/ultramodern/ultramodern.hpp       |  5 +++++
+ ultramodern/src/events.cpp                    | 19 ++++++++++++++++++-
+ 2 files changed, 23 insertions(+), 1 deletion(-)
+
+diff --git a/ultramodern/include/ultramodern/ultramodern.hpp b/ultramodern/include/ultramodern/ultramodern.hpp
+index b631c84..6961863 100644
+--- a/ultramodern/include/ultramodern/ultramodern.hpp
++++ b/ultramodern/include/ultramodern/ultramodern.hpp
+@@ -125,6 +125,11 @@ void deliver_pending_external_messages(RDRAM_ARG1);
+ // Moves every queued host event into the deferred list (saved with a state)
+ // without delivering it; the game receives them at its next dequeue as before.
+ void park_pending_external_messages();
++// Presentation off (a rollback running frames again): graphics tasks are
++// completed at once without reaching the renderer. The game sees the same
++// completions in the same order. Game thread.
++void set_presentation(bool on);
++bool presentation();
+ struct PendingExternalMessage {
+     PTR(OSMesgQueue) mq;
+     OSMesg mesg;
+diff --git a/ultramodern/src/events.cpp b/ultramodern/src/events.cpp
+index 7fcc95b..c7bb6da 100644
+--- a/ultramodern/src/events.cpp
++++ b/ultramodern/src/events.cpp
+@@ -643,13 +643,30 @@ extern "C" PTR(void) osViGetCurrentFramebuffer() {
+     return events_context.vi.get_cur_state()->framebuffer;
+ }
+ 
++static std::atomic<bool> presentation_on{true};
++
++void ultramodern::set_presentation(bool on) {
++    presentation_on.store(on, std::memory_order_release);
++}
++
++bool ultramodern::presentation() {
++    return presentation_on.load(std::memory_order_acquire);
++}
++
+ void ultramodern::submit_rsp_task(RDRAM_ARG PTR(OSTask) task_) {
+     OSTask* task = TO_PTR(OSTask, task_);
+ 
+     tasks_in_flight.fetch_add(1, std::memory_order_acq_rel);
+     // Send gfx tasks to the graphics action queue
+     if (task->t.type == M_GFXTASK) {
+-        events_context.action_queue.enqueue(SpTaskAction{ *task });
++        if (!presentation_on.load(std::memory_order_acquire)) {
++            // Not drawn: the completions the renderer would send, now.
++            sp_complete();
++            dp_complete();
++            tasks_in_flight.fetch_sub(1, std::memory_order_release);
++        } else {
++            events_context.action_queue.enqueue(SpTaskAction{ *task });
++        }
+     }
+     // Run all other (audio) tasks right here on the game thread. On a
+     // separate thread they raced the game: SP completions of graphics tasks
+-- 
+2.43.0
+

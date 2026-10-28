@@ -163,3 +163,50 @@ grew a `coop` flag so a local game is not mistaken for an online one). One
 lesson from the tests: the bots' pad script for online runs must apply to
 session frames only, or the host's game has already changed by the time
 the session starts.
+
+## Phase 3: a frame nobody sees (src/game/presentation_switch.h)
+
+A rollback runs frames again, and those frames must be silent and
+invisible: the player only ever sees the latest one. `presentation::
+set_live(false)` turns presentation off for the game thread:
+
+- the runtime completes graphics tasks at once without sending them to the
+  renderer (patch 0017, `ultramodern::set_presentation`): the game gets the
+  same SP and DP completions in the same order, so its behaviour is
+  unchanged;
+- audio samples are counted (the virtual audio clock, and so what the game
+  reads as the DAC level, must not depend on presentation) but not played;
+- rumble requests are dropped.
+
+The rollback harness runs its frames again this way. Checked in the
+graphics build (RT64 on lavapipe under Xvfb): 20 rollbacks of 8 frames in
+a replay, every frame matching the recording, the picture clean afterwards
+(the renderer does not mind display lists it never saw; each frame's list
+sets up its own state). Headless: the whole local and far-apart audit
+passes with presentation off during the frames run again.
+
+Player 2's picture pass (far_coop.cpp's shadow frame) is presentation too.
+It still runs the game's own frame builder on a swapped copy of memory and
+restores every page it touched; what it must never do is change host-side
+state, and that is now checked every frame: the registered state's hash
+before and after the pass must match, or the game logs a BUG line. The
+rollback audit's far-apart scenarios run with the pass on.
+
+Not done in this phase, and why: each machine hearing the sounds around
+its own player. The game decides which sounds play, and how loud and
+where, inside its simulation, from the lead's camera, and that decision is
+part of the shared state; a machine cannot judge sounds by its own camera
+without either changing the simulation (a desync) or re-evaluating the
+game's sound commands on the host side before the audio task runs them. The
+second is the right design (presentation again) and needs the game's sound
+command format mapped first. Deferred to after rollback.
+
+## Save-state caveat found on the way
+
+A state taken within about two seconds of a scene change (here: right
+after a debug warp into 3-12) hangs the game when loaded into a fresh
+process; one taken a few seconds later loads fine. Not yet understood
+(the game's loading for the new scene is still in progress: a DMA, an
+overlay, something the state does not carry). A joiner loads the host's
+state, so a join right after the host changes scene may hit this; the bot
+suite does not cover that case yet. Open item.
