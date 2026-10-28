@@ -209,6 +209,7 @@ uint32_t g_catch_frame = 0, g_catch_target = 0;
 uint32_t g_speed_before = 1;
 long g_rollbacks = 0, g_rollback_frames = 0, g_predicted_frames = 0;
 bool g_sync_test = false;                               // MM_NET_SYNC_TEST=1: roll back every frame
+uint32_t g_sync_tested = 0;                             // the frame the sync test last rolled back to
 long g_frame = 0;                   // session frame
 std::map<uint32_t, Input> g_local, g_remote;
 std::map<uint32_t, uint64_t> g_local_hash, g_remote_hash;
@@ -325,6 +326,7 @@ void reset_frames() {
     g_remote_last = Input{};
     g_remote_last_frame = 0;
     g_rollback_to = UINT32_MAX;
+    g_sync_tested = 0;
     if (g_catching_up) {
         g_catching_up = false;
         ultramodern::set_speed_multiplier(g_speed_before);
@@ -906,8 +908,9 @@ void run_frame(uint8_t* rdram, recomp_context* ctx) {
         if (begin_rollback(rdram, ctx, g_rollback_to, f)) return;
         g_rollback_to = UINT32_MAX;
     }
-    if (g_sync_test && f > 2 && !g_snaps.empty() && g_snaps.back().frame == f - 1) {
+    if (g_sync_test && f > 2 && g_sync_tested != f - 1 && !g_snaps.empty() && g_snaps.back().frame == f - 1) {
         // Test: every frame runs twice; the second run must give the same game.
+        g_sync_tested = f - 1;
         if (begin_rollback(rdram, ctx, f - 1, f)) return;
     }
 

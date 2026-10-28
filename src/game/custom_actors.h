@@ -34,6 +34,7 @@ enum : uint8_t {
     kTestBlock = 0x00,   // a block that bobs in place: proves the table works
     kBlock = 0x01,       // a solid block object Marina can carry and throw (grabbable blocks)
     kPlayer2 = 0x02,     // a second Marina (player2.cpp)
+    kPlayer2Mount = 0x03,   // what player 2 rides where Marina rides something (player2_mount.cpp)
 };
 
 // Per-frame update, called with the actor's slot (and the game's context, so

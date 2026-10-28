@@ -1,5 +1,6 @@
 #include "custom_actors.h"
 #include "player2.h"
+#include "player2_mount.h"
 
 #include <algorithm>
 #include <array>
@@ -323,6 +324,7 @@ std::array<TypeInfo, 256> make_table() {
     t[kTestBlock] = {"Bobbing block", test_block_update, test_block_setup};
     t[kBlock] = {"Block", block_update, block_setup};
     t[kPlayer2] = {"Player 2", mm::player2::update, mm::player2::setup};
+    t[kPlayer2Mount] = {"Player 2's mount", mm::player2_mount::update, nullptr};   // made by player2_mount::tick, not spawned
     return t;
 }
 const std::array<TypeInfo, 256> kTable = make_table();

@@ -14,6 +14,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 
 #include "recomp.h"
 
@@ -41,7 +42,7 @@ void held_swap_end(uint8_t* rdram);
 
 // Run fn with player 2 as Marina (slot 0, Marina's globals), keeping what it
 // does to her: the movement cheats, written for Marina, act on her too.
-void as_marina(uint8_t* rdram, void (*fn)(uint8_t*));
+void as_marina(uint8_t* rdram, const std::function<void(uint8_t*)>& fn);
 
 // Player 2 stands in for Marina (slot 0, Marina's globals) between these
 // two calls; nothing she does meanwhile is kept (the second camera's pass).
@@ -55,6 +56,11 @@ void bring_back(uint8_t* rdram);
 // The stage's item list, before the game handles it (func_800451E4): gems
 // player 2 touches go to player 1, who collects them for both.
 void collect_pickups(uint8_t* rdram, uint32_t list);
+
+// A request to player 2, as a scene script makes one of Marina through her
+// request word (0x800BE5F4; her update takes it up): the stage asked
+// Marina alone, so what it asked at its start is asked of player 2 here.
+void request(uint8_t* rdram, uint32_t word);
 
 // Test: put player 2 at a world position (Q16.16).
 void place_test(uint8_t* rdram, int32_t x, int32_t y);

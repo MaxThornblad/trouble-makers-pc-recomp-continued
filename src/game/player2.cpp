@@ -18,6 +18,7 @@
 #include "frame_input.h"
 #include "netplay.h"
 #include "player2_internal.h"
+#include "player2_mount.h"
 
 
 extern "C" void func_8004ED10(uint8_t* rdram, recomp_context* ctx);   // Marina's update(slot)
@@ -48,6 +49,7 @@ struct Range { uint32_t start, size; };
 // the masked hold / press words of the last 64 frames, newest first), which
 // her update reads for buffered actions. Player 2 keeps her own.
 constexpr uint32_t kHistoryPress = 0x8011DD70u, kHistoryHold = 0x801225F0u;
+constexpr uint32_t kRequest = 0x800BE5F4u;
 constexpr uint32_t kHistoryLen = 64;
 constexpr std::array<Range, 12> kGlobals{{
     {kHistoryPress, kHistoryLen * 2},
@@ -65,7 +67,7 @@ constexpr std::array<Range, 12> kGlobals{{
     // asks of whoever holds it, and the flight her own update then asks of
     // herself. Shared, player 1 took up player 2's flight (and flew).
     // (Last, so the copy's earlier offsets stay as they were.)
-    {0x800BE5F4u, 4},
+    {kRequest, 4},
 }};
 
 constexpr size_t globals_size() {
@@ -341,7 +343,7 @@ struct StandIn {
 StandIn g_stand_in;
 }
 
-void as_marina(uint8_t* rdram, void (*fn)(uint8_t*)) {
+void as_marina(uint8_t* rdram, const std::function<void(uint8_t*)>& fn) {
     const int p2 = slot(rdram);
     if (p2 <= 0 || g_stand_in.on || !mm::cheats::coop_enabled()) return;
     std::array<uint8_t, kStride> p1_record;
@@ -591,6 +593,11 @@ void collect_pickups(uint8_t* rdram, uint32_t list) {
         MEM_W(0xF0, a) = 0;
         if (trace_on()) std::fprintf(stderr, "[p2trace] gem actor %d goes to player 1\n", s);
     }
+}
+
+void request(uint8_t* rdram, uint32_t word) {
+    if (slot(rdram) <= 0) return;
+    MEM_W(0, addr(kP2Globals + global_offset(kRequest))) = static_cast<int32_t>(word);
 }
 
 void place_test(uint8_t* rdram, int32_t x, int32_t y) {
@@ -972,6 +979,7 @@ void tick(uint8_t* rdram) {
                      p2, MEM_W(0x88, b) >> 16, MEM_W(0x8C, b) >> 16, MEM_HU(0xD0, b), static_cast<uint32_t>(MEM_W(0x80, b)), MEM_HU(0xD6, b));
     }
     publish_marker(rdram, p2);
+    mm::player2_mount::tick(rdram);
     if (!mm::cheats::coop_enabled()) {
         if (p2 >= 0) {
             MEM_W(0x80, addr(kActors + static_cast<uint32_t>(p2) * kStride)) = 0;

@@ -471,3 +471,29 @@ camera as far and it put player 2 in the wrong place.) Bot scenarios on a state
 at the stage's start (slot 9): apart-9, fuzz-9-1/2, far-apart-9,
 net-fuzz-9; the trace checks learnt about laps and about steps judged
 against a moving camera.
+
+### Player 2's cat (src/game/player2_mount.cpp)
+
+The owner's report from the stage: one player had no cat. The cat is an
+actor of its own (type 0x0F01, func_801A23C4) that the scene script spawns
+into slot 96 and that moves Marina: its body sprite (the slot after it)
+runs by the player's input and the scroll, and each frame Marina is put on
+the body (func_801A22AC writes slot 0's position). Its code answers to
+slot 96 only (a cat in any other slot is an idle one), and the scene
+script asks Marina alone to get on (her request word, value 5). Player 2's
+character ran Marina's riding state with nothing under it.
+
+She now gets a cat of her own: custom actor type 0x7F03, spawned fresh at
+her feet by player2_mount::tick when the stage's cat exists and she has
+none, with the same get-on request in her own request word. Its update
+runs the game's cat code: her copy (controller and 13 parts) takes slots
+96..109 for the call, she stands in for Marina (as_marina), the game's
+func_80016E70 runs slot 96, then the copies go back and player 1's cat and
+record are restored. What the code does to the camera words
+(0x800BE544..0x800BE5B8; the cat drives the stage's scroll through them,
+and two cats scrolled it twice as fast) is put back, and her cat is held
+at the screen edge as she is (the game holds Marina's there; hers ran past
+after a hit and the leash kept pulling her back). All of it is game
+memory, so states, rollbacks, replays and resyncs carry it. Cerberus still
+aims at the stage's cat (it reads slot 96 directly); both players can
+still grab its parts.
