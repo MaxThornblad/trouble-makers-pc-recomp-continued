@@ -90,6 +90,7 @@ constexpr uint32_t kP2GrabCooldown = kP2Globals + 0x414u;  // frames until the p
 
 constexpr uint32_t kGameState = 0x800BE4F0u;   // 6 and 10 = stage gameplay
 constexpr uint32_t kCameraX = 0x800BE558u, kCameraY = 0x800BE55Cu;
+constexpr uint32_t kCameraPrevX = 0x800BE560u, kCameraPrevY = 0x800BE564u;   // the centre last frame
 constexpr uint32_t kWorldX = 0x800BE5D8u, kWorldY = 0x800BE5DCu;   // Marina's world position
 constexpr int kJoinDelay = 45;                 // frames into a scene
 constexpr int kLeashX = 200, kLeashY = 150;    // px from the camera centre: out of view
@@ -254,6 +255,11 @@ void rejoin(uint8_t* rdram, int slot) {
     setup(rdram, slot);
 }
 
+void bring_next_to_lead(uint8_t* rdram) {
+    const int p2 = slot(rdram);
+    if (p2 > 0) rejoin(rdram, p2);
+}
+
 void bring_back(uint8_t* rdram) {
     const int p2 = slot(rdram);
     if (p2 <= 0) return;
@@ -340,6 +346,12 @@ void stand_in_begin(uint8_t* rdram) {
     copy_globals_out(rdram, g_stand_in.p1_globals.data());
     std::memcpy(slot_ptr(rdram, 0) + 0x80, slot_ptr(rdram, p2) + 0x80, kStride - 0x80);   // (not the render matrices)
     MEM_H(0xD2, addr(kActors)) = static_cast<int16_t>(kMarinaType);
+    // Not what she carries: something in the camera's pass moves Marina's
+    // held object to her hands, and her hands here are in the other camera's
+    // terms. The block player 2 carried jumped ahead each frame and her carry
+    // code ran after it (super speed).
+    MEM_W(0x80, addr(kActors)) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0x80, addr(kActors))) & ~kHoldingFlag);
+    MEM_H(0xD6, addr(kActors)) = 0;
     copy_globals_in(rdram, at(rdram, kP2Globals));
 }
 
@@ -697,6 +709,16 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
         snapshot.assign(rdram, rdram + 0x800000);
         ctx_before = *ctx;
     }
+    // The camera's step this frame (centre minus previous centre,
+    // 0x800BE558 - 0x800BE560, and y) is zero to her. Marina's carry code
+    // adds it to her position, making up for a scroll the game spares slot 0
+    // there; player 2 is scrolled as every other actor (func_80016D94) and
+    // rebased between cameras (far_coop.cpp), so she got it twice: carrying
+    // something, she ran ahead of her camera, it followed, she ran further
+    // (super speed, super jumps).
+    const int32_t prev_x = MEM_W(0, addr(kCameraPrevX)), prev_y = MEM_W(0, addr(kCameraPrevY));
+    MEM_W(0, addr(kCameraPrevX)) = MEM_W(0, addr(kCameraX));
+    MEM_W(0, addr(kCameraPrevY)) = MEM_W(0, addr(kCameraY));
     g_in_own_call = true;
     func_8004ED10(rdram, ctx);
     g_in_own_call = false;
@@ -711,11 +733,15 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
             std::memcpy(rdram, snapshot.data(), snapshot.size());
             *ctx = ctx_before;
             MEM_W(0x88, addr(kActors + static_cast<uint32_t>(slot) * kStride)) -= moved;
+            MEM_W(0, addr(kCameraPrevX)) = MEM_W(0, addr(kCameraX));
+            MEM_W(0, addr(kCameraPrevY)) = MEM_W(0, addr(kCameraY));
             g_in_own_call = true;
             func_8004ED10(rdram, ctx);
             g_in_own_call = false;
         }
     }
+    MEM_W(0, addr(kCameraPrevX)) = prev_x;
+    MEM_W(0, addr(kCameraPrevY)) = prev_y;
     ctx->r4 = saved_a0;
     if (trace_on() && MEM_HU(0xD0, addr(kActors)) != state_before) {
         std::fprintf(stderr, "[p2trace] p2 state %04X -> %04X (98 %08X, input %04X/%04X, 70CC %08X %08X)\n", state_before,

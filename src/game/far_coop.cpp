@@ -480,9 +480,15 @@ bool wrapping_scenery(uint8_t* rdram, int slot) {
 extern "C" void mm_far_actor(uint8_t* rdram, uint32_t slot) {
     const int s = static_cast<int>(slot & 0xFFFF);
     trace_exit(rdram, "actor", s);
+    // Whose camera a carried object runs with: its carrier's, found before
+    // the held swap below puts player 1's record in player 2's slot (after
+    // it, player 1's position decided, the block player 2 carried ran with
+    // player 1's camera and hers with her own: offset by the cameras'
+    // distance at her hands, her carry code pulled her after it, faster
+    // every frame).
+    const int held = g_frame_on ? holder_set(rdram, s) : -1;
     mm::player2::held_swap_begin(rdram, s);
     if (!g_frame_on) return;
-    const int held = holder_set(rdram, s);
     if (held < 0 && wrapping_scenery(rdram, s)) {
         switch_to(rdram, 0);
         return;

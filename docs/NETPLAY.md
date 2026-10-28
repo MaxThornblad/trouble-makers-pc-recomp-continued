@@ -337,6 +337,25 @@ the game gets a second camera for player 2, so neither is held to the other:
   kept from then on: the tag showed an all but empty bar. Her health is set
   back to the shared bar at the end of each of her updates.
 
+## Fixes from the second session
+
+- **Super speed while carrying.** Marina's carry code adds the camera's step
+  this frame (centre 0x800BE558 minus last frame's 0x800BE560, and y) to her
+  position, making up for a scroll the game spares slot 0 in that state.
+  Player 2 is scrolled as every other actor and rebased between cameras, so
+  she got the step twice: ahead of her camera, which followed, and further
+  ahead the next frame, up to 10 px a frame (Marina carries at 2). The step
+  is zero to her during her update. The per-camera look-ahead had made the
+  loop much faster; without it she still carried at 3 to 4 px a frame.
+- **The star teleporter flight swaps at once.** The swap waited for a frame
+  where pausing was allowed, and the flight's start can hold pausing off:
+  player 2 then hung in the flight state in her own slot, unable to move,
+  while the flight's camera lock dragged player 1. The flight now swaps
+  whatever the game is doing (unless the two carry each other), and once she
+  lands the other player joins her there (as through a door).
+- **Bot scenario p2-carry-block**: player 2 picks up a stage block and walks
+  with it; no frame may move her more than 4 px.
+
 ## Transports: ENet and Steam
 
 `net_transport.h` is the connection netplay runs over: one partner, two

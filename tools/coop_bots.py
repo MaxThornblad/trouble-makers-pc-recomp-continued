@@ -77,10 +77,15 @@ FAR = [
     ("far-fuzz-2", 2, 1800, fuzz(202), "60:,300:l," + fuzz(203), 0),
     # The lead swap (player2_lead.cpp). Slot 0 holds 1-1 next to the star
     # teleporter inside the red block pyramid: player 2 shakes it and flies
-    # (as the lead), player 1 stays where she is.
+    # (as the lead), and player 1 joins her where she lands.
     ("lead-star", 0, 1000, "1000:", "200:," + STAR_SHAKE, 0,
-     dict(env={"MM_TEST_PLACE": "120:1800,318,2"}, expect=["star teleporter: player 2 leads now"],
-          final=lambda s0, s2: s0[0] < 1720 and s0[1] > 560 and abs(s2[0] - 438) < 40)),
+     dict(env={"MM_TEST_PLACE": "120:1800,318,2"}, expect=["star teleporter: player 2 leads now", "the other player comes along"],
+          final=lambda s0, s2: s0[0] < 1720 and s0[1] > 560 and abs(s2[0] - s0[0]) < 64 and abs(s2[1] - s0[1]) < 32)),
+    # Player 2 picks up a stage block (grabbable blocks) and walks with it:
+    # no faster than Marina carrying (2 px a frame; she ran up to 10, her
+    # carry code counted the camera's step on top of her own scroll).
+    ("p2-carry-block", 0, 700, "700:", "60:,140:r,4:,10:B,30:,200:l,10:A,60:,100:l,80:", 0,
+     dict(expect=["is now an object"], max_step2=4)),
     # Swapped by hand (MM_TEST_LEAD_SWAP) early on: each person keeps their
     # controller, so slot 0 (player 2 now) walks left and player 1 right.
     ("lead-controls", 1, 900, "60:,840:r", "60:,840:l", 0,
@@ -119,6 +124,7 @@ def check_trace(text, allowed_rejoins, far=False):
     rejoins = text.count("rejoining")
     defeats = text.count("defeated, rejoining")
     first = last = None
+    max_step = [0, 0]
     for line in text.splitlines():
         if "leads now" in line or "leads again" in line:
             # The two swapped characters (player2_lead.cpp): the trace's
@@ -169,6 +175,7 @@ def check_trace(text, allowed_rejoins, far=False):
                 if states[k] in SCRIPTED_STATES or prev[2][k] in SCRIPTED_STATES:
                     continue
                 # Landing (a new state) may snap her up onto what she lands on.
+                max_step[k] = max(max_step[k], abs(a[0] - b[0]))
                 landing = states[k] != prev[2][k] and abs(a[0] - b[0]) <= 8 and 0 < b[1] - a[1] <= 32
                 if not landing and (abs(a[0] - b[0]) > 24 or abs(a[1] - b[1]) > 24):
                     problems.append("%s jumped at frame %d: %s -> %s" % (who, n, a, b))
@@ -192,6 +199,7 @@ def check_trace(text, allowed_rejoins, far=False):
         moved = ((last[0][0] - first[0][0], last[0][1] - first[0][1], last[0][0], last[0][1]),
                  (last[1][0] - first[1][0], last[1][1] - first[1][1], last[1][0], last[1][1]))
     check_trace.moved = moved
+    check_trace.max_step = max_step
     return out, frames, apart
 
 
@@ -201,6 +209,9 @@ def check_extra(extra, out, moved):
     for want in extra.get("expect", []):
         if want not in out:
             problems.append("no '%s'" % want)
+    limit = extra.get("max_step2")
+    if limit is not None and check_trace.max_step[1] > limit:
+        problems.append("player 2 moved %d px in one frame (at most %d)" % (check_trace.max_step[1], limit))
     final = extra.get("final")
     if final and moved:
         # (world x, world y) at the end for "star" checks; moves for the others.
@@ -338,7 +349,7 @@ def main():
     ap.add_argument("--bin", required=True)
     ap.add_argument("--rom", required=True)
     ap.add_argument("--home", required=True)
-    ap.add_argument("--only", default="")
+    ap.add_argument("--only", default="", help="run only scenarios whose name contains this (comma-separated: any of these)")
     ap.add_argument("--no-net", action="store_true")
     ap.add_argument("--steam-mock", default="", help="the Steam stand-in library (cc -shared -fPIC "
                     "-o libsteam_api.so tools/steam_mock/mock_steam.c); without it net-steam is skipped")
@@ -346,14 +357,14 @@ def main():
     failed = 0
     port = 7900
     for name, slot, frames, p1, p2, allowed in SCENARIOS:
-        if args.only and args.only not in name:
+        if args.only and not any(o in name for o in args.only.split(',')):
             continue
         problems, traced = run_local(args, name, slot, frames, p1, p2, allowed)
         print("%-18s %s (%d frames)%s" % (name, "ok  " if not problems else "FAIL", traced,
                                           "" if not problems else ": " + "; ".join(problems[:4])), flush=True)
         failed += bool(problems)
     for name, slot, frames, p1, p2, want, *extra in FAR:
-        if args.only and args.only not in name:
+        if args.only and not any(o in name for o in args.only.split(',')):
             continue
         problems, traced = run_far(args, name, slot, frames, p1, p2, want, extra[0] if extra else None)
         print("%-18s %s (%d frames)%s" % (name, "ok  " if not problems else "FAIL", traced,
@@ -361,7 +372,7 @@ def main():
         failed += bool(problems)
     if not args.no_net:
         for name, slot, frames, p1, p2, *extra in NETPLAY:
-            if args.only and args.only not in name:
+            if args.only and not any(o in name for o in args.only.split(',')):
                 continue
             if name.startswith("net-steam") and not args.steam_mock:
                 print("%-18s skip (no --steam-mock)" % name, flush=True)

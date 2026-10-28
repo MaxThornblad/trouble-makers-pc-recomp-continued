@@ -158,6 +158,12 @@ void on_item_list(uint8_t* rdram, uint32_t list) {
 }
 
 static void try_grab(uint8_t* rdram, uint32_t list, uint32_t record, uint16_t hold, uint16_t press) {
+    static const bool dbg = std::getenv("MM_GB_DEBUG") != nullptr;
+    if (dbg && (press & kGrabButton) != 0) {
+        std::fprintf(stderr, "[gb-debug] grab by %08X: hold %04X press %04X flags %08X at %d,%d\n", record, hold, press,
+                     static_cast<uint32_t>(MEM_W(0x80, addr(record))), MEM_H(0, addr(kCameraX)) + MEM_H(0x88, addr(record)),
+                     MEM_H(0, addr(kCameraY)) + MEM_H(0x8C, addr(record)));
+    }
     if ((press & kGrabButton) == 0) return;
     const gpr m = addr(record);
     const uint32_t flags = static_cast<uint32_t>(MEM_W(0x80, m));

@@ -56,6 +56,7 @@ constexpr uint16_t kCarried = 0x2F;               // (low byte) held by the othe
 constexpr uint32_t kLead = kLeadBlock;
 constexpr uint32_t kHoldFrames = kLeadBlock + 0x4u;
 constexpr uint32_t kCount = kLeadBlock + 0x8u;
+constexpr uint32_t kFollow = kLeadBlock + 0xCu;    // the other player joins the lead when her star flight ends
 
 constexpr int kProbeEvery = 4;     // frames
 constexpr int kMinLead = 90;       // frames between swaps
@@ -80,6 +81,14 @@ gpr record(int slot) {
 
 bool g_probing = false;
 std::vector<uint8_t> g_backup;
+
+bool carrying_each_other(uint8_t* rdram, int p2) {
+    for (int s : {0, p2}) {
+        const gpr r = record(s);
+        if ((static_cast<uint32_t>(MEM_W(0x80, r)) & kHoldingFlag) != 0 && MEM_HU(0xD6, r) == (s == 0 ? p2 : 0)) return true;
+    }
+    return false;
+}
 
 // Both in play, neither carrying the other, nothing scripted going on.
 bool may_swap(uint8_t* rdram, int p2) {
@@ -200,14 +209,24 @@ void lead_frame(uint8_t* rdram, recomp_context* ctx) {
         swap_lead(rdram, "test");
         return;
     }
-    if (MEM_HU(0, addr(0x800BE4E8u)) != 0 || !may_swap(rdram, p2)) return;   // paused, mid-transition, ...
     // A star teleporter's flight came to player 2's character (her update
     // took up the request in her own copy of Marina's mailbox): the flight
-    // and its camera are slot 0's, so she leads from here.
-    if (MEM_HU(0xD0, record(p2)) == kStarFlight && MEM_HU(0xD0, record(0)) != kStarFlight) {
+    // and its camera are slot 0's, so she leads from here, whatever else is
+    // going on (the flight's start can hold the game's pause off: waiting
+    // for that left her hanging in the flight state in her own slot, unable
+    // to move, while the flight's camera dragged player 1). The other player
+    // comes along once she lands.
+    if (MEM_HU(0xD0, record(p2)) == kStarFlight && MEM_HU(0xD0, record(0)) != kStarFlight && !carrying_each_other(rdram, p2)) {
         swap_lead(rdram, "star teleporter");
+        MEM_W(0, addr(kFollow)) = 1;
         return;
     }
+    if (MEM_W(0, addr(kFollow)) != 0 && MEM_HU(0xD0, record(0)) != kStarFlight) {
+        MEM_W(0, addr(kFollow)) = 0;
+        bring_next_to_lead(rdram);
+        if (!mm::faraway::in_shadow()) std::fprintf(stderr, "[player2] landed: the other player comes along\n");
+    }
+    if (MEM_HU(0, addr(0x800BE4E8u)) != 0 || !may_swap(rdram, p2)) return;   // paused, mid-transition, ...
     static const bool off = std::getenv("MM_NO_LEAD_PROBE") != nullptr;   // test
     // Every few frames (exits stay where they are); every frame while she
     // presses something or holds up (a door may answer one press).

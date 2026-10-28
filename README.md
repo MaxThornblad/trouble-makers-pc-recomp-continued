@@ -294,6 +294,7 @@ camera. Player 2 comes back next to player 1 only when defeated or lost
 through a door. You share one health bar, gems player 2 picks up count for
 both, and either of you can ride a star teleporter or take an exit: when
 player 2 does, the two of you swap characters for the rest of the scene
+(after a star's flight, player 1 joins her where she lands)
 (each keeps their own controller, colour and tag; the game simply treats
 player 2 as Marina until the next scene). You can pick each other up, carry
 and throw each other (not from mid-air, and not again right after being
