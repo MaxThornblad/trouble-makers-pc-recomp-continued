@@ -13,6 +13,7 @@
 #include "grab_blocks.h"
 #include "player2.h"
 
+
 extern "C" int mm_far_in_shadow(void);
 #include "inspector.h"
 #include "mm_audio_input.hpp"
@@ -662,7 +663,7 @@ void apply_settings(uint8_t* rdram) {
     if (active_now() && (enabled(Cheat::EndlessJet) || enabled(Cheat::NoClip))) return;
     if (!hold_dash_enabled()) return;
     apply_hold_dash(rdram);
-    mm::player2::as_marina(rdram, [](uint8_t* r) { apply_hold_dash(r); });   // and player 2's
+    if (!mm_far_in_shadow()) mm::player2::as_marina(rdram, [](uint8_t* r) { apply_hold_dash(r); });   // and player 2's
 }
 
 bool damage_numbers_enabled() {
@@ -746,7 +747,8 @@ void apply(uint8_t* rdram) {
     // player 2: online the host's cheats are both players'.
     if (enabled(Cheat::EndlessJet)) apply_endless_jet(rdram);
     if (enabled(Cheat::MoonJump)) apply_moon_jump(rdram, 0);
-    mm::player2::as_marina(rdram, [](uint8_t* r) {
+    // Not in player 2's picture pass (far_coop.cpp): that frame only draws.
+    if (!mm_far_in_shadow()) mm::player2::as_marina(rdram, [](uint8_t* r) {
         if (enabled(Cheat::EndlessJet)) apply_endless_jet(r);
         if (enabled(Cheat::MoonJump)) apply_moon_jump(r, 1);
     });
