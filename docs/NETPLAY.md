@@ -457,16 +457,17 @@ start. Two things went wrong with a camera per player:
 
 - The second camera did not wrap with the game's, so once a lap it was a
   whole loop away from player 2 and dragged her off (the "jumped" lines in
-  the bot traces). The second camera now wraps word for word with the
-  game's (far_coop.cpp, kLastSet: the game's set as the last frame left it).
+  the bot traces).
 - The second camera never auto-scrolls (the chase drives the game's camera
   only), so player 2 could simply be left behind at the loop's start, a
   part of the world the lap wrap moves out from under her.
 
 So this stage keeps one shared camera even online (far_coop.cpp,
 kSharedCameraStages): the screen edge carries both players, as it carries
-Marina in the original game; the joiner sees the host's screen there. The
-lap-wrap fix stays for any other looping stage. Bot scenarios on a state
+Marina in the original game; the joiner sees the host's screen there. (A
+first fix mirrored any camera jump of a lap's size onto the second camera;
+it was dropped, as a lead swap or a star teleporter moves the game's
+camera as far and it put player 2 in the wrong place.) Bot scenarios on a state
 at the stage's start (slot 9): apart-9, fuzz-9-1/2, far-apart-9,
 net-fuzz-9; the trace checks learnt about laps and about steps judged
 against a moving camera.

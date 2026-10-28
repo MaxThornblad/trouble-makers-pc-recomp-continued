@@ -53,10 +53,6 @@ constexpr uint16_t kSharedCameraStages[] = {35};                      // 3-12 CE
 // The second camera in game memory (player 2's block, player2.cpp layout).
 constexpr uint32_t kStore = 0x807F0500u;          // +0 valid, +4 the set
 constexpr uint32_t kStoreSet = kStore + 4u;
-// The game's set as the last frame left it (+0 valid, +4 the set): a lap
-// wrap of the game's camera between frames is applied to the second too.
-constexpr uint32_t kLastSet = 0x807F0550u;
-constexpr int32_t kLapMin = 256 << 16;            // a camera jump this big in a frame is a lap, not a scroll
 
 // Onscreen-only actors (flag 0x4) die outside camera +-0x1C0 x +-0xA0
 // (func_80016D94, as patched for widescreen).
@@ -220,11 +216,12 @@ bool active(uint8_t* rdram) {
     const uint16_t state = MEM_HU(0, addr(kGameState));
     if (state != 6 && state != 10) return false;
     // Stages where the screen moves on its own (3-12, CERBERUS: a looping
-    // chase that scrolls at 10 px a frame and pushes Marina along) keep one
-    // shared camera: a second camera would not scroll, and a player left
-    // behind the loop's start is in a part of the world the lap wrap moves
-    // out from under her. On one screen the edge carries both players, as
-    // it carries Marina in the original game.
+    // chase that scrolls at 10 px a frame and pushes Marina along, wrapping
+    // its camera back a lap at the loop's end) keep one shared camera: a
+    // second camera would not scroll, and a player left behind the loop's
+    // start is in a part of the world the lap wrap moves out from under
+    // her. On one screen the edge carries both players, as it carries
+    // Marina in the original game.
     const uint16_t stage = MEM_HU(0, addr(kCurrentStage));
     for (const uint16_t shared : kSharedCameraStages) {
         if (stage == shared) return false;
@@ -239,7 +236,6 @@ bool secondary_pass() { return g_secondary; }
 
 void reset(uint8_t* rdram) {
     MEM_W(0, addr(kStore)) = 0;
-    MEM_W(0, addr(kLastSet)) = 0;
 }
 
 bool p2_camera_offset(uint8_t* rdram, int32_t& dx, int32_t& dy) {
@@ -363,23 +359,11 @@ extern "C" void mm_far_after_camera(uint8_t* rdram, recomp_context* ctx) {
     if (!store_valid(rdram)) {
         std::memcpy(at(rdram, kStoreSet), loaded, kSetSize);
         MEM_W(0, addr(kStore)) = 1;
-        MEM_W(0, addr(kLastSet)) = 0;
     }
-    // A looping stage (3-12, CERBERUS) wraps the game's camera back by a lap
-    // when it reaches the loop's end. The second camera sits at the same
-    // place in the world, so it wraps by the same amount, word for word
-    // (centre, last centre, look-ahead), or it would be a lap away from
-    // player 2 and drag her off.
-    if (MEM_W(0, addr(kLastSet)) == 1) {
-        uint8_t last[kSetSize];
-        std::memcpy(last, at(rdram, kLastSet + 4u), kSetSize);
-        for (uint32_t off = 0; off < kSetSize; off += 4) {
-            const int32_t d = set_word(loaded, off) - set_word(last, off);
-            if (d >= kLapMin || d <= -kLapMin) {
-                MEM_W(0, addr(kStoreSet + off)) = MEM_W(0, addr(kStoreSet + off)) + d;
-            }
-        }
-    }
+    // (A looping stage wraps the game's camera back by a lap at the loop's
+    // end; the one such stage, 3-12, keeps a shared camera, see active().
+    // Do not mirror big camera jumps onto the second camera: a lead swap
+    // or a star teleporter moves the game's camera just as far.)
     const int p2 = mm::player2::slot(rdram);
     const gpr m = slot_addr(0), b = slot_addr(p2);
     const int32_t cx = MEM_W(0, addr(kCamX)), cy = MEM_W(0, addr(kCamY));
@@ -422,8 +406,6 @@ extern "C" void mm_far_after_camera(uint8_t* rdram, recomp_context* ctx) {
     MEM_W(0x8C, m) = m_y;
     MEM_W(0, addr(kWorldX)) = w_x;
     MEM_W(0, addr(kWorldY)) = w_y;
-    std::memcpy(at(rdram, kLastSet + 4u), loaded, kSetSize);
-    MEM_W(0, addr(kLastSet)) = 1;
 
     static const bool dbg = std::getenv("MM_FAR_DEBUG") != nullptr;
     static uint32_t dbg_n = 0;

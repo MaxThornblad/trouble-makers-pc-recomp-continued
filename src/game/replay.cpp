@@ -93,11 +93,11 @@ void feed(long frame) {
         const Frame f = mm::frame_input::sample_local(frame);
         g_input_out.write(reinterpret_cast<const char*>(&f), sizeof f);
         ++g_recorded;
-        mm::frame_input::latch(f, false);
+        mm::frame_input::latch(f, false, frame);
     } else if (g_mode.load() == Mode::Playing) {
         Frame f;
         if (frame >= 0 && static_cast<size_t>(frame) < g_frames.size()) f = g_frames[static_cast<size_t>(frame)];
-        mm::frame_input::latch(f, false);
+        mm::frame_input::latch(f, false, frame);
     }
 }
 

@@ -36,6 +36,7 @@
 
 #include "cheats.h"
 #include "far_coop.h"
+#include "frame_input.h"
 #include "player2.h"
 #include "player2_internal.h"
 
@@ -110,7 +111,8 @@ void swap_lead(uint8_t* rdram, const char* why) {
     MEM_W(0, addr(kLead)) = MEM_W(0, addr(kLead)) ? 0 : 1;
     MEM_W(0, addr(kHoldFrames)) = kMinLead;
     if (!mm::faraway::in_shadow()) {
-        std::fprintf(stderr, "[player2] %s: player %d leads now\n", why, MEM_W(0, addr(kLead)) ? 2 : 1);
+        std::fprintf(stderr, "[player2] %s: player %d leads now (frame %ld)\n", why, MEM_W(0, addr(kLead)) ? 2 : 1,
+                     mm::frame_input::number());
     }
 }
 
@@ -189,7 +191,7 @@ void lead_route_pads(uint8_t* rdram) {
         // No press edges from the change of hands.
         const int p1pad = MEM_W(0, addr(0x801370C0u));
         if (p1pad >= 0 && p1pad < 4) MEM_H(0, addr(0x800BE538u)) = MEM_H(0, addr(0x8012AD70u + static_cast<uint32_t>(p1pad) * 6u));
-        if (!mm::faraway::in_shadow()) std::fprintf(stderr, "[player2] player 1 leads again\n");
+        if (!mm::faraway::in_shadow()) std::fprintf(stderr, "[player2] player 1 leads again (frame %ld)\n", mm::frame_input::number());
         return;
     }
     route_pads(rdram);

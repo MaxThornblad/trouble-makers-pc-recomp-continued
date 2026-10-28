@@ -15,6 +15,7 @@
 #include "cheats.h"
 #include "custom_actors.h"
 #include "far_coop.h"
+#include "frame_input.h"
 #include "netplay.h"
 #include "player2_internal.h"
 
@@ -945,8 +946,8 @@ void tick(uint8_t* rdram) {
         if (p2 > 0) full = std::max<int16_t>(full, MEM_H(0xE0, addr(kActors + static_cast<uint32_t>(p2) * kStride)));
         MEM_H(0, addr(kP2FullHealth)) = full;
     }
-    if (std::getenv("MM_P2_TRACE")) {   // test: both players each frame
-        static long n = 0;
+    if (std::getenv("MM_P2_TRACE")) {   // test: both players each frame, by frame number (a rollback goes back)
+        const long n = mm::frame_input::number();
         const gpr m = addr(kActors);
         const gpr b = p2 >= 0 ? addr(kActors + static_cast<uint32_t>(p2) * kStride) : m;
         const auto held_ok = [&](gpr who) {
@@ -966,7 +967,7 @@ void tick(uint8_t* rdram) {
         std::fprintf(stderr, "[p2trace] held_ok %d %d hp %d %d full %d\n", held_ok(m), p2 >= 0 ? held_ok(b) : 1,
                      MEM_H(0xE0, m), p2 >= 0 ? MEM_H(0xE0, b) : 0, MEM_H(0, addr(kP2FullHealth)));
         std::fprintf(stderr, "[p2trace] %ld cam %d,%d p1 %d,%d st %04X fl %08X hold %04X | p2(%d) %d,%d st %04X fl %08X hold %04X\n",
-                     n++, MEM_W(0, addr(kCameraX)) >> 16, MEM_W(0, addr(kCameraY)) >> 16,
+                     n, MEM_W(0, addr(kCameraX)) >> 16, MEM_W(0, addr(kCameraY)) >> 16,
                      MEM_W(0x88, m) >> 16, MEM_W(0x8C, m) >> 16, MEM_HU(0xD0, m), static_cast<uint32_t>(MEM_W(0x80, m)), MEM_HU(0xD6, m),
                      p2, MEM_W(0x88, b) >> 16, MEM_W(0x8C, b) >> 16, MEM_HU(0xD0, b), static_cast<uint32_t>(MEM_W(0x80, b)), MEM_HU(0xD6, b));
     }

@@ -283,7 +283,7 @@ Input local_input(long frame) {
 }
 
 // Hands the game both sides' contributions for frame f (frame_input.h).
-void latch_frame(const Input& host, const Input& guest) {
+void latch_frame(uint32_t frame, const Input& host, const Input& guest) {
     mm::frame_input::Frame f;
     f.pad[0] = host.pad;
     f.pad[1] = guest.pad;
@@ -291,7 +291,7 @@ void latch_frame(const Input& host, const Input& guest) {
     f.settings = host.settings;
     f.command_count = host.command_count;
     for (int i = 0; i < host.command_count; ++i) f.commands[i] = host.commands[i];
-    mm::frame_input::latch(f, !g_is_host);
+    mm::frame_input::latch(f, !g_is_host, frame);
 }
 
 void send(int channel, const Writer& w) {
@@ -733,7 +733,7 @@ bool confirmed(uint32_t frame) {   // every input up to and including this frame
 
 void latch(uint32_t frame, const Input& theirs) {
     const Input& mine = g_local[frame];
-    latch_frame(g_is_host ? mine : theirs, g_is_host ? theirs : mine);
+    latch_frame(frame, g_is_host ? mine : theirs, g_is_host ? theirs : mine);
 }
 
 // Fingerprints: of the kept snapshots whose frames are confirmed (every

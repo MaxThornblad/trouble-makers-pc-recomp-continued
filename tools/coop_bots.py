@@ -34,6 +34,7 @@ TRACE = re.compile(
     r"\[p2trace\] (\d+) cam (-?\d+),(-?\d+) p1 (-?\d+),(-?\d+) st (\w+) fl (\w+) hold (\w+) \| "
     r"p2\((-?\d+)\) (-?\d+),(-?\d+) st (\w+) fl (\w+) hold (\w+)")
 HELD = re.compile(r"\[p2trace\] held_ok (\d) (\d) hp (-?\d+) (-?\d+)")
+FRAME_OF = re.compile(r"\(frame (\d+)\)\s*$")
 
 
 def fuzz(seed, steps=300, grab_bias=False):
@@ -107,10 +108,10 @@ NETPLAY = [
      dict(env={"MM_NET_TOGGLE": "1@400,1@800"},
           same=("settings changed at", 2),
           guest=["is set by the host during online play"])),
-    # A slow, jittery connection (each side holds its sends back 60 +-15 ms):
-    # the delay grows to cover it and both games stay identical.
+    # A slow, jittery connection (each side holds its sends back 60 +-15 ms)
+    # in lockstep: the delay grows to cover it and both games stay identical.
     ("net-lag", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r",
-     dict(env={"MM_NET_LAG": "60,15,0"}, host_re=[r"delay now ([5-9]|10) frames"])),
+     dict(env={"MM_NET_LAG": "60,15,0", "MM_NET_LOCKSTEP": "1"}, host_re=[r"delay now ([5-9]|10) frames"])),
     # Lost packets (resent, holding up the ones behind them): no resyncs.
     ("net-loss", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r", dict(env={"MM_NET_LAG": "20,5,1"})),
     # Rollback: on the slow link the game must not wait and must roll back
@@ -121,7 +122,7 @@ NETPLAY = [
     # run must give the same game.
     ("net-synctest", 1, 900, "60:,400:r,440:l", "60:,400:l,440:r",
      dict(env={"MM_NET_SYNC_TEST": "1"}, host_re=[r"rollbacks: [5-9]\d\d "])),
-    # Lockstep stays as a fallback.
+    # Lockstep stays as a fallback (without lag; net-lag is lockstep with lag).
     ("net-lockstep", 1, 900, "60:,400:r,440:l", "60:,400:l,440:r", dict(env={"MM_NET_LOCKSTEP": "1"})),
     ("net-far", 1, 1500, "60:,1440:r", "60:,1440:l"),
     ("net-steam", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r"),   # over the Steam stand-in (--steam-mock)
@@ -141,6 +142,30 @@ CARRY_STATES = {0x16, 0x2F, 0x11F, 0x122, 0x126}
 SCRIPTED_STATES = {0x301}
 
 
+def timeline(text):
+    """The log's lines in the order the game finally ran them.
+
+    Each traced frame carries its frame number; lines printed while a frame
+    ran come before that frame's trace line. A rollback runs frames again,
+    so a frame number that goes back supersedes everything logged from that
+    frame on (the predicted run of it)."""
+    out = []           # (frame, line)
+    current = 0        # the frame the next lines belong to
+    for line in text.splitlines():
+        m = TRACE.match(line)
+        if m:
+            n = int(m.group(1))
+            if n < current:
+                while out and out[-1][0] >= n:
+                    out.pop()
+            out.append((n, line))
+            current = n + 1
+        else:
+            m = FRAME_OF.search(line)   # a line that names its frame
+            out.append((int(m.group(1)) if m else current, line))
+    return [line for _, line in out]
+
+
 def check_trace(text, allowed_rejoins, far=False):
     problems = []
     frames = present = apart = 0
@@ -148,11 +173,12 @@ def check_trace(text, allowed_rejoins, far=False):
     prev_cam = (0, 0)
     joined_recently = 0
     held_bad = 0
-    rejoins = text.count("rejoining")
-    defeats = text.count("defeated, rejoining")
+    lines = timeline(text)
+    rejoins = sum("rejoining" in l for l in lines)
+    defeats = sum("defeated, rejoining" in l for l in lines)
     first = last = None
     max_step = [0, 0]
-    for line in text.splitlines():
+    for line in lines:
         if "leads now" in line or "leads again" in line:
             # The two swapped characters (player2_lead.cpp): the trace's
             # columns are slots, so each person's previous place moves over.
@@ -396,6 +422,11 @@ def run_netplay(args, name, slot, frames, pad1, pad2, port, extra=None):
             host.wait()
         hfile.close()
         hout = (Path(tmp) / "host.log").read_bytes().decode(errors="replace")
+        if args.keep:   # the logs, for a look after a failure
+            keep = Path(args.keep) / name
+            keep.mkdir(parents=True, exist_ok=True)
+            (keep / "host.log").write_text(hout)
+            (keep / "guest.log").write_text(gout)
         problems = []
         if "session started" not in hout or "joined the host's game" not in gout:
             return ["session did not start"], 0
@@ -448,6 +479,7 @@ def main():
     ap.add_argument("--steam-mock", default="", help="the Steam stand-in library (cc -shared -fPIC "
                     "-o libsteam_api.so tools/steam_mock/mock_steam.c); without it net-steam is skipped")
     ap.add_argument("--port", type=int, default=7900, help="first port for the netplay scenarios")
+    ap.add_argument("--keep", default="", metavar="DIR", help="keep each netplay scenario's host and guest logs under DIR/<name>/")
     args = ap.parse_args()
     failed = 0
     port = args.port

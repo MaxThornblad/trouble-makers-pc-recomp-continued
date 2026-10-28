@@ -13,6 +13,7 @@ namespace mm::frame_input {
 namespace {
 
 Frame g_current;
+long g_number = 0;
 bool g_latched = false;         // a source latched since the last tick
 bool g_taken[kMaxCommands]{};   // commands of the current frame already consumed
 
@@ -53,9 +54,10 @@ void install_once() {
     mm_audio_input::set_input_filter(filter);
 }
 
-void latch(const Frame& frame, bool from_host) {
+void latch(const Frame& frame, bool from_host, long number) {
     install_once();
     g_current = frame;
+    g_number = number;
     static const bool dbg = std::getenv("MM_FRAME_INPUT_DEBUG") != nullptr;
     if (dbg) {
         static long n = 0;
@@ -72,11 +74,13 @@ void latch(const Frame& frame, bool from_host) {
 
 const Frame& current() { return g_current; }
 
+long number() { return g_number; }
+
 bool latched_this_frame() { return g_latched; }
 
 void tick(uint8_t* rdram) {
     (void)rdram;
-    if (!g_latched) latch(sample_local(g_local_frame), false);
+    if (!g_latched) latch(sample_local(g_local_frame), false, g_local_frame);
     g_latched = false;   // for the next frame
     ++g_local_frame;
 }

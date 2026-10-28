@@ -69,8 +69,12 @@ static_assert(std::is_trivially_copyable_v<Frame>, "a frame is plain data (files
 // The latch. Applies the settings (netplay: from_host says the host decides
 // them, so the local menu cannot change them) and keeps the commands for
 // the tools that run them this frame.
-void latch(const Frame& frame, bool from_host);
+// `number` is the frame's place on the source's timeline (a recording's
+// frame, the online frame count, the local count); after a rollback it goes
+// back, so a log line that names it can be put in order.
+void latch(const Frame& frame, bool from_host, long number);
 const Frame& current();
+long number();   // of the latched frame
 bool latched_this_frame();
 // The frame point: when no source latched a frame since the last tick, the
 // local source does. Called last in the frame hook.
