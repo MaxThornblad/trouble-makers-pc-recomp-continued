@@ -237,13 +237,12 @@ Phases (each tested and committed on its own):
    recompiled game drives RT64 and the audio microcode
    (patches/N64ModernRuntime has the audio-on-game-thread and deterministic
    VI changes).
-4. **Rollback.** Evaluate GekkoNet first (check its license file, pin a
-   commit, ask the owner before adding the dependency); keep our ENet/Steam
-   transports. Fallback: a small engine of our own (ring of snapshots,
-   predicted remote input = last known, re-simulate on mismatch, confirmed
-   frames hashed and compared). Keep adaptive delay as a minimum delay
-   option for bad links. Add a sync-test mode (roll back 1 to N frames every
-   frame and compare fingerprints) and run it in the bot suite.
+4. **Rollback.** DONE, built into netplay.cpp (GekkoNet evaluated and
+   rejected: its save/load/advance event loop does not fit a game that
+   advances only when the frame hook returns; see NETCODE-V2.md). Ring of
+   snapshots, predicted remote input = last known pad, re-simulate on
+   mismatch, confirmed frames hashed and compared; adaptive delay kept
+   (clamped to 3 frames); sync-test mode in the bot suite.
 5. **Local split screen.** Two views of the one simulation in one window,
    from the phase 3 presentation layer, controllers 1 and 2.
 
@@ -255,7 +254,11 @@ netcode, and the owner decides.
 
 - Phase 0 (go), phase 1 (registry; rollback audit in coop_bots --rollback),
   phase 2 (frame_input), phase 3 (presentation switch) are done on
-  netcode-v2; see docs/NETCODE-V2.md for each. Next: phase 4, rollback.
+  netcode-v2; see docs/NETCODE-V2.md for each.
+- Phase 4 (rollback, no library) is done: netplay.cpp predicts the
+  partner's pad, keeps a snapshot per frame, and re-runs frames unpaced
+  with presentation off when a late input differs. New scenarios
+  net-rollback, net-synctest, net-lockstep. Next: phase 5, split screen.
 - Stage 3-12 (CERBERUS): the owner reported trouble there (details not
   given yet). It is a looping auto-scrolling arena (about 785 px round,
   10 px a frame). Save slot 9 in the test home is now a state at its start
@@ -267,7 +270,6 @@ netcode, and the owner decides.
 
 ## 5. Open questions for the owner (ask when relevant, not up front)
 
-- GekkoNet as a dependency (phase 4).
 - Split screen layout (side by side or top and bottom) and whether it is
   offered online too.
 - Whether the netplay protocol may break compatibility at each update

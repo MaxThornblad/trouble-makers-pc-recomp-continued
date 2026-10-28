@@ -210,3 +210,72 @@ process; one taken a few seconds later loads fine. Not yet understood
 overlay, something the state does not carry). A joiner loads the host's
 state, so a join right after the host changes scene may hit this; the bot
 suite does not cover that case yet. Open item.
+
+## Phase 4: rollback (built 2026-10-28)
+
+GekkoNet (BSD-2, github.com/HeatXD/GekkoNet, read at commit 9da2363) was
+the candidate library. Its model is a game loop that calls
+`gekko_update_session` and then performs the events it returns (Save, Load,
+Advance x N) before the next call. This game cannot "advance a frame" on
+request: a frame runs when the frame hook returns to the game, so a
+rollback's N advances would have to be spread over N hook calls with the
+session frozen in between, an awkward fit, and everything else the library
+offers (transport adapter, delay, desync checks, replays) netplay.cpp
+already has. So rollback is built into netplay.cpp, a few hundred lines on
+top of what is there; no new dependency.
+
+How it works (netplay.cpp, rollback mode, the default):
+
+- Inputs are frame-numbered as before. Each side sends its input `delay`
+  frames ahead; in rollback mode the delay is small (1 to 3 frames, from
+  the measured trip) and prediction covers the rest.
+- A frame whose partner input has not arrived runs anyway with a
+  *predicted* input: the partner's last known pad (buttons and stick), the
+  host's settings and commands unchanged. The frame is marked predicted,
+  and the prediction used is kept.
+- A snapshot (`savestate::capture_memory`, 1.3 ms here) is taken at every
+  frame point and kept for the last kMaxPredict + 2 frames.
+- When a late input arrives for frame p and differs from the prediction
+  used, the game is restored to the snapshot of frame point p, p's input
+  is latched (frame_input), and frames p .. f-1 run again, one per hook
+  call, unpaced (speed multiplier) and with presentation off (phase 3),
+  each with its real or re-predicted input, until frame f is reached
+  again; snapshots are retaken on the way. From the player's side the game
+  paused for a few milliseconds and the partner's character corrected
+  itself.
+- A partner input missing for more than kMaxPredict (10) frames stalls the
+  game as lockstep does today.
+- Fingerprints (every 60 frames) are taken from the kept snapshot of a
+  frame point once every input up to it is confirmed
+  (`replay::image_fingerprint` over the snapshot's memory image and
+  registered modules, the same masking as the live fingerprint), so a
+  predicted frame is never compared and lag cannot starve the check; a
+  mismatch still means a resync.
+- Lockstep stays as a fallback mode (MM_NET_LOCKSTEP=1 for tests).
+
+Things found while building it:
+
+- An input for the frame being waited on (frame == g_frame) was dropped
+  by the packet handler, so a prediction was never confirmed; every
+  received input is now stored and compared against the prediction used.
+- Restoring a snapshot bumps the save-state load generation, which the
+  session read as "the host loaded a state" and answered with a resync;
+  a rollback restore now updates the generation the session has seen.
+- The adaptive delay is clamped to 3 frames in rollback mode (the rest
+  of the trip is covered by prediction); lockstep keeps 2..10.
+
+Measured (bots, 900 frames, both sides tracing): 60 ms one-way with 15 ms
+jitter → host waited over a frame once, 8 rollbacks (19 frames run again),
+793 frames run on a prediction, 15 fingerprints each, none differing.
+120 ms + 30 ms jitter + 1 % loss → 12 waits, 8 rollbacks (52 frames), no
+differing fingerprint.
+
+Tests: the online bot scenarios run in rollback mode by default;
+`net-rollback` (60 ms lag) requires rollbacks in the log and at most 3
+waits, `net-synctest` (MM_NET_SYNC_TEST=1, a one-frame rollback every
+frame) requires that re-running a frame always reproduces it, and
+`net-lockstep` (MM_NET_LOCKSTEP=1) keeps the fallback working. Every
+scenario still compares fingerprints and forbids resyncs.
+
+Env: MM_NET_LOCKSTEP=1 (no prediction), MM_NET_SYNC_TEST=1,
+MM_NET_DEBUG=1 (per-rollback lines), MM_NET_LAG=ms,jitter,loss%.

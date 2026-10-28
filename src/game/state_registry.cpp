@@ -57,6 +57,20 @@ std::vector<std::string> load_all(const std::vector<Blob>& blobs) {
     return reset;
 }
 
+uint64_t hash_blobs(uint64_t h, const std::vector<Blob>& blobs) {
+    for (const Module& m : registry()) {
+        for (const Blob& b : blobs) {
+            if (b.name != m.name) continue;
+            for (uint8_t byte : b.bytes) {
+                h ^= byte;
+                h *= 0x100000001B3ull;
+            }
+            break;
+        }
+    }
+    return h;
+}
+
 uint64_t hash_all(uint64_t h) {
     for (const Module& m : registry()) {
         const auto* p = static_cast<const uint8_t*>(m.data);

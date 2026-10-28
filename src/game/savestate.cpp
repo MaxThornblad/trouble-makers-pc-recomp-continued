@@ -770,6 +770,17 @@ bool apply_memory(unsigned char* rdram, recomp_context* ctx, const MemorySnapsho
     return apply(rdram, ctx, from.s, error);
 }
 
+const std::vector<mm::state::Blob>& memory_modules(const MemorySnapshot& snap) { return snap.s.modules; }
+
+const uint8_t* memory_image(const MemorySnapshot& snap, size_t* size) {
+    if (snap.s.regions.empty()) {
+        *size = 0;
+        return nullptr;
+    }
+    *size = snap.s.regions[0].size();
+    return snap.s.regions[0].data();
+}
+
 bool load_now(unsigned char* rdram, recomp_context* ctx, const std::filesystem::path& path, std::string& error) {
     Snapshot snapshot;
     return read_file(path, snapshot, error) && apply(rdram, ctx, snapshot, error);

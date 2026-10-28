@@ -24,6 +24,7 @@
 #include <SDL2/SDL.h>
 
 #include "recomp.h"
+#include "state_registry.h"
 
 namespace mm::savestate {
 
@@ -62,6 +63,10 @@ using MemorySnapshotPtr = std::unique_ptr<MemorySnapshot, MemorySnapshotDeleter>
 MemorySnapshotPtr new_memory_snapshot();
 bool capture_memory(unsigned char* rdram, recomp_context* ctx, MemorySnapshot& into, std::string& error);
 bool apply_memory(unsigned char* rdram, recomp_context* ctx, const MemorySnapshot& from, std::string& error);
+// The snapshot's copy of game memory from 0x80000000 and its registered
+// state, for replay::image_fingerprint.
+const uint8_t* memory_image(const MemorySnapshot& snap, size_t* size);
+const std::vector<mm::state::Blob>& memory_modules(const MemorySnapshot& snap);
 
 #ifdef MM_HAS_GRAPHICS
 // Draws the short "Saved slot 3" style notification (ImGui, post-present).

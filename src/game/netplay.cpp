@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <fstream>
 #include <iterator>
 #include <map>
@@ -18,6 +19,7 @@
 #include "cheats.h"
 #include "frame_input.h"
 #include "net_delay.h"
+#include "presentation_switch.h"
 #include "net_transport.h"
 #include "librecomp/game.hpp"
 #include "mm_audio_input.hpp"
@@ -111,6 +113,22 @@ struct Input {
     mm::frame_input::Command commands[mm::frame_input::kMaxCommands];
 };
 
+bool same_input(const Input& a, const Input& b) {
+    if (a.pad.buttons != b.pad.buttons || a.pad.x != b.pad.x || a.pad.y != b.pad.y || a.pad.connected != b.pad.connected)
+        return false;
+    if (a.settings.cheats != b.settings.cheats || a.settings.active != b.settings.active ||
+        a.settings.hold_dash != b.settings.hold_dash || a.settings.gem_hints != b.settings.gem_hints ||
+        a.settings.widescreen != b.settings.widescreen || a.settings.coop != b.settings.coop)
+        return false;
+    if (a.command_count != b.command_count) return false;
+    for (int i = 0; i < a.command_count; ++i) {
+        if (a.commands[i].kind != b.commands[i].kind || a.commands[i].a != b.commands[i].a ||
+            a.commands[i].b != b.commands[i].b)
+            return false;
+    }
+    return true;
+}
+
 void write_input(Writer& w, const Input& in) {
     w.put(in.pad);
     w.put(in.settings);
@@ -167,6 +185,30 @@ uint32_t g_last_sent = 0;           // the last frame this side's input went out
 std::atomic<int> g_shown_ping{-1}, g_shown_delay{0};   // for the overlay (render thread)
 long g_long_waits = 0;              // frames this session that waited over a frame for the partner
 double g_longest_wait_ms = 0;
+
+// Rollback (docs/NETCODE-V2.md, phase 4). A frame whose partner input has
+// not arrived runs with a predicted one; a snapshot of every frame point is
+// kept, and when a late input differs from its prediction the game goes
+// back to that frame's snapshot and runs the frames since again, one per
+// hook call, unpaced and unseen, until it is back where it was.
+bool g_rollback_mode = true;        // MM_NET_LOCKSTEP=1: wait for every input instead
+constexpr int kMaxPredict = 10;     // frames run on prediction before the game waits
+struct Kept {
+    uint32_t frame;
+    mm::savestate::MemorySnapshotPtr snap;
+    bool hashed = false;   // its fingerprint went out (once the frame was confirmed)
+};
+std::deque<Kept> g_snaps;                               // the last frame points, oldest first
+std::deque<mm::savestate::MemorySnapshotPtr> g_spare;   // buffers to reuse
+std::map<uint32_t, Input> g_predicted;                  // frames run on a prediction: the input used
+Input g_remote_last;                                    // the partner's latest input (what is predicted)
+uint32_t g_remote_last_frame = 0;
+uint32_t g_rollback_to = UINT32_MAX;                    // the earliest frame whose prediction was wrong
+bool g_catching_up = false;                             // running frames again
+uint32_t g_catch_frame = 0, g_catch_target = 0;
+uint32_t g_speed_before = 1;
+long g_rollbacks = 0, g_rollback_frames = 0, g_predicted_frames = 0;
+bool g_sync_test = false;                               // MM_NET_SYNC_TEST=1: roll back every frame
 long g_frame = 0;                   // session frame
 std::map<uint32_t, Input> g_local, g_remote;
 std::map<uint32_t, uint64_t> g_local_hash, g_remote_hash;
@@ -277,12 +319,24 @@ void reset_frames() {
         g_remote[static_cast<uint32_t>(f)] = g_is_host ? Input{} : start;
     }
     g_last_sent = static_cast<uint32_t>(g_delay - 1);
+    for (Kept& k : g_snaps) g_spare.push_back(std::move(k.snap));
+    g_snaps.clear();
+    g_predicted.clear();
+    g_remote_last = Input{};
+    g_remote_last_frame = 0;
+    g_rollback_to = UINT32_MAX;
+    if (g_catching_up) {
+        g_catching_up = false;
+        ultramodern::set_speed_multiplier(g_speed_before);
+        mm::presentation::set_live(true);
+    }
 }
 
 void begin_running() {
     if (!g_active.load()) {
         g_long_waits = 0;
         g_longest_wait_ms = 0;
+        g_rollbacks = g_rollback_frames = g_predicted_frames = 0;
     }
     reset_frames();
     mm::frame_input::set_pad_script(0, g_pad_script);
@@ -298,6 +352,13 @@ void end_session(const char* why) {
     if (was_active) {
         std::fprintf(stderr, "[netplay] frames that waited over a frame for the partner: %ld, longest %.0f ms\n",
                      g_long_waits, g_longest_wait_ms);
+        std::fprintf(stderr, "[netplay] rollbacks: %ld (%ld frames run again), %ld frames run on a prediction\n",
+                     g_rollbacks, g_rollback_frames, g_predicted_frames);
+        if (g_catching_up) {
+            g_catching_up = false;
+            ultramodern::set_speed_multiplier(g_speed_before);
+            mm::presentation::set_live(true);
+        }
         mm::frame_input::set_pad_script(0, nullptr);
         mm_virtual_audio_clock(false);
         mm::cheats::set_session_settings(nullptr);
@@ -456,7 +517,16 @@ void on_packet(uint8_t* rdram, recomp_context* ctx, const uint8_t* data, size_t 
             Input in;
             if (!r.get(epoch) || !r.get(frame) || !read_input(r, in)) return;
             if (epoch != g_epoch || !g_active.load()) return;
-            if (static_cast<long>(frame) >= g_frame) g_remote[frame] = in;
+            if (frame > g_remote_last_frame || g_remote_last_frame == 0) {
+                g_remote_last = in;
+                g_remote_last_frame = frame;
+            }
+            g_remote[frame] = in;
+            if (const auto p = g_predicted.find(frame); p != g_predicted.end()) {
+                // A frame already run on a prediction: right, or to be run again.
+                if (same_input(p->second, in)) g_predicted.erase(p);
+                else g_rollback_to = std::min(g_rollback_to, frame);
+            }
             return;
         }
         case kPing: {
@@ -616,16 +686,152 @@ bool env_at(const char* name, std::string& value, long& at) {
     return true;
 }
 
+// Snapshot of frame point `frame` (the game before that frame runs).
+void keep_snapshot(uint8_t* rdram, recomp_context* ctx, uint32_t frame) {
+    while (!g_snaps.empty() && g_snaps.back().frame >= frame) {   // running this frame again
+        g_spare.push_back(std::move(g_snaps.back().snap));
+        g_snaps.pop_back();
+    }
+    mm::savestate::MemorySnapshotPtr snap;
+    if (!g_spare.empty()) {
+        snap = std::move(g_spare.front());
+        g_spare.pop_front();
+    } else {
+        snap = mm::savestate::new_memory_snapshot();
+    }
+    std::string error;
+    if (!mm::savestate::capture_memory(rdram, ctx, *snap, error)) {
+        std::fprintf(stderr, "[netplay] snapshot failed at frame %u: %s\n", frame, error.c_str());
+        g_spare.push_back(std::move(snap));
+        return;
+    }
+    g_snaps.push_back(Kept{frame, std::move(snap)});
+    while (g_snaps.size() > static_cast<size_t>(kMaxPredict + 2)) {
+        g_spare.push_back(std::move(g_snaps.front().snap));
+        g_snaps.pop_front();
+    }
+}
+
+// The partner's input for `frame`: the real one, or a prediction (its
+// latest known input) noted as such.
+Input partner_input(uint32_t frame) {
+    if (const auto it = g_remote.find(frame); it != g_remote.end()) {
+        if (const auto p = g_predicted.find(frame); p != g_predicted.end()) g_predicted.erase(p);
+        return it->second;
+    }
+    Input guess = g_remote_last;
+    guess.command_count = 0;   // a command is never guessed
+    g_predicted[frame] = guess;
+    ++g_predicted_frames;
+    return guess;
+}
+
+bool confirmed(uint32_t frame) {   // every input up to and including this frame is real
+    return g_remote.find(frame) != g_remote.end() &&
+           (g_predicted.empty() || g_predicted.begin()->first > frame);
+}
+
+void latch(uint32_t frame, const Input& theirs) {
+    const Input& mine = g_local[frame];
+    latch_frame(g_is_host ? mine : theirs, g_is_host ? theirs : mine);
+}
+
+// Fingerprints: of the kept snapshots whose frames are confirmed (every
+// input up to them real), so both sides hash the same thing, and in
+// lockstep of the live frame point. A frame run on a prediction is hashed
+// later, from its snapshot, once its inputs are in, or not at all if it had
+// to be run again (then its new snapshot is).
+void send_hash(uint8_t* rdram, uint32_t f, uint64_t h) {
+    (void)rdram;
+    g_local_hash[f] = h;
+    Writer w;
+    w.put<uint8_t>(kHash);
+    w.put<uint32_t>(g_epoch);
+    w.put<uint32_t>(f);
+    w.put<uint64_t>(h);
+    send(1, w);
+    if (g_log) {
+        std::fprintf(g_log, "%u %u %016llx\n", g_epoch, f, static_cast<unsigned long long>(h));
+        std::fflush(g_log);
+    }
+}
+
+void fingerprint_confirmed(uint8_t* rdram, uint32_t f) {
+    if (!g_rollback_mode) {
+        if (f % kHashEvery == 0 && confirmed(f) && !g_local_hash.count(f)) send_hash(rdram, f, mm::replay::memory_fingerprint(rdram));
+        return;
+    }
+    for (Kept& k : g_snaps) {
+        if (k.hashed || k.frame % kHashEvery != 0 || !confirmed(k.frame)) continue;
+        size_t size = 0;
+        const uint8_t* image = mm::savestate::memory_image(*k.snap, &size);
+        if (!image) continue;
+        k.hashed = true;
+        send_hash(rdram, k.frame, mm::replay::image_fingerprint(image, size, mm::savestate::memory_modules(*k.snap)));
+    }
+}
+
+// A late input differed from its prediction: back to that frame's snapshot;
+// the frames since run again from the next hook calls on.
+bool begin_rollback(uint8_t* rdram, recomp_context* ctx, uint32_t to, uint32_t target) {
+    const Kept* kept = nullptr;
+    for (const Kept& k : g_snaps) {
+        if (k.frame == to) kept = &k;
+    }
+    if (!kept) {
+        std::fprintf(stderr, "[netplay] no snapshot of frame %u to roll back to\n", to);
+        return false;
+    }
+    std::string error;
+    if (!mm::savestate::apply_memory(rdram, ctx, *kept->snap, error)) {
+        std::fprintf(stderr, "[netplay] rollback to frame %u failed: %s\n", to, error.c_str());
+        return false;
+    }
+    g_seen_load_generation = mm::savestate::load_generation();   // our own restore, not a player's load
+    ++g_rollbacks;
+    g_rollback_frames += target - to;
+    g_catching_up = true;
+    g_catch_frame = to;
+    g_catch_target = target;
+    g_speed_before = ultramodern::get_speed_multiplier();
+    ultramodern::set_speed_multiplier(1000);
+    mm::presentation::set_live(false);
+    g_frame = static_cast<long>(to);
+    // The frames since: predictions again, from what is known now.
+    for (auto it = g_predicted.lower_bound(to); it != g_predicted.end();) it = g_predicted.erase(it);
+    g_rollback_to = UINT32_MAX;
+    latch(to, partner_input(to));
+    static const bool dbg = std::getenv("MM_NET_DEBUG") != nullptr;
+    if (dbg) std::fprintf(stderr, "[netplay] rollback: frame %u back to %u (%u frames again)\n", target, to, target - to);
+    return true;
+}
+
 // One session frame: this side's input goes out, the partner's comes in.
 void run_frame(uint8_t* rdram, recomp_context* ctx);
 void run_frame(uint8_t* rdram, recomp_context* ctx) {
+    if (g_catching_up) {
+        // The game just ran frame g_catch_frame again.
+        ++g_catch_frame;
+        if (g_catch_frame < g_catch_target) {
+            g_frame = static_cast<long>(g_catch_frame);
+            keep_snapshot(rdram, ctx, g_catch_frame);
+            latch(g_catch_frame, partner_input(g_catch_frame));
+            return;
+        }
+        // Back where the rollback started: this hook call is that frame's.
+        g_catching_up = false;
+        ultramodern::set_speed_multiplier(g_speed_before);
+        mm::presentation::set_live(true);
+        g_frame = static_cast<long>(g_catch_target) - 1;
+    }
     if (!g_restarted) ++g_frame;
     g_restarted = false;
     const uint32_t f = static_cast<uint32_t>(g_frame);
 
     // How far ahead to send, from the measured round trip.
     if (!g_delay_fixed) {
-        const int d = g_delay_ctl.update(g_delay);
+        int d = g_delay_ctl.update(g_delay);
+        if (g_rollback_mode) d = std::min(d, 3);   // prediction covers the rest of the trip
         if (d != g_delay) {
             std::fprintf(stderr, "[netplay] delay now %d frames (round trip %.0f ms, worst %.0f ms)\n", d,
                          g_delay_ctl.rtt_ms(), g_delay_ctl.rtt_high_ms());
@@ -692,32 +898,38 @@ void run_frame(uint8_t* rdram, recomp_context* ctx) {
         d.write(reinterpret_cast<const char*>(rdram), 0x840000);
     }
 
-    // Once a second: do both machines still have the same game?
-    if (f % kHashEvery == 0) {
-        const uint64_t h = mm::replay::memory_fingerprint(rdram);
-        g_local_hash[f] = h;
-        Writer w;
-        w.put<uint8_t>(kHash);
-        w.put<uint32_t>(g_epoch);
-        w.put<uint32_t>(f);
-        w.put<uint64_t>(h);
-        send(1, w);
-        if (g_log) {
-            std::fprintf(g_log, "%u %u %016llx\n", g_epoch, f, static_cast<unsigned long long>(h));
-            std::fflush(g_log);
-        }
-    }
     flush();
 
-    // The partner's input for this frame.
+    // A late input differed from its prediction: the frames since run again
+    // before this one.
+    if (g_rollback_to < f && g_rollback_mode) {
+        if (begin_rollback(rdram, ctx, g_rollback_to, f)) return;
+        g_rollback_to = UINT32_MAX;
+    }
+    if (g_sync_test && f > 2 && !g_snaps.empty() && g_snaps.back().frame == f - 1) {
+        // Test: every frame runs twice; the second run must give the same game.
+        if (begin_rollback(rdram, ctx, f - 1, f)) return;
+    }
+
+    // The partner's input for this frame: wait for it in lockstep, or when
+    // too many frames already rest on predictions.
     const auto started = std::chrono::steady_clock::now();
-    while (g_remote.find(f) == g_remote.end()) {
+    const auto can_predict = [&] {
+        if (!g_rollback_mode) return false;
+        const uint32_t oldest = g_predicted.empty() ? f : g_predicted.begin()->first;
+        return static_cast<long>(f) - static_cast<long>(oldest) < kMaxPredict && g_remote_last_frame > 0;
+    };
+    while (g_remote.find(f) == g_remote.end() && !can_predict()) {
         if (!service(rdram, ctx, 2)) return;   // session ended
         if (g_restarted) {                     // a resync was applied: run its frame 0 instead
             run_frame(rdram, ctx);
             return;
         }
         if (g_is_host && g_start_wanted && g_frame >= 120) return;   // handled by the caller at once
+        if (g_rollback_to < f && g_rollback_mode) {   // what came in asks for a rollback first
+            if (begin_rollback(rdram, ctx, g_rollback_to, f)) return;
+            g_rollback_to = UINT32_MAX;
+        }
         const auto waited = std::chrono::steady_clock::now() - started;
         if (waited > std::chrono::milliseconds(300)) g_waiting.store(true);
         if (waited > std::chrono::seconds(60)) {
@@ -732,11 +944,12 @@ void run_frame(uint8_t* rdram, recomp_context* ctx) {
         g_longest_wait_ms = std::max(g_longest_wait_ms, ms);
     }
 
-    const Input mine = g_local[f], theirs = g_remote[f];
-    const Input& host = g_is_host ? mine : theirs;
-    const Input& guest = g_is_host ? theirs : mine;
-    latch_frame(host, guest);
+    if (g_rollback_mode) keep_snapshot(rdram, ctx, f);
+    const Input theirs = partner_input(f);
+    fingerprint_confirmed(rdram, f);
+    latch(f, theirs);
     {
+        const Input& host = g_is_host ? g_local[f] : theirs;
         static mm::cheats::SessionSettings s_last;
         if (f > 0 && std::memcmp(&host.settings, &s_last, sizeof s_last) != 0)
             std::fprintf(stderr, "[netplay] settings changed at frame %u (cheats %x, flags %x)\n", f,
@@ -744,8 +957,11 @@ void run_frame(uint8_t* rdram, recomp_context* ctx) {
                          host.settings.active | host.settings.hold_dash << 1 | host.settings.gem_hints << 2);
         s_last = host.settings;
     }
-    g_local.erase(g_local.begin(), g_local.lower_bound(f));
-    g_remote.erase(g_remote.begin(), g_remote.lower_bound(f));
+    {
+        const uint32_t keep_from = f > static_cast<uint32_t>(kMaxPredict + 2) ? f - (kMaxPredict + 2) : 0;
+        g_local.erase(g_local.begin(), g_local.lower_bound(keep_from));
+        g_remote.erase(g_remote.begin(), g_remote.lower_bound(keep_from));
+    }
 
     // Compare fingerprints both sides have.
     for (auto it = g_local_hash.begin(); it != g_local_hash.end();) {
@@ -769,6 +985,12 @@ void run_frame(uint8_t* rdram, recomp_context* ctx) {
         }
         g_remote_hash.erase(other);
         it = g_local_hash.erase(it);
+    }
+    // Fingerprints the other side never took (it ran that frame on a
+    // prediction) are dropped after a while.
+    if (f > 600) {
+        g_local_hash.erase(g_local_hash.begin(), g_local_hash.lower_bound(f - 600));
+        g_remote_hash.erase(g_remote_hash.begin(), g_remote_hash.lower_bound(f - 600));
     }
 
     if (g_length >= 0 && g_frame >= g_length) end_session("length reached");
@@ -853,6 +1075,8 @@ void on_frame(uint8_t* rdram, recomp_context* ctx) {
         env_read = true;
         if (env_at("MM_NET_HOST", env_host, host_at) && host_at == 0) host_at = 1;
         if (env_at("MM_NET_JOIN", env_join, join_at) && join_at == 0) join_at = 1;
+        if (env_on("MM_NET_LOCKSTEP")) g_rollback_mode = false;
+        if (env_on("MM_NET_SYNC_TEST")) g_sync_test = true;
         if (const char* d = std::getenv("MM_NET_DELAY")) {
             g_delay = std::clamp(std::atoi(d), 1, 30);
             g_delay_fixed = true;

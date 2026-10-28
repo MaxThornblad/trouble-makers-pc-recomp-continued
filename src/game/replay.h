@@ -30,6 +30,7 @@
 #include <filesystem>
 
 #include "recomp.h"
+#include "state_registry.h"
 
 namespace mm::replay {
 
@@ -55,6 +56,11 @@ void on_frame(uint8_t* rdram, recomp_context* ctx);
 // Game thread: one 64-bit fingerprint of game memory (the replay block hashes
 // folded together, with the same words left out). Netplay compares these.
 uint64_t memory_fingerprint(uint8_t* rdram);
+// The same of an image of game memory (a snapshot's copy of RDRAM from
+// 0x80000000, `size` bytes): what the game's memory would hash as at the
+// moment the snapshot was taken. Netplay hashes kept snapshots this way once
+// their frames are confirmed. (The registered host state is the live one.)
+uint64_t image_fingerprint(const uint8_t* image, size_t size, const std::vector<mm::state::Blob>& modules);
 
 // Game thread, while playing, right after a state from replay frame `frame`
 // was put back: the playback continues from there (its inputs and its

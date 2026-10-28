@@ -71,6 +71,8 @@ std::vector<Blob> save_all();
 std::vector<std::string> load_all(const std::vector<Blob>& blobs);
 // Folds every module's bytes into a running FNV-1a hash (replay fingerprints).
 uint64_t hash_all(uint64_t h);
+// The same for saved blobs (a snapshot's modules, in registration order).
+uint64_t hash_blobs(uint64_t h, const std::vector<Blob>& blobs);
 // The registered modules, in registration order (tests, logs).
 const std::vector<Module>& modules();
 

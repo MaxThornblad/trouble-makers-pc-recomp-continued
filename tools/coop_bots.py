@@ -113,6 +113,16 @@ NETPLAY = [
      dict(env={"MM_NET_LAG": "60,15,0"}, host_re=[r"delay now ([5-9]|10) frames"])),
     # Lost packets (resent, holding up the ones behind them): no resyncs.
     ("net-loss", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r", dict(env={"MM_NET_LAG": "20,5,1"})),
+    # Rollback: on the slow link the game must not wait and must roll back
+    # (frames run again), still with identical fingerprints and no resync.
+    ("net-rollback", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r",
+     dict(env={"MM_NET_LAG": "60,15,0"}, host_re=[r"rollbacks: [1-9]\d* \(", r"waited over a frame for the partner: [0-3],"])),
+    # Every frame runs twice (rollback of one frame each frame): the second
+    # run must give the same game.
+    ("net-synctest", 1, 900, "60:,400:r,440:l", "60:,400:l,440:r",
+     dict(env={"MM_NET_SYNC_TEST": "1"}, host_re=[r"rollbacks: [5-9]\d\d "])),
+    # Lockstep stays as a fallback.
+    ("net-lockstep", 1, 900, "60:,400:r,440:l", "60:,400:l,440:r", dict(env={"MM_NET_LOCKSTEP": "1"})),
     ("net-far", 1, 1500, "60:,1440:r", "60:,1440:l"),
     ("net-steam", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r"),   # over the Steam stand-in (--steam-mock)
     ("net-carry", 1, 1200, "80:,6:l,10:B,20:,60:r,30:,60:l,20:,10:B,900:", "600:,6:r,10:B,20:,60:l,30:,60:r,20:,10:B,400:"),
@@ -392,13 +402,22 @@ def run_netplay(args, name, slot, frames, pad1, pad2, port, extra=None):
         resyncs = hout.count("[netplay] resync:")
         if resyncs:
             problems.append("%d resyncs" % resyncs)
-        h = [l.strip() for l in hlog.read_text().splitlines()] if hlog.exists() else []
-        g = [l.strip() for l in glog.read_text().splitlines()] if glog.exists() else []
-        common_n = min(len(h), len(g))
-        if common_n < frames // 60 - 2:
-            problems.append("only %d fingerprint checks" % common_n)
-        if h[:common_n] != g[:common_n]:
-            problems.append("fingerprints differ")
+        # Fingerprints by (epoch, frame): with rollback a side skips a frame it
+        # ran on a prediction, so only the frames both took are compared.
+        def hashes(path):
+            out = {}
+            for l in (path.read_text().splitlines() if path.exists() else []):
+                parts = l.split()
+                if len(parts) == 3:
+                    out[(parts[0], int(parts[1]))] = parts[2]
+            return out
+        h, g = hashes(hlog), hashes(glog)
+        common = sorted(set(h) & set(g))
+        if len(common) < max(2, frames // 60 // 3):
+            problems.append("only %d fingerprint checks in common" % len(common))
+        bad = [k for k in common if h[k] != g[k]]
+        if bad:
+            problems.append("fingerprints differ (first at epoch %s frame %d)" % bad[0])
         start = hout.find("session started")
         end = hout.find("session ended", start)   # after it the host plays on alone
         if "same" in extra:   # these lines, as many, identical on both machines
@@ -428,9 +447,10 @@ def main():
                     help="also play each local and far recording back with rollbacks (e.g. 30:8): netcode-v2")
     ap.add_argument("--steam-mock", default="", help="the Steam stand-in library (cc -shared -fPIC "
                     "-o libsteam_api.so tools/steam_mock/mock_steam.c); without it net-steam is skipped")
+    ap.add_argument("--port", type=int, default=7900, help="first port for the netplay scenarios")
     args = ap.parse_args()
     failed = 0
-    port = 7900
+    port = args.port
     for name, slot, frames, p1, p2, allowed in SCENARIOS:
         if args.only and not any(o in name for o in args.only.split(',')):
             continue

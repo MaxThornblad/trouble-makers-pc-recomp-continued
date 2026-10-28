@@ -114,44 +114,56 @@ uint64_t hash_block(const uint8_t* p) {
     return h;
 }
 
-void fingerprint(uint8_t* rdram, std::array<uint64_t, kBlocks>& out) {
-    // Masked while hashing: the clock words, and each game thread's host
-    // context pointer (OSThread::context, 8 bytes; differs per process).
+// Hashes the blocks of `image`, laid out as RDRAM from 0x80000000 for `size`
+// bytes, with the masked words and renderer ranges zeroed in a scratch copy
+// (never in the image itself); blocks past `size` hash as zero.
+void fingerprint_image(const uint8_t* image, size_t size, const std::vector<mm::state::Blob>* modules,
+                       std::array<uint64_t, kBlocks>& out) {
+    // Masked: the clock words, and each game thread's host context pointer
+    // (OSThread::context, 8 bytes; differs per process).
     std::vector<uint32_t> masked(kClockWords.begin(), kClockWords.end());
     for (uint32_t t : mm::savestate::game_thread_addresses()) {
         const uint32_t context = t + static_cast<uint32_t>(offsetof(OSThread, context));
         masked.push_back(context);
         masked.push_back(context + 4);
     }
-    std::vector<uint32_t> saved(masked.size());
-    for (size_t i = 0; i < masked.size(); ++i) {
-        uint32_t* w = reinterpret_cast<uint32_t*>(rdram + (masked[i] - 0x80000000u));
-        saved[i] = *w;
-        *w = 0;
-    }
-    const uint8_t* base = rdram + (kHashBase - 0x80000000u);
     static std::vector<uint8_t> scratch(kBlock);
     for (int b = 0; b < kBlocks; ++b) {
         const uint32_t start = kHashBase + static_cast<uint32_t>(b) * kBlock, end = start + kBlock;
-        const uint8_t* block = base + static_cast<size_t>(b) * kBlock;
+        const size_t off = static_cast<size_t>(b) * kBlock;
+        if (off >= size) {
+            out[b] = 0;
+            continue;
+        }
+        const uint8_t* block = image + off;
         bool copied = false;
+        const auto copy = [&] {
+            if (copied) return;
+            std::memcpy(scratch.data(), block, std::min<size_t>(kBlock, size - off));
+            if (size - off < kBlock) std::memset(scratch.data() + (size - off), 0, kBlock - (size - off));
+            copied = true;
+        };
+        if (size - off < kBlock) copy();
         for (const Range& r : kRendererRanges) {
             if (r.end <= start || r.start >= end) continue;
-            if (!copied) {
-                std::memcpy(scratch.data(), block, kBlock);
-                copied = true;
-            }
+            copy();
             const uint32_t from = std::max(r.start, start), to = std::min(r.end, end);
             std::memset(scratch.data() + (from - start), 0, to - from);
         }
+        for (uint32_t m : masked) {
+            if (m < start || m + 4 > end) continue;
+            copy();
+            std::memset(scratch.data() + (m - start), 0, 4);
+        }
         out[b] = hash_block(copied ? scratch.data() : block);
-    }
-    for (size_t i = 0; i < masked.size(); ++i) {
-        *reinterpret_cast<uint32_t*>(rdram + (masked[i] - 0x80000000u)) = saved[i];
     }
     // Registered host-side state (state_registry.h) counts as part of the
     // game: folded into the last block, so drift in it shows as a mismatch.
-    out[kBlocks - 1] = mm::state::hash_all(out[kBlocks - 1]);
+    out[kBlocks - 1] = modules ? mm::state::hash_blobs(out[kBlocks - 1], *modules) : mm::state::hash_all(out[kBlocks - 1]);
+}
+
+void fingerprint(uint8_t* rdram, std::array<uint64_t, kBlocks>& out) {
+    fingerprint_image(rdram, kHashSize, nullptr, out);
 }
 
 void write_dump(uint8_t* rdram, const std::filesystem::path& dir, long frame) {
@@ -331,6 +343,17 @@ bool env_at(const char* name, std::filesystem::path& dir, long& at) {
 uint64_t memory_fingerprint(uint8_t* rdram) {
     std::array<uint64_t, kBlocks> hashes;
     fingerprint(rdram, hashes);
+    uint64_t h = 0xCBF29CE484222325ull;
+    for (uint64_t b : hashes) {
+        h = (h ^ b) * 0x100000001B3ull;
+        h ^= h >> 31;
+    }
+    return h;
+}
+
+uint64_t image_fingerprint(const uint8_t* image, size_t size, const std::vector<mm::state::Blob>& modules) {
+    std::array<uint64_t, kBlocks> hashes;
+    fingerprint_image(image, size, &modules, hashes);
     uint64_t h = 0xCBF29CE484222325ull;
     for (uint64_t b : hashes) {
         h = (h ^ b) * 0x100000001B3ull;
