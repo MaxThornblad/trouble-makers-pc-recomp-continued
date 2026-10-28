@@ -149,6 +149,7 @@ ultramodern::audio_callbacks_t audio_callbacks();
 // osAiSetNextBuffer, on the game thread), and the game's AI sample rate.
 // Replays / netplay use them for a virtual audio clock (register_overlays.cpp).
 uint64_t submitted_audio_bytes();
+void set_submitted_audio_bytes(uint64_t bytes);   // a save state put back
 uint32_t game_sample_rate();
 size_t get_frames_remaining();
 

@@ -1,4 +1,5 @@
 #include "savestate.h"
+#include "audio_clock.h"
 #include "netplay.h"
 
 #include <algorithm>
@@ -77,7 +78,9 @@ constexpr char kMagic[8] = {'T', 'M', 'S', 'T', 'A', 'T', 'E', '\0'};
 // still load; they simply keep whatever RDP state the session has).
 // 3: adds RSP DMEM: each task reloads only 0x000-0xF7F, so what is left in
 // 0xF80-0xFFF carries into the next audio task, and replays must restore it.
-constexpr uint32_t kFormatVersion = 3;
+// 4: adds the virtual audio clock (audio_clock.h): put back, a state's frames
+// run again read the audio level they read the first time (rollback).
+constexpr uint32_t kFormatVersion = 4;
 constexpr const char* kExtension = ".tmstate";
 
 struct Snapshot {
@@ -98,6 +101,8 @@ struct Snapshot {
     int64_t saved_at = 0;        // unix time, informational
     std::vector<uint8_t> rdp;    // mm::graphics RDP state; empty if none
     std::vector<uint8_t> dmem;   // RSP DMEM (version 3); empty if none
+    mm_audio_clock_state audio_clock{};   // (version 4) the virtual audio clock, when it ran
+    uint8_t has_audio_clock = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -190,6 +195,11 @@ std::vector<uint8_t> serialize(const Snapshot& s) {
     w.out.insert(w.out.end(), s.rdp.begin(), s.rdp.end());
     w.put<uint32_t>(static_cast<uint32_t>(s.dmem.size()));
     w.out.insert(w.out.end(), s.dmem.begin(), s.dmem.end());
+    w.put(s.has_audio_clock);
+    w.put(s.audio_clock.submitted);
+    w.put(s.audio_clock.drained);
+    w.put(s.audio_clock.remainder);
+    w.put(s.audio_clock.ai_len);
     return std::move(w.out);
 }
 
@@ -234,6 +244,11 @@ bool deserialize(const std::vector<uint8_t>& payload, Snapshot& s, uint32_t vers
     if (version >= 3) {
         uint32_t n = 0;
         if (!r.get(n) || n > kDmemSize || !r.bytes_raw(s.dmem, n)) return false;
+    }
+    if (version >= 4) {
+        if (!(r.get(s.has_audio_clock) && r.get(s.audio_clock.submitted) && r.get(s.audio_clock.drained) &&
+              r.get(s.audio_clock.remainder) && r.get(s.audio_clock.ai_len)))
+            return false;
     }
     return r.done();
 }
@@ -361,7 +376,14 @@ bool quiesce(uint8_t* rdram, std::string& error) {
 }
 
 bool capture(uint8_t* rdram, recomp_context* ctx, Snapshot& s, std::string& error) {
-    if (!quiesce(rdram, error)) return false;
+    if (!ultramodern::wait_for_rsp_idle(std::chrono::milliseconds(1000))) {
+        error = "the RSP did not go idle";
+        return false;
+    }
+    // Host events still in flight go into the deferred list, which the state
+    // keeps, rather than to the game now: a capture must not change when the
+    // game sees them (a state is taken every frame for rollback).
+    ultramodern::park_pending_external_messages();
 
     s.regions.resize(kRegions.size());
     for (size_t i = 0; i < kRegions.size(); ++i) {
@@ -388,6 +410,8 @@ bool capture(uint8_t* rdram, recomp_context* ctx, Snapshot& s, std::string& erro
     s.rdp = mm::graphics::capture_rdp_state();
 #endif
     s.dmem.assign(dmem, dmem + kDmemSize);
+    mm_virtual_audio_get(&s.audio_clock);
+    s.has_audio_clock = 1;
     return true;
 }
 
@@ -440,6 +464,7 @@ bool apply(uint8_t* rdram, recomp_context* ctx, const Snapshot& s, std::string& 
     }
     ultramodern::set_deferred_external_messages(s.deferred);
     if (s.dmem.size() == kDmemSize) std::memcpy(dmem, s.dmem.data(), kDmemSize);
+    if (s.has_audio_clock) mm_virtual_audio_set(&s.audio_clock);
     mm_ws_set_host_bank_end(s.ws_bank_end);
     mm_ws_after_state_load();
 #ifdef MM_HAS_GRAPHICS
@@ -696,6 +721,21 @@ bool handle_event(const SDL_Event& event) {
 bool save_now(unsigned char* rdram, recomp_context* ctx, const std::filesystem::path& path, std::string& error) {
     Snapshot snapshot;
     return capture(rdram, ctx, snapshot, error) && write_file(path, snapshot, error);
+}
+
+struct MemorySnapshot {
+    Snapshot s;
+};
+
+void MemorySnapshotDeleter::operator()(MemorySnapshot* p) const { delete p; }
+MemorySnapshotPtr new_memory_snapshot() { return MemorySnapshotPtr(new MemorySnapshot); }
+
+bool capture_memory(unsigned char* rdram, recomp_context* ctx, MemorySnapshot& into, std::string& error) {
+    return capture(rdram, ctx, into.s, error);
+}
+
+bool apply_memory(unsigned char* rdram, recomp_context* ctx, const MemorySnapshot& from, std::string& error) {
+    return apply(rdram, ctx, from.s, error);
 }
 
 bool load_now(unsigned char* rdram, recomp_context* ctx, const std::filesystem::path& path, std::string& error) {

@@ -56,4 +56,9 @@ void on_frame(uint8_t* rdram, recomp_context* ctx);
 // folded together, with the same words left out). Netplay compares these.
 uint64_t memory_fingerprint(uint8_t* rdram);
 
+// Game thread, while playing, right after a state from replay frame `frame`
+// was put back: the playback continues from there (its inputs and its
+// fingerprint checks). Rollback tests (rollback_test.cpp).
+void rewind_to(long frame);
+
 } // namespace mm::replay

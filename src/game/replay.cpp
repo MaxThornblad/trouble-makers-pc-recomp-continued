@@ -1,4 +1,5 @@
 #include "replay.h"
+#include "rollback_test.h"
 
 #include <algorithm>
 #include <array>
@@ -246,6 +247,7 @@ std::filesystem::path out_dir() {
 }
 
 void stop(const char* why) {
+    if (g_mode.load() == Mode::Playing) mm::rollback_test::on_stop();
     const Mode mode = g_mode.load();
     if (mode == Mode::Idle) return;
     g_input_out.close();
@@ -420,6 +422,20 @@ uint64_t memory_fingerprint(uint8_t* rdram) {
     return h;
 }
 
+void rewind_to(long frame) {
+    if (g_mode.load() != Mode::Playing) return;
+    // Polls made while the game ran the frame after frame point `frame` are
+    // tagged with it; the cursor goes back to the first of them.
+    size_t lo = 0, hi = g_polls.size();
+    while (lo < hi) {
+        const size_t mid = (lo + hi) / 2;
+        if (g_polls[mid].frame < static_cast<uint32_t>(frame)) lo = mid + 1;
+        else hi = mid;
+    }
+    g_cursor = lo;
+    g_frame.store(frame);
+}
+
 void configure(const std::filesystem::path& folder) {
     g_folder = folder;
 }
@@ -502,10 +518,29 @@ void on_frame(uint8_t* rdram, recomp_context* ctx) {
     }
     if (mode == Mode::Idle) return;
 
+    // Test: how long the game's own frames take (MM_TRACE_FRAME_TIME).
+    static const bool trace_ft = std::getenv("MM_TRACE_FRAME_TIME") != nullptr;
+    static auto last_point = std::chrono::steady_clock::now();
+    static double ft_sum = 0, ft_min = 1e9, ft_max = 0;
+    static long ft_n = 0;
+    if (trace_ft) {
+        const auto now = std::chrono::steady_clock::now();
+        const double ms = std::chrono::duration<double, std::milli>(now - last_point).count();
+        last_point = now;
+        if (g_frame.load() > 1) { ft_sum += ms; ft_n++; ft_min = std::min(ft_min, ms); ft_max = std::max(ft_max, ms); }
+        if (ft_n && ft_n % 300 == 0)
+            std::fprintf(stderr, "[frame-time] avg %.2f ms min %.2f max %.2f over %ld frames\n", ft_sum / ft_n, ft_min, ft_max, ft_n);
+    }
     // Fingerprint the frame point the replay is now at.
     const long f = g_frame.load();
     std::array<uint64_t, kBlocks> hashes;
+    const auto th0 = std::chrono::steady_clock::now();
     fingerprint(rdram, hashes);
+    if (trace_ft) {
+        static double hs = 0; static long hn = 0;
+        hs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - th0).count();
+        if (++hn % 300 == 0) std::fprintf(stderr, "[frame-time] fingerprint avg %.2f ms\n", hs / hn);
+    }
     const uint32_t f32 = static_cast<uint32_t>(f);
     g_hash_out.write(reinterpret_cast<const char*>(&f32), sizeof f32);
     g_hash_out.write(reinterpret_cast<const char*>(hashes.data()), sizeof hashes);
@@ -528,6 +563,7 @@ void on_frame(uint8_t* rdram, recomp_context* ctx) {
     for (long d : g_dumps) {
         if (d == f) write_dump(rdram, out_dir(), f);
     }
+    if (mode == Mode::Playing) mm::rollback_test::on_frame(rdram, ctx, f);
 }
 
 } // namespace mm::replay

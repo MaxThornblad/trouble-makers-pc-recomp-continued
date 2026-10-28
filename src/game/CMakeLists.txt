@@ -49,6 +49,7 @@ add_executable(troublemakers
     net_enet.cpp
     net_lag.cpp
     net_delay.cpp
+    rollback_test.cpp
     widescreen.cpp
 )
 

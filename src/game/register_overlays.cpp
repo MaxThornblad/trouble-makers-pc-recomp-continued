@@ -77,9 +77,27 @@ void set_virtual_audio(bool on, bool restart = false) {
 }
 } // namespace
 
+#include "audio_clock.h"
+
 extern "C" void mm_virtual_audio_clock(bool on) {
     g_virtual_requested = on;
     set_virtual_audio(on || ultramodern::get_speed_multiplier() > 1, on);
+}
+
+// The clock's state, for save states: a state put back must bring the
+// audio level the game sees along, or the frames after it read a stale one.
+extern "C" void mm_virtual_audio_get(mm_audio_clock_state* out) {
+    out->submitted = mm_audio_input::submitted_audio_bytes();
+    out->drained = g_virtual_drained;
+    out->remainder = g_virtual_remainder;
+    out->ai_len = g_ai_len ? *g_ai_len : 0;
+}
+
+extern "C" void mm_virtual_audio_set(const mm_audio_clock_state* in) {
+    mm_audio_input::set_submitted_audio_bytes(in->submitted);
+    g_virtual_drained = in->drained;
+    g_virtual_remainder = in->remainder;
+    if (g_ai_len && g_virtual_audio.load(std::memory_order_relaxed)) *g_ai_len = in->ai_len;
 }
 
 // Game thread, once per frame point.
@@ -92,6 +110,13 @@ extern "C" void mm_virtual_audio_frame() {
     const uint64_t submitted = mm_audio_input::submitted_audio_bytes();
     if (g_virtual_drained > submitted) g_virtual_drained = submitted;   // underrun: the DAC ran dry
     *g_ai_len = static_cast<uint32_t>(submitted - g_virtual_drained);
+    static const bool trace = std::getenv("MM_TRACE_AUDIO_CLOCK") != nullptr;
+    if (trace) {
+        static long n = 0;
+        std::fprintf(stderr, "[audio-clock] %ld submitted %llu drained %llu ai_len %u\n", n++,
+                     static_cast<unsigned long long>(submitted), static_cast<unsigned long long>(g_virtual_drained),
+                     *g_ai_len);
+    }
 }
 
 namespace {

@@ -1,0 +1,55 @@
+From 2bae3c27dcbf239012519dfc4c21be31efad02b7 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 28 Oct 2026 13:31:02 +0100
+Subject: [PATCH] Save states: park pending host events instead of delivering
+ them
+
+A state taken every frame (rollback) must not change when the game sees
+its host events; parking them in the deferred list keeps the order and
+the moment of delivery.
+---
+ ultramodern/include/ultramodern/ultramodern.hpp |  3 +++
+ ultramodern/src/mesgqueue.cpp                   | 13 +++++++++++++
+ 2 files changed, 16 insertions(+)
+
+diff --git a/ultramodern/include/ultramodern/ultramodern.hpp b/ultramodern/include/ultramodern/ultramodern.hpp
+index c77ca31..b631c84 100644
+--- a/ultramodern/include/ultramodern/ultramodern.hpp
++++ b/ultramodern/include/ultramodern/ultramodern.hpp
+@@ -122,6 +122,9 @@ void deterministic_frame(RDRAM_ARG1);
+ PTR(OSMesgQueue) deterministic_vi_queue();
+ // Delivers every queued host event (VI/SI/SP/DP...) into its N64 queue now.
+ void deliver_pending_external_messages(RDRAM_ARG1);
++// Moves every queued host event into the deferred list (saved with a state)
++// without delivering it; the game receives them at its next dequeue as before.
++void park_pending_external_messages();
+ struct PendingExternalMessage {
+     PTR(OSMesgQueue) mq;
+     OSMesg mesg;
+diff --git a/ultramodern/src/mesgqueue.cpp b/ultramodern/src/mesgqueue.cpp
+index fd3280b..adee8e2 100644
+--- a/ultramodern/src/mesgqueue.cpp
++++ b/ultramodern/src/mesgqueue.cpp
+@@ -120,6 +120,19 @@ void ultramodern::deliver_pending_external_messages(RDRAM_ARG1) {
+     dequeue_external_messages(PASS_RDRAM1);
+ }
+ 
++// Moves every host event still in flight into the deferred list, ahead of
++// what is there, without delivering any. They go to the game at its next
++// dequeue in the same order they would have, so taking a state (which saves
++// the deferred list) does not change when the game sees them.
++void ultramodern::park_pending_external_messages() {
++    std::vector<QueuedMessage> parked;
++    QueuedMessage m;
++    while (external_messages.try_dequeue(m)) parked.push_back(m);
++    if (parked.empty()) return;
++    parked.insert(parked.end(), deferred_messages.begin(), deferred_messages.end());
++    deferred_messages.swap(parked);
++}
++
+ std::vector<ultramodern::PendingExternalMessage> ultramodern::get_deferred_external_messages() {
+     std::vector<PendingExternalMessage> out;
+     out.reserve(deferred_messages.size());
+-- 
+2.43.0
+

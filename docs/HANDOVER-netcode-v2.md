@@ -36,11 +36,12 @@ build next.
 
 ## 2. Where the code is
 
-- Repo: `MaxThornblad/trouble-makers-pc-recomp-continued`, branch
-  `save-states` (all co-op work; last commit 2dc6596 plus this handover).
+- Repo: `MaxThornblad/trouble-makers-pc-recomp-continued`. Branch
+  `save-states`: the playable co-op (update 6 = e61fb75). Branch
+  `netcode-v2`: the rework, log in docs/NETCODE-V2.md.
   `upstream` = ThiagoLira/trouble-makers-pc-recomp. Do not push to upstream.
-- Released to the owner: `TroubleMakers-coop-update-5.zip` (Windows), built
-  from 2dc6596. Online play needs the same build on both machines (the
+- Released to the owner: `TroubleMakers-coop-update-6.zip` (Windows), built
+  from e61fb75 on save-states. Online play needs the same build on both machines (the
   hello carries the git commit; netplay protocol 2).
 
 ### Co-op architecture today (one deterministic simulation, lockstep)
@@ -90,9 +91,10 @@ build next.
   `replay::on_frame` and `netplay::on_frame`.
 - Save states (`savestate.cpp`): RDRAM 0x80000000+0x810000, widescreen
   scratch 0x9FFF0000+0x10000, audio ucode state 0x8083F000+0x1000, CPU
-  context, overlays, deferred messages. Only valid at the frame point.
-  Measured here: save about 110 ms, load about 40 ms, mostly compression
-  and file I/O, on this 2-core container.
+  context, overlays, deferred host events, RSP DMEM, and (format 4, on
+  netcode-v2) the virtual audio clock. Only valid at the frame point.
+  In memory (`capture_memory`/`apply_memory`): about 1.3 ms each here; to
+  a file about 110 / 40 ms (compression and I/O).
 - Replays (`replay.cpp`): input recording and playback with per-frame memory
   fingerprints (clock words and thread context pointers masked). All bot
   tests are replays.
@@ -116,8 +118,12 @@ and his ROM.
    N64Recomp/RSPRecomp, run both on the tomls.
 4. Builds (ask before `apt install`; packages used last time: build-essential,
    cmake, ninja-build, libsdl2-dev, libvulkan-dev, mesa-vulkan-drivers
-   (lavapipe), xvfb, imagemagick, and for Windows the MinGW and wine
-   packages in `tools/cross-windows/setup.sh`):
+   (lavapipe), xvfb, imagemagick, zip, and for Windows the MinGW and wine
+   packages in `tools/cross-windows/setup.sh`). The runtime patches
+   (`patches/N64ModernRuntime`, applied with `git am` into lib/N64ModernRuntime
+   on a local branch) include ones made on netcode-v2; when adding one, commit
+   it in lib/N64ModernRuntime and `git format-patch -1 -o patches/N64ModernRuntime
+   --start-number N`:
    - `build_headless`: `cmake -B build_headless -G Ninja
      -DCMAKE_BUILD_TYPE=Release -DMM_BUILD_GRAPHICS=OFF`. All tests use it.
    - `build`: graphics build for screenshots, run under Xvfb (`setsid nohup
@@ -197,13 +203,13 @@ Research behind it (see the sources at the end):
 
 Phases (each tested and committed on its own):
 
-0. **Measure (go/no-go for rollback).** An in-memory snapshot and restore
-   (no compression, no file) at the frame point, and the cost of running one
-   frame with drawing and audio output off. Target: snapshot + restore
-   about 2 ms or less, one re-simulated frame a few ms, so 4 to 6 frames
-   of rollback fit in a 16.7 ms frame on the owner's PC (measure here and
-   scale; this container is slow). Report the numbers to the owner before
-   phase 4.
+0. **Measure (go/no-go for rollback).** DONE, verdict go: see
+   docs/NETCODE-V2.md "Phase 0" for the numbers (snapshot 1.3 ms, restore
+   1.3 ms, a frame 1.1 ms on this container; 30 rollbacks of 8 frames all
+   matched) and the two findings (the virtual audio clock had to join the
+   state, state format 4; snapshots park host events instead of delivering
+   them, runtime patch 0016). Harness: `MM_TEST_ROLLBACK` in
+   src/game/rollback_test.cpp.
 1. **One state registry.** Every piece of host-side state that affects the
    game (player 2 module `g`, lead, far camera bookkeeping, cheats, rumble,
    anything else found by auditing `static` and namespace-level variables in

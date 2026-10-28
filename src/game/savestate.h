@@ -17,6 +17,7 @@
 #pragma once
 
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -52,6 +53,15 @@ bool save_now(unsigned char* rdram, recomp_context* ctx, const std::filesystem::
 std::vector<uint32_t> game_thread_addresses();
 
 bool load_now(unsigned char* rdram, recomp_context* ctx, const std::filesystem::path& path, std::string& error);
+
+// A state kept in memory, no file (rollback, tests). The buffers inside are
+// reused by each capture into the same object. Same rules as save/load_now.
+struct MemorySnapshot;
+struct MemorySnapshotDeleter { void operator()(MemorySnapshot*) const; };
+using MemorySnapshotPtr = std::unique_ptr<MemorySnapshot, MemorySnapshotDeleter>;
+MemorySnapshotPtr new_memory_snapshot();
+bool capture_memory(unsigned char* rdram, recomp_context* ctx, MemorySnapshot& into, std::string& error);
+bool apply_memory(unsigned char* rdram, recomp_context* ctx, const MemorySnapshot& from, std::string& error);
 
 #ifdef MM_HAS_GRAPHICS
 // Draws the short "Saved slot 3" style notification (ImGui, post-present).

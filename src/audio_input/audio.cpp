@@ -159,6 +159,10 @@ void set_frequency(uint32_t freq) {
 // stays consistent. Back off ~1 VI of samples so transient underruns don't pop.
 // Declared in the public header so the host can mirror it into AI_LEN (see
 // src/game/register_overlays.cpp); it is also the audio_callbacks value.
+void set_submitted_audio_bytes(uint64_t bytes) {
+    g_submitted_bytes.store(bytes, std::memory_order_relaxed);
+}
+
 uint64_t submitted_audio_bytes() {
     return g_submitted_bytes.load(std::memory_order_relaxed);
 }
