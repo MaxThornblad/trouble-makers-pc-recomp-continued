@@ -583,6 +583,9 @@ void request_load(int slot) {
 
 // MM_TEST_SAVESTATE="save@600,load@900,load@1500" drives saves/loads by frame
 // number for the headless harness. MM_TEST_SAVESTATE_SLOT picks the slot (9).
+// "save@ready": once the stage has been in plain gameplay (game state 6, no
+// cinema holding the pause off) for four seconds: test states from warps
+// (tools/coop_bots.py --make-boss-states).
 struct TestStep { bool save; long frame; };
 std::vector<TestStep> g_test_steps;
 size_t g_test_index = 0;
@@ -599,16 +602,24 @@ void parse_test_script() {
         const std::string item = s.substr(pos, end - pos);
         const size_t at = item.find('@');
         if (at != std::string::npos) {
+            const std::string when = item.substr(at + 1);
             g_test_steps.push_back({item.substr(0, at) == "save",
-                                    std::strtol(item.c_str() + at + 1, nullptr, 10)});
+                                    when == "ready" ? -1L : std::strtol(when.c_str(), nullptr, 10)});
         }
         pos = end + 1;
     }
 }
 
 void run_test_step(uint8_t* rdram, recomp_context* ctx) {
-    if (g_test_index >= g_test_steps.size() ||
-        g_frame != g_test_steps[g_test_index].frame) {
+    if (g_test_index >= g_test_steps.size()) return;
+    if (g_test_steps[g_test_index].frame == -1) {   // "@ready"
+        static long ready = 0;
+        const bool plain = MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kGameState))) == 6 &&
+                           MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(0x800BE4ECu))) == 0;
+        ready = plain ? ready + 1 : 0;
+        if (ready < 240) return;
+        ready = 0;
+    } else if (g_frame != g_test_steps[g_test_index].frame) {
         return;
     }
     const TestStep step = g_test_steps[g_test_index++];
@@ -632,6 +643,11 @@ void run_test_step(uint8_t* rdram, recomp_context* ctx) {
         MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kGameState))),
         static_cast<int16_t>(MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kCurrentScene)))),
         MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kCurrentStage))));
+    // MM_TEST_EXIT_AFTER_SAVE=1: done once the last scripted save is written.
+    if (step.save && g_test_index >= g_test_steps.size() && std::getenv("MM_TEST_EXIT_AFTER_SAVE")) {
+        std::fflush(stderr);
+        std::_Exit(ok ? 0 : 1);
+    }
 }
 
 } // namespace
@@ -861,9 +877,9 @@ extern "C" void mm_savestate_frame_hook(unsigned char* rdram, recomp_context* ct
         if (every > 0 && g_frame % every == 0) {
             const auto rd16 = [&](uint32_t a) { return MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(a))); };
             const auto rd32 = [&](uint32_t a) { return static_cast<uint32_t>(MEM_W(0, static_cast<gpr>(static_cast<int32_t>(a)))); };
-            std::fprintf(stderr, "[savestate-trace] frame %ld state=%u scene=%d stage=%u timer=%u camx=%08X marinax=%08X\n",
+            std::fprintf(stderr, "[savestate-trace] frame %ld state=%u scene=%d stage=%u timer=%u camx=%08X marinax=%08X nopause=%u\n",
                 g_frame, rd16(kGameState), static_cast<int16_t>(rd16(kCurrentScene)), rd16(kCurrentStage),
-                rd16(0x801781E0u), rd32(0x800BE558u), rd32(0x800EF598u));
+                rd16(0x801781E0u), rd32(0x800BE558u), rd32(0x800EF598u), rd16(0x800BE4ECu));
         }
     }
 

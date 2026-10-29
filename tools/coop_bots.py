@@ -76,6 +76,16 @@ for slot in (1, 2, 3, 4, 5, 6, 7, 8, 9):
         SCENARIOS.append(("fuzz-%d-%d" % (slot, seed), slot, 2400,
                           fuzz(seed * 100 + slot, grab_bias=True), fuzz(seed * 100 + slot + 50, grab_bias=True), 3))
 
+# Boss and special stages (save slots 10-26, made from warps with
+# --make-boss-states): random play for both players, on the shared screen
+# and (FAR, below) far apart, where player 2's picture must not change the
+# game. Bosses bring their own actors, cameras and mounts (3-11's cat).
+BOSSES = [(10, "1-6"), (11, "1-8"), (12, "2-6"), (13, "2-11"), (14, "3-8"), (15, "3-11"), (16, "4-2"),
+          (17, "4-6"), (18, "4-9"), (19, "4-11"), (20, "5-3"), (21, "5-4"), (22, "5-6"), (23, "5-7"),
+          (24, "5-8"), (25, "3-3")]
+for slot, label in BOSSES:
+    SCENARIOS.append(("boss-%s" % label, slot, 1800, fuzz(700 + slot, grab_bias=True), fuzz(800 + slot, grab_bias=True), 3))
+
 # Far apart (far_coop.cpp), run locally with MM_FAR=1: once as player 1's
 # machine sees it and once building player 2's picture each frame
 # (MM_FAR_SHADOW=1), which must not change the game at all (same memory
@@ -92,6 +102,9 @@ FAR = [
     ("far-there-and-back", 1, 1200, "60:,500:r,600:", "60:,300:l,300:r,500:", 400),
     ("far-fuzz-4", 4, 1800, fuzz(404, grab_bias=True), "60:," + fuzz(405), 0),
     ("far-fuzz-2", 2, 1800, fuzz(202), "60:,300:l," + fuzz(203), 0),
+] + [
+    ("far-boss-%s" % label, slot, 1500, fuzz(900 + slot), "60:,240:l," + fuzz(950 + slot), 0) for slot, label in BOSSES
+] + [
     # The lead swap (player2_lead.cpp). Slot 0 holds 1-1 next to the star
     # teleporter inside the red block pyramid: player 2 shakes it and flies
     # (as the lead), and player 1 joins her where she lands.
@@ -525,6 +538,22 @@ def run_netplay(args, name, slot, frames, pad1, pad2, port, extra=None):
         return problems + more, traced
 
 
+def make_boss_states(args):
+    """Each boss stage's save state: warp there (the debug warp), press A and
+    B every two seconds through the introduction, save once the stage has
+    been in plain play for four seconds (MM_TEST_SAVESTATE=save@ready)."""
+    failed = 0
+    for slot, label in BOSSES:
+        env = dict(os.environ, **BASE_ENV, HOME=args.home, MM_TEST_WARP=label, MM_TEST_AUTO_ADVANCE="1",
+                   MM_TEST_FFWD="0-200000:8", MM_TEST_SAVESTATE_SLOT=str(slot), MM_TEST_SAVESTATE="save@ready",
+                   MM_TEST_EXIT_AFTER_SAVE="1")
+        out = run_game(args, env, 150)
+        ok = re.search(r"save slot %d: ok" % slot, out) is not None
+        print("%-6s slot %d: %s" % (label, slot, "saved" if ok else "FAILED"), flush=True)
+        failed += not ok
+    return 1 if failed else 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin", required=True)
@@ -538,9 +567,13 @@ def main():
                     "-o libsteam_api.so tools/steam_mock/mock_steam.c); without it net-steam is skipped")
     ap.add_argument("--port", type=int, default=7900, help="first port for the netplay scenarios")
     ap.add_argument("--keep", default="", metavar="DIR", help="keep each scenario's logs under DIR/<name>/")
+    ap.add_argument("--make-boss-states", action="store_true",
+                    help="make the boss stages' save states (slots 10-26) in --home from warps, then exit")
     args = ap.parse_args()
     # Absolute: on Windows each run starts in the test home's config folder.
     args.bin, args.rom, args.home = (str(Path(p).resolve()) for p in (args.bin, args.rom, args.home))
+    if args.make_boss_states:
+        return make_boss_states(args)
     failed = 0
     port = args.port
     for name, slot, frames, p1, p2, allowed, *extra in SCENARIOS:
