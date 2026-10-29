@@ -44,6 +44,14 @@ bool active(uint8_t* rdram);
 // Inside a frame that is thrown away: the shadow frame, or a lead probe
 // (player2_lead.cpp). Host hooks with state of their own sit it out.
 bool in_shadow();
+
+// The stage's item list, before the game handles it (real frames only): a
+// golden gem the save already has is marked gone by its handler only when
+// the game's own camera reaches it (func_800446F0: YellowGem_GetFlag, then
+// +0x4000), after it was drawn that frame. Player 2's picture, which runs
+// a frame from a copy, met it there every frame: drawn, never gone, and
+// worth nothing when she took it. Such gems leave the list at once.
+void hide_collected_golden_gems(uint8_t* rdram, uint32_t list);
 void set_probing(bool on);
 
 // The roles are swapped: the game's camera follows player 2 (shadow frame).

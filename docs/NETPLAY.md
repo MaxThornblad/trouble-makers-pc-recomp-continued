@@ -515,3 +515,10 @@ still grab its parts.
   notes which characters it changed (registered "mortal-npcs-bit") and
   gives them the bit back when the cheat goes off. Bot scenario
   net-mortal-off.
+- Player 2 (online, far apart) saw golden gems the save already has, and
+  taking one gave nothing. The gem handler (func_800446F0) hides such a gem
+  only when the game's own camera reaches it, and only after drawing it
+  that frame (YellowGem_GetFlag, then +0x4000); player 2's picture runs a
+  thrown-away frame from a copy, so there it was drawn, every frame, and
+  never gone. far_coop.cpp hide_collected_golden_gems marks them gone from
+  the whole list in the real frame.

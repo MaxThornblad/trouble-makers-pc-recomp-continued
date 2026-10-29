@@ -15,6 +15,7 @@
 #include "netplay.h"
 #include "player2.h"
 
+extern "C" void YellowGem_GetFlag(uint8_t* rdram, recomp_context* ctx);     // a0: stage; nonzero: the save has its golden gem
 extern "C" void func_80012830(uint8_t* rdram, recomp_context* ctx);          // the camera
 extern "C" void func_8001DE30(uint8_t* rdram, recomp_context* ctx);          // map actor prefetch
 extern "C" void Graphics_Begin_Frame(uint8_t* rdram, recomp_context* ctx);   // a whole frame (a0: buffer)
@@ -230,6 +231,31 @@ bool active(uint8_t* rdram) {
 }
 
 bool in_shadow() { return g_shadow || g_probing; }
+
+void hide_collected_golden_gems(uint8_t* rdram, uint32_t list) {
+    constexpr uint32_t kItemHandlers = 0x800D37BCu, kGemHandler = 0x800446F0u;
+    constexpr uint16_t kGolden = 2;   // colour (kind & 3), as the handler tests it
+    if (list == 0 || in_shadow()) return;
+    int checked = -1;                 // the save's answer, asked once
+    for (int i = 0; i < 512; ++i) {
+        const gpr rec = addr(list + static_cast<uint32_t>(i) * 6u);
+        const uint16_t kind = MEM_HU(0, rec);
+        if (kind == 0) break;
+        if ((kind & 0xC000u) != 0 || (kind & 3u) != kGolden) continue;
+        if (static_cast<uint32_t>(MEM_W(((kind & 0xFFF0u) >> 4) * 4, addr(kItemHandlers))) != kGemHandler) continue;
+        if (checked < 0) {
+            recomp_context c{};
+            c.r29 = addr(0x8045FF00u);   // scratch stack (host-only expansion memory)
+            c.r4 = MEM_HU(0, addr(kCurrentStage));
+            YellowGem_GetFlag(rdram, &c);
+            checked = c.r2 != 0 ? 1 : 0;
+        }
+        if (checked == 1) {
+            MEM_H(0, rec) = static_cast<int16_t>(kind | 0x4000u);
+            std::fprintf(stderr, "[far] golden gem at %d,%d: the save has it, gone\n", MEM_HU(2, rec), MEM_HU(4, rec));
+        }
+    }
+}
 void set_probing(bool on) { g_probing = on; }
 bool swapped() { return g_swapped; }
 bool secondary_pass() { return g_secondary; }
