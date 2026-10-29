@@ -52,6 +52,9 @@ constexpr uint16_t kFallState = 0x16;                // Marina's fall (low byte 
 constexpr uint16_t kMissile = 0x0F09;
 constexpr uint16_t kMissileFlying = 1, kMissileRidden = 4;
 constexpr uint32_t kMissileHit = 0x200;             // +0x98: hit, about to blow up
+constexpr uint32_t kMissileLetGo = 0x1;             // +0x98: its rider is gone (what the cat sets when hit while riding)
+constexpr uint16_t kCatLanding = 0x58, kCatRiding = 0x59;
+constexpr int kRideReach = 64;                      // px: a cat this far from its missile is not on it
 
 // A mount: the stage's type, the slot its code answers to, and how many
 // slots it spans (controller first, then the part sprites it moves, which
@@ -90,7 +93,10 @@ void copy_records(uint8_t* rdram, int to, int from, int count) {
     for (int i = 0; i < count; ++i) std::memcpy(slot_ptr(rdram, to + i) + 0x80, slot_ptr(rdram, from + i) + 0x80, kStride - 0x80);
 }
 
+void let_go(uint8_t* rdram);
+
 void remove(uint8_t* rdram, int first, int span) {
+    let_go(rdram);   // (else her missile went on writing player 1's message)
     for (int i = first; i < first + span; ++i) {
         for (uint32_t off = 0x80; off < kStride; off += 4) MEM_W(off, slot_addr(i)) = 0;
     }
@@ -148,6 +154,29 @@ struct MissileCall {
 };
 MissileCall g_call;
 
+// Her ride is over: the missile is told its rider is gone, as the cat's own
+// code tells it when hit while riding. (A ridden missile otherwise stays
+// ridden: it went on writing her message, and her cat, back on its feet
+// elsewhere, took every jump for a landing on it: no jumps, and a missile
+// at each press.)
+void let_go(uint8_t* rdram) {
+    const int missile = MEM_W(0, addr(kP2Missile));
+    MEM_W(0, addr(kP2Missile)) = 0;
+    if (missile <= 0 || missile >= 0xD0) return;
+    const gpr m = slot_addr(missile);
+    if (MEM_W(0x80, m) == 0 || MEM_HU(0xD2, m) != kMissile || MEM_HU(0xD0, m) != kMissileRidden) return;
+    MEM_W(0x98, m) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0x98, m)) | kMissileLetGo);
+    if (!mm::faraway::in_shadow()) std::fprintf(stderr, "[player2] her cat leaves missile %d\n", missile);
+}
+
+// Her cat is off its missile: not landing or riding, and away from it.
+bool ride_over(uint8_t* rdram, gpr cat, gpr missile) {
+    const uint16_t state = MEM_HU(0xD0, cat);
+    if (state == kCatLanding || state == kCatRiding) return false;
+    const int dx = MEM_H(0x88, cat) - MEM_H(0x88, missile), dy = MEM_H(0x8C, cat) - MEM_H(0x8C, missile);
+    return dx > kRideReach || dx < -kRideReach || dy > kRideReach || dy < -kRideReach;
+}
+
 } // namespace
 
 void missile_end(uint8_t* rdram) {
@@ -183,6 +212,10 @@ void missile_begin(uint8_t* rdram, int actor) {
     if (MEM_W(0, addr(kP2Missile)) == actor) {
         if (state != kMissileRidden) {   // blown up, or done
             MEM_W(0, addr(kP2Missile)) = 0;
+            return;
+        }
+        if (ride_over(rdram, slot_addr(her_cat), m)) {
+            let_go(rdram);
             return;
         }
     } else {

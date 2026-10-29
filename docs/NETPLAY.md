@@ -526,6 +526,13 @@ it took player 1's message and cleared it, so neither cat could ride.
   cat and falls, she is asked to get on again (request 5, as at the start).
 - Down, her riderless cat flew off the top of the screen carrying her body;
   it now goes when she goes down, and she gets a new one when she is back.
+- A ridden missile stays ridden (state 4, writing its message every frame)
+  until its rider's cat tells it otherwise (+0x98 bit 0x1, set by the cat
+  when hit while riding). Hit off her missile, her cat never told it: the
+  missile went on writing her message, and her cat took every jump for a
+  landing on it (no jumps; a missile spawned at each press, the owner saw).
+  When her cat is off its missile (not landing / riding, 64 px away) or
+  goes, the missile is told its rider is gone (let_go).
 
 ## Fixes from the fourth session (owner's reports, 2026-10-28)
 
