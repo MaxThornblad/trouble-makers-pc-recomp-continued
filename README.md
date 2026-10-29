@@ -91,6 +91,8 @@ actors, geometry, and tile layers are moving throughout each shot.
 
 ## Building and running
 
+Want to change the game or add a cheat? See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ### Prerequisites
 
 - A legally dumped **Mischief Makers (US 1.1)** ROM (`.z64`, big-endian)

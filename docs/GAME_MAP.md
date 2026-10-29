@@ -23,11 +23,12 @@ most of the fields below live.
 | `0x90` | | depth / layer *(guess)*; a held brown block copies the holder's `+0x10C` here | SpawnParticle_Image, traces |
 | `0xA0` | u8 | contact flags from terrain collision | func_800160EC |
 | `0xB4`, `0xB8` | f32 | scale x/y; the brown carry block shrinks to 0.5 while held (the `0x208` sprite path ignores it) | traces, Wine |
-| `0x98` | u32 | signal bits from other actors: `0x200` = held this frame (set by the holder every frame; the held actor clears it), `0x400` = thrown | func_800528F4, grab traces |
+| `0x98` | u32 | signal bits from other actors: `0x200` = held this frame (set by the holder every frame; the held actor clears it), `0x400` = thrown, `0x20000` = being shaken this frame (see Shaking) | func_800528F4, grab traces, func_8004FDF8 |
 | `0x94` | u16 | draw mode; `0x208` with image `0x46` at `+0x84` = draw the sprite whose pointer is at `0x18C` (image 0 draws nothing) | func_800441F4 (block knock-out), Wine |
 | `0xA2-0xA8` | s16 x4 | attack box: left, right(?), top, bottom relative to position | func_8001E2D0, func_8001EC1C |
 | `0xAA-0xB0` | s16 x4 | hit box: left `AA`, right `AC`, top `AE`, bottom `B0` (+y up) | gem pickup func_8002FD48 |
 | `0xC8`, `0xCA` | s16 | world x / top of the actor this one stands on | func_800160EC |
+| `0xCE` | u16 | weight class for throws (row of the throw velocity table) | func_800554AC |
 | `0xCC` | u16 | `0x8000 \| slot` of the actor this one stands on, else 0 | func_800160EC |
 | `0xD0` | u16 | state; low byte = action, high byte = phase | traces |
 | `0xD2` | u16 | type (see Actor types) | everywhere |
@@ -36,6 +37,7 @@ most of the fields below live.
 | `0xEC`, `0xF0` | Q16.16 | velocity x / y | Marina movement |
 | `0xF8`, `0xFC` | Q16.16 | throw velocity, written by the holder with the `0x400` signal | grab traces |
 | `0x104`, `0x108`, `0x10C` | Q16.16 | hold point (camera-relative x, y) and depth, written by the holder each frame | grab traces |
+| `0x140` | u8 | Marina: throw direction (column of the throw velocity table) | func_800554AC |
 | `0x150` | s32 | per-state timer (jet, jump) | cheats.cpp |
 | `0x158` | s32 | gravity accumulator (air jet arc) | cheats.cpp |
 | `0x17C` | u32 | private display list (3D actors) | func_80009BE8 |
@@ -47,7 +49,9 @@ from `0x800BE50C` left / `0x800BE510` right; up `0x0800`, down `0x0400`, A
 `0x8000`, B `0x4000`). States: `0x020B` ground jet, `0x0110` air jet, `0x0116`
 jump rise, `0x0216` fall, `0x0401` hurt, `0x0230` held-and-struggling *(guess)*,
 `0x?10B` ground jet (`0x810B` seen jetting left; `+0x150` counts 15 → 0, full speed while ≥ 8; flag `0x20` is not set during a left jet, the jet's `+0xEC` sign gives its direction), `0x?110` air jet,
-`0x011F` grab reach, `0x0122` lift, `0x0004` holding, `0x021A` wind-up, `0x0126` throw.
+`0x011F` grab reach, `0x0122` lift, `0x0004` holding, `0x021A` wind-up, `0x0126` throw,
+`0x0128` shaking what she holds, `0x002F` being carried (a player), `0x0003` riding
+the 3-12 cat (`0x0230` / `0x0233` getting on / bucked, `0x0231` back onto the cat).
 
 ### Grabbing and throwing
 
@@ -176,6 +180,84 @@ except in stage `0x35`) and, when bits `0x700` are set, takes its sprite from
 Spawning: src/game/actors.cpp (`spawn_now`: free slot from `0x79` down to `0x30`,
 clear `+0x80..`, set type, call `func_8001E2D0` with a scratch stack at `0x8045FF00`).
 
+### Throw strength
+
+A throw looks its velocity up in a table: `func_800554AC(thrower, object)`
+reads `0x800E3630 + object+0xCE * 40 + thrower+0x140 * 8` (x, y pairs, Q16.16)
+into `object+0xF8/+0xFC`. The object takes it as its velocity when it leaves
+the hands (`func_800291AC`, from `+0x98` bit `0x400`). Example: the 1-9 brown
+block thrown forward gets 8.0, 2.0 px/frame. A generated hook at the
+function's return (`mm_throw_velocity_hook`) scales it for the throw cheats
+(src/game/throw_cheats.cpp).
+
+### Shaking and gem drops
+
+Shaking (pick up, then press Down repeatedly; Marina state `0x0128`) runs in
+`func_8004FDF8`, which sets `held+0x98 |= 0x20000` up to 8 times per hold
+(count at Marina's `+0x154`). The held character's own update reads it:
+`func_8006E4EC` (common Clancer code, via `func_8007325C`) drops one gem per
+shake while its gem count at `+0x188` lasts, colour from its `+0x150` bits
+(`0x40` red `0x30`, `0x20` `0x31`, `0x10` `0x32`, `0x8` `0x33`), through
+`SpawnGemActor(slot, kind, 0)`. `func_8001FF50`, at the end of the gameplay
+frame, clears the bit. So the bit only works if the shaker updates before the
+shaken character in the same frame (Marina always does; see Frame order).
+
+### Frame order (`func_80020024`, one gameplay frame)
+
+The main calls, in order (a few more in between): input history (`func_800122B0`), solid-actor lists
+(`func_8001F88C`), terrain collision for flagged actors (`func_80016CB4`),
+the camera (`func_80012830`), actor scroll / cull (`func_80016D94`), attack vs
+hit boxes (`func_8001EC1C`), **Marina's update** (`func_8004ED10(0)`),
+`func_8008C528`, `func_8001FF30`, map actor prefetch (`func_8001DE30`),
+`func_8008CA90`, **the actor loop** (`func_8001751C`, slots 1-207 in order),
+`func_80014C44`, `func_8005C8A4`, the end-of-frame signal clear
+(`func_8001FF50`), `func_8005F6D4`, `func_80022470`, the scene script
+(`func_80047CCC`, see Requests to Marina). Anything that runs inside the actor
+loop (player 2, custom actors) runs after every lower slot has updated.
+
+### Mounts (3-12 CERBERUS)
+
+The cat Marina rides is an actor of type `0x0F01` (`func_801A23C4_69A3C4`)
+that the scene script puts in slot 96; its 13 parts (type `0x0021`) are slots
+97-109. Its code answers to slot 96 only (a cat in another slot stays idle)
+and moves its rider: each frame `func_801A22AC` puts slot 0 on the body sprite
+(slot 97's `+0x220/+0x224` into Marina's `+0x88/+0x8C` and her world position
+globals `0x800BE5D8/DC`, `+0x98 |= 0x20`). The scene script tells Marina to get
+on through her request word (value 5, see below). The cat also drives the
+stage's scroll through the camera words `0x800BE544-0x800BE5B8`. The stage
+is a loop: about every 785 px the game moves the camera back a whole lap.
+Player 2's copy: src/game/player2_mount.cpp.
+
+## Input
+
+| Address | Meaning |
+|---|---|
+| `0x8012AD70` | `OSContPad[4]` as Input_Update reads them (6 bytes each); `0x8012AD88` the first read |
+| `0x800BE4F8` / `0x800BE4FC` | this frame's hold / press (u16), which Marina copies into `0x801370CC` / `0x801370CE` at the start of her update |
+| `0x800BE500` | input lock mask, applied while `0x800BE5D4` is non-zero |
+| `0x800BE504` / `508` / `50C` / `510` | masks for up / down / left / right (`0x0800`, `0x0400`, `0x0200`, `0x0100`) |
+| `0x800BE514` / `0x800BE518` | masks for grab / throw (B, `0x4000`) and jump (A, `0x8000`) |
+| `0x8011DD70` / `0x801225F0` | input history (`func_800122B0`): the last 64 frames of press / hold, newest first, masked by the six action masks; Marina's buffered actions read it |
+| `0x801370C0` | which controller plays Marina |
+
+Requests to Marina: `0x800BE5F4` is a word her next update takes up (a star
+teleporter's flight, the scene script's "get on the cat" = 5). Writing it is
+how a script moves her into a scripted state.
+
+Marina's own globals (everything her update writes outside her slot that is
+about her; player 2 keeps a copy, src/game/player2.cpp `kGlobals`): the input
+history, `0x800BE5A4`, `0x800BE5D8-0x800BE5EF` (world position pairs enemies
+aim at), `0x800D57E0`, `0x800EF4F0-0x800EF50F`, `0x80104090`, `0x801069D8`,
+`0x801370CC-0x801370D3`, `0x801373D0-0x80137467` (player-state block),
+`0x800BE4F8-0x800BE4FF`, `0x800BE5F4`.
+
+Camera words (one camera = one "set", src/game/far_coop.cpp): `0x800BE544-0x800BE577`
+(`0x800BE558/55C` centre, `0x800BE560/564` last frame's centre), `0x800BE61C-0x800BE623`,
+`0x801782B0-0x801782B7` (look-ahead, eased toward +-0x40 by `func_80046498` /
+`func_8004667C`); `0x800BE62C/630` scroll locks; `0x800BE5A8-0x800BE5B8` the
+look-at target (`LookAt_Update`). Marina's carry code adds the camera's step
+(centre minus last centre) to her position.
+
 ## Stage items (gems, blocks)
 
 Not actors: 6-byte records `{u16 kind, u16 x, u16 y}` (world pixels, +y up) in a
@@ -203,7 +285,10 @@ falls; the low nibble picks a height function from `0x800C7CD0`, used by
 `func_80012B88`), `0x17-0x2A` fixed shapes `0x2F-` with sprites from
 `0x800D19B8`, `0x05` gems, `0x00/0x09-0x0B/0x10` empty.
 
-Handlers: `0x800446F0` gems (colour `& 3`: 2 = golden), `0x80044390` blocks
+Handlers: `0x800446F0` gems (colour `& 3`: 2 = golden; a golden gem the save
+already has, `YellowGem_GetFlag(stage)` = `0x8001C7F0`, is marked gone
+(`+0x4000`) when the handler first reaches it, after it has been drawn that
+frame; the handler only runs for items near the game's camera), `0x80044390` blocks
 (type 1; sprite `0x800D1968[colour]`; colour 1 breaks when `func_80012AB4(x, y)`
 reports no `0xC0` bits and spawns its flying piece through `func_800441F4`).
 Each processed item gets a draw/collision slot in the pool at `0x804269E0`
@@ -234,6 +319,22 @@ terrain map (see Collision). Gem pickup test: `func_8002FD48` (item box
 
 Stage view: the 320x240 canvas fills the window height; stages draw 144 px either
 side of the camera centre, 100 px above and 90 below (checked against gem sprites).
+
+## Mod memory (host-only expansion RAM)
+
+Above `0x80480000` the game uses nothing (docs/README.md 14.1), so mod state
+that must travel with save states, replays, rollbacks and netplay lives there
+as game memory. `0x8045FF00` is a scratch stack for calling game functions
+from the host. Player 2's block at `0x807F0000` (layout kept in
+src/game/player2.cpp's header comment): `0x000` Marina's globals copy, `0x400`
+previous buttons, `0x404`/`0x408` join / leash timers, `0x40C` shared full
+health, `0x410` frames in her texture buffers, `0x414` grab cooldown,
+`0x418`/`0x41C` her mount (slot, type), `0x420` frame header, `0x500` the
+second camera, `0x600` the lead swap, `0x610` moon jump rises per player,
+`0x620`/`0x628`/`0x630` throw charge, pending strength and aim per character,
+`0x634` what she shook last frame, `0x1000` display lists, `0x2000` textures,
+`0x4000` packed frame. Host-side state that cannot be game memory is
+registered in the state registry instead (src/game/state_registry.h).
 
 ## Sound effects
 
