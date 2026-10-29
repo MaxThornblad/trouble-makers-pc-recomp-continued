@@ -103,7 +103,8 @@ FAR = [
     ("far-fuzz-4", 4, 1800, fuzz(404, grab_bias=True), "60:," + fuzz(405), 0),
     ("far-fuzz-2", 2, 1800, fuzz(202), "60:,300:l," + fuzz(203), 0),
 ] + [
-    ("far-boss-%s" % label, slot, 1500, fuzz(900 + slot), "60:,240:l," + fuzz(950 + slot), 0) for slot, label in BOSSES
+    ("far-boss-%s" % label, slot, 1500, fuzz(900 + slot), "60:,240:l," + fuzz(950 + slot), 0)
+    for slot, label in BOSSES
 ] + [
     # The lead swap (player2_lead.cpp). Slot 0 holds 1-1 next to the star
     # teleporter inside the red block pyramid: player 2 shakes it and flies
@@ -178,6 +179,16 @@ BASE_ENV = {"MM_HEADLESS_GFX": "1", "SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER
 # never touched.
 # (MM_BOTS_PORTABLE=1 forces it elsewhere: the Windows build under Wine.)
 PORTABLE = os.name == "nt" or os.environ.get("MM_BOTS_PORTABLE") == "1"
+
+
+def merged(*dicts, extra=None, **kw):
+    """The environment: dicts, then kw, then extra (a scenario's own env wins)."""
+    out = {}
+    for d in dicts:
+        out.update(d)
+    out.update(kw)
+    out.update(extra or {})
+    return out
 
 
 def game_cwd(env):
@@ -366,8 +377,8 @@ def play_with_rollback(args, rec_dir, frames, extra_env=None):
     """Plays `rec_dir` back with a rollback every 30 frames (8 frames back): the
     frames run again must match the recording, which is what netcode-v2
     needs of every piece of state (docs/NETCODE-V2.md)."""
-    env = dict(os.environ, **BASE_ENV, HOME=args.home, MM_REPLAY_PLAY="%s@200" % rec_dir,
-               MM_REPLAY_SPEED="1000", MM_TEST_ROLLBACK=args.rollback, **(extra_env or {}))
+    env = merged(os.environ, BASE_ENV, HOME=args.home, MM_REPLAY_PLAY="%s@200" % rec_dir,
+               MM_REPLAY_SPEED="1000", MM_TEST_ROLLBACK=args.rollback, extra=extra_env)
     out = run_game(args, env, 60 + frames // 10)
     problems = []
     if "memory matched every frame" not in out:
@@ -387,10 +398,10 @@ def play_with_rollback(args, rec_dir, frames, extra_env=None):
 
 def run_local(args, name, slot, frames, pad1, pad2, allowed, extra_env=None, far=False, want_apart=0, extra=None):
     with tempfile.TemporaryDirectory() as tmp:
-        env = dict(os.environ, **BASE_ENV, HOME=args.home, MM_P2_TRACE="1",
+        env = merged(os.environ, BASE_ENV, HOME=args.home, MM_P2_TRACE="1",
                    MM_REPLAY_RECORD="%s/rec@200" % tmp, MM_REPLAY_LENGTH=str(frames),
                    MM_REPLAY_SPEED="4", MM_REPLAY_PAD=pad1, MM_REPLAY_PAD2=pad2,
-                   MM_TEST_SAVESTATE_SLOT=str(slot), MM_TEST_SAVESTATE="load@150", **(extra_env or {}))
+                   MM_TEST_SAVESTATE_SLOT=str(slot), MM_TEST_SAVESTATE="load@150", extra=extra_env)
         out = run_game(args, env, 30 + frames // 40)
         rollback_problems = play_with_rollback(args, "%s/rec" % tmp, frames, extra_env) if args.rollback else []
     if args.keep:   # the log, for a look after a failure
@@ -419,10 +430,10 @@ def run_far(args, name, slot, frames, pad1, pad2, want_apart, extra=None):
     traced = 0
     for shadow in (False, True):
         with tempfile.TemporaryDirectory() as tmp:
-            env = dict(os.environ, **BASE_ENV, HOME=args.home, MM_P2_TRACE="1", MM_FAR="1",
+            env = merged(os.environ, BASE_ENV, HOME=args.home, MM_P2_TRACE="1", MM_FAR="1",
                        MM_REPLAY_RECORD="%s/rec@200" % tmp, MM_REPLAY_LENGTH=str(frames),
                        MM_REPLAY_SPEED="4", MM_REPLAY_PAD=pad1, MM_REPLAY_PAD2=pad2,
-                       MM_TEST_SAVESTATE_SLOT=str(slot), MM_TEST_SAVESTATE="load@150", **extra.get("env", {}))
+                       MM_TEST_SAVESTATE_SLOT=str(slot), MM_TEST_SAVESTATE="load@150", extra=extra.get("env"))
             if shadow:
                 env["MM_FAR_SHADOW"] = "1"
             out = run_game(args, env, 40 + frames // 20)
@@ -468,7 +479,7 @@ def run_netplay(args, name, slot, frames, pad1, pad2, port, extra=None):
             if (cfg / f).exists():
                 (guest_home / ".config" / "troublemakers-recomp" / f).write_bytes((cfg / f).read_bytes())
         hlog, glog = Path(tmp) / "h.txt", Path(tmp) / "g.txt"
-        common = dict(os.environ, **BASE_ENV, MM_NET_LENGTH=str(frames), MM_P2_TRACE="1", **extra.get("env", {}))
+        common = merged(os.environ, BASE_ENV, MM_NET_LENGTH=str(frames), MM_P2_TRACE="1", extra=extra.get("env"))
         henv = dict(common, HOME=args.home, MM_TEST_SAVESTATE_SLOT=str(slot), MM_TEST_SAVESTATE="load@150",
                     MM_NET_HOST="%d@200" % port, MM_NET_PAD=pad1, MM_NET_LOG=str(hlog))
         genv = dict(common, HOME=str(guest_home), MM_NET_JOIN="127.0.0.1:%d@300" % port, MM_NET_PAD=pad2,
@@ -544,11 +555,18 @@ def make_boss_states(args):
     been in plain play for four seconds (MM_TEST_SAVESTATE=save@ready)."""
     failed = 0
     for slot, label in BOSSES:
-        env = dict(os.environ, **BASE_ENV, HOME=args.home, MM_TEST_WARP=label, MM_TEST_AUTO_ADVANCE="1",
-                   MM_TEST_FFWD="0-200000:8", MM_TEST_SAVESTATE_SLOT=str(slot), MM_TEST_SAVESTATE="save@ready",
+        env = merged(os.environ, BASE_ENV, HOME=args.home, MM_TEST_WARP=label, MM_TEST_AUTO_ADVANCE="1",
+                   MM_TEST_SAVESTATE_SLOT=str(slot), MM_TEST_SAVESTATE="save@ready", MM_REPLAY_SPEED="4",
                    MM_TEST_EXIT_AFTER_SAVE="1")
-        out = run_game(args, env, 150)
-        ok = re.search(r"save slot %d: ok" % slot, out) is not None
+        # Made at the tests' own speed from boot (MM_REPLAY_SPEED=4): a boss
+        # state made in a normal-speed session crashed in the game's sound
+        # DMA (Sound_DmaCallback) when a 4x-from-boot test loaded it.
+        state = Path(args.home) / ".config" / "troublemakers-recomp" / "savestates" / ("slot%d.tmstate" % slot)
+        before = state.stat().st_mtime if state.exists() else 0
+        run_game(args, env, 150)
+        # (The game exits at once after the save, before its log catches up:
+        # the file says whether it was written.)
+        ok = state.exists() and state.stat().st_mtime > before
         print("%-6s slot %d: %s" % (label, slot, "saved" if ok else "FAILED"), flush=True)
         failed += not ok
     return 1 if failed else 0
