@@ -52,6 +52,26 @@ bool send(int channel, const uint8_t* data, size_t size);
 uint64_t lobby();
 std::string status();
 
+// Steam's overlay (Shift+Tab, its invite window) is there: only in games
+// Steam itself started.
+bool overlay_enabled();
+// Friends online (for inviting without the overlay): in this game first.
+struct Friend {
+    uint64_t id = 0;
+    std::string name;
+    bool playing = false;   // in Spacewar (this game's Steam stand-in)
+    bool hosting = false;   // ... with a lobby: probably hosting
+};
+std::vector<Friend> online_friends();
+// Host: send a friend a Steam invite to the lobby (it appears in their Steam
+// chat; accepting it while the game runs joins). No overlay needed.
+bool invite(uint64_t friend_id);
+// The lobby a friend is in (in this game), or 0: to join them from the menu.
+uint64_t friend_lobby(uint64_t friend_id);
+// Started (the library loaded, Steam running); hosting with a lobby.
+bool started();
+bool hosting();
+
 // A join the player asked for through Steam while not in a session (an
 // accepted invite, Join Game): the lobby id, taken once. 0 when none.
 uint64_t take_join_request();

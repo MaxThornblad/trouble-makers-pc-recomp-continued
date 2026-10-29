@@ -51,6 +51,8 @@ std::unique_ptr<Transport> steam_join(uint64_t lobby, std::string& error);   // 
 // Steam, outside a session: a join the player asked for through Steam (an
 // accepted invite, Join Game). The lobby id once, or 0.
 uint64_t steam_join_request();
+// Game thread, every frame: the menu's friends list and its requests.
+void steam_tick();
 
 // Tests: MM_NET_LAG="<delay ms>[,<jitter ms>[,<loss %>]]" wraps a transport
 // in a deliberately bad connection (net_lag.cpp); otherwise returns it as is.

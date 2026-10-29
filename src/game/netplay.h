@@ -31,6 +31,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 #include "recomp.h"
 
@@ -58,6 +59,18 @@ bool active();         // a session is running (deterministic, inputs locked)
 bool is_guest();       // connected as the guest: local save states / spawns are off
 int player();          // 1 host, 2 guest, 0 none
 std::string status_text();   // one line for the menu / overlay
+
+// Steam (once started by Host on Steam / Join a friend on Steam): friends
+// online, for the Session page; picking one invites them while hosting (no
+// Steam overlay needed), or joins their game. Any thread.
+struct SteamFriend {
+    uint64_t id = 0;
+    std::string name;
+    bool playing = false, hosting = false;
+};
+std::vector<SteamFriend> steam_friends();
+bool steam_hosting();
+void request_steam_friend(uint64_t friend_id);
 
 // Game thread, from mm_savestate_frame_hook (after replay::on_frame).
 void on_frame(uint8_t* rdram, recomp_context* ctx);

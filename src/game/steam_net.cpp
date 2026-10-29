@@ -1,7 +1,11 @@
 #include "steam_net.h"
 
 #include "net_transport.h"
+#include "netplay.h"
 
+#include <algorithm>
+#include <atomic>
+#include <mutex>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -61,6 +65,12 @@ struct Api {
     bool (*CloseSession)(void*, const void*) = nullptr;
     void (*Release)(void*) = nullptr;
     bool (*SetConfigInt)(void*, int, int32_t) = nullptr;
+    // Optional (an older library or the test stand-in may lack them).
+    void* (*SteamUtils)() = nullptr;
+    bool (*IsOverlayEnabled)(void*) = nullptr;
+    bool (*InviteUserToLobby)(void*, u64, u64) = nullptr;
+    const char* (*GetFriendPersonaName)(void*, u64) = nullptr;
+    int (*GetFriendPersonaState)(void*, u64) = nullptr;
 };
 Api a;
 void* g_user = nullptr;
@@ -68,6 +78,7 @@ void* g_mm = nullptr;
 void* g_friends = nullptr;
 void* g_msgs = nullptr;
 void* g_utils = nullptr;
+void* g_steam_utils = nullptr;   // ISteamUtils (overlay), when the library has it
 int g_pipe = 0;
 bool g_started = false;
 std::string g_fail;
@@ -217,10 +228,17 @@ void on_lobby_created(int result, u64 lobby) {
     const std::string connect = "+connect_lobby " + std::to_string(lobby);
     a.SetRichPresence(g_friends, "connect", connect.c_str());
     a.SetRichPresence(g_friends, "status", "Hosting Trouble Makers co-op");
-    a.InviteDialog(g_friends, lobby);
     std::fprintf(stderr, "[steam] lobby %llu\n", static_cast<unsigned long long>(lobby));
-    set_status("Hosting on Steam: invite a friend (Shift+Tab), or they pick \"Join a friend on Steam\". Lobby " +
-               std::to_string(lobby));
+    // Steam's invite window needs its overlay, which only games Steam started
+    // have. Without it: invite from the friends list on the Session page.
+    if (overlay_enabled()) {
+        a.InviteDialog(g_friends, lobby);
+        set_status("Hosting on Steam: invite a friend (Shift+Tab or the list below), or they pick "
+                   "\"Join a friend on Steam\".");
+    } else {
+        set_status("Hosting on Steam: invite a friend from the list below, or they pick "
+                   "\"Join a friend on Steam\". (No Steam overlay: start the game from Steam for Shift+Tab.)");
+    }
 }
 
 void on_lobby_enter(u64 lobby, uint32_t response) {
@@ -429,6 +447,15 @@ bool start(std::string& why) {
         why = g_fail;
         return false;
     }
+    {
+        const std::string fail = g_fail;   // optional: missing ones leave g_fail as it was
+        load(lib, a.SteamUtils, "SteamAPI_SteamUtils_v010");
+        load(lib, a.IsOverlayEnabled, "SteamAPI_ISteamUtils_IsOverlayEnabled");
+        load(lib, a.InviteUserToLobby, "SteamAPI_ISteamMatchmaking_InviteUserToLobby");
+        load(lib, a.GetFriendPersonaName, "SteamAPI_ISteamFriends_GetFriendPersonaName");
+        load(lib, a.GetFriendPersonaState, "SteamAPI_ISteamFriends_GetFriendPersonaState");
+        g_fail = fail;
+    }
     write_app_id();
     if (!a.IsSteamRunning()) {
         why = "Steam is not running: start Steam and sign in first";
@@ -448,6 +475,7 @@ bool start(std::string& why) {
     g_friends = a.Friends();
     g_msgs = a.Messages();
     g_utils = a.Utils();
+    g_steam_utils = a.SteamUtils ? a.SteamUtils() : nullptr;
     g_me = a.GetSteamID(g_user);
     // Room for a whole resync state in flight (k_ESteamNetworkingConfig_
     // SendBufferSize 9, RecvBufferSize 47, RecvMaxMessageSize 49).
@@ -556,6 +584,57 @@ bool send(int channel, const uint8_t* data, size_t size) {
 }
 
 uint64_t lobby() { return g_lobby; }
+bool started() { return g_started; }
+bool hosting() { return g_started && g_mode == Mode::Hosting && g_lobby != 0; }
+
+bool overlay_enabled() {
+    return g_started && g_steam_utils && a.IsOverlayEnabled && a.IsOverlayEnabled(g_steam_utils);
+}
+
+std::vector<Friend> online_friends() {
+    std::vector<Friend> out;
+    if (!g_started || !a.GetFriendPersonaState) return out;
+    struct {
+        uint8_t bytes[64];
+    } info{};
+    const int n = a.GetFriendCount(g_friends, 4);   // immediate friends
+    for (int i = 0; i < n && out.size() < 64; ++i) {
+        const u64 f = a.GetFriendByIndex(g_friends, i, 4);
+        if (a.GetFriendPersonaState(g_friends, f) == 0) continue;   // offline
+        Friend fr;
+        fr.id = f;
+        const char* name = a.GetFriendPersonaName ? a.GetFriendPersonaName(g_friends, f) : nullptr;
+        fr.name = name ? name : std::to_string(f);
+        std::memset(&info, 0, sizeof info);
+        if (a.GetFriendGamePlayed(g_friends, f, &info)) {
+            const u64 game = get<u64>(info.bytes, 0);
+            fr.playing = (game & 0xFFFFFF) == 480;
+            fr.hosting = fr.playing && get<u64>(info.bytes, 16) != 0;
+        }
+        out.push_back(std::move(fr));
+    }
+    // Those in the game first, then by name.
+    std::stable_sort(out.begin(), out.end(), [](const Friend& x, const Friend& y) {
+        return x.playing != y.playing ? x.playing : x.name < y.name;
+    });
+    return out;
+}
+
+bool invite(uint64_t friend_id) {
+    if (!g_started || g_mode != Mode::Hosting || g_lobby == 0 || !a.InviteUserToLobby) return false;
+    const bool ok = a.InviteUserToLobby(g_mm, g_lobby, friend_id);
+    std::fprintf(stderr, "[steam] invited %llu: %s\n", static_cast<unsigned long long>(friend_id), ok ? "sent" : "failed");
+    return ok;
+}
+
+uint64_t friend_lobby(uint64_t friend_id) {
+    if (!g_started) return 0;
+    struct {
+        uint8_t bytes[64];
+    } info{};
+    if (!a.GetFriendGamePlayed(g_friends, friend_id, &info)) return 0;
+    return (get<u64>(info.bytes, 0) & 0xFFFFFF) == 480 ? get<u64>(info.bytes, 16) : 0;
+}
 std::string status() { return g_status; }
 
 uint64_t take_join_request() {
@@ -622,6 +701,48 @@ std::unique_ptr<Transport> steam_join(uint64_t lobby, std::string& error) {
 
 uint64_t steam_join_request() {
     return mm::steam::take_join_request();
+}
+
+namespace {
+std::mutex g_friends_mutex;
+std::vector<SteamFriend> g_friend_list;
+std::atomic<uint64_t> g_friend_request{0};
+long g_friend_frames = 0;
+} // namespace
+
+void steam_tick() {
+    if (!mm::steam::started()) {
+        std::lock_guard lock{g_friends_mutex};
+        g_friend_list.clear();
+        return;
+    }
+    // The friends list for the menu, every two seconds.
+    if ((g_friend_frames++ % 120) == 0) {
+        std::vector<SteamFriend> list;
+        for (const auto& f : mm::steam::online_friends()) list.push_back({f.id, f.name, f.playing, f.hosting});
+        std::lock_guard lock{g_friends_mutex};
+        g_friend_list = std::move(list);
+    }
+    if (const uint64_t id = g_friend_request.exchange(0)) {
+        if (mm::steam::hosting()) {
+            mm::steam::invite(id);
+        } else if (const uint64_t lobby = mm::steam::friend_lobby(id)) {
+            request_join_steam(lobby);
+        }
+    }
+}
+
+std::vector<SteamFriend> steam_friends() {
+    std::lock_guard lock{g_friends_mutex};
+    return g_friend_list;
+}
+
+bool steam_hosting() {
+    return mm::steam::hosting();
+}
+
+void request_steam_friend(uint64_t friend_id) {
+    g_friend_request.store(friend_id);
 }
 
 } // namespace mm::netplay

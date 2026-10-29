@@ -137,6 +137,14 @@ constexpr int kPageInspect = 3;
 constexpr int kPageSession = 4;
 constexpr int kPageCount = 5;
 constexpr int kSessionRows = 9;   // record, play latest, stop; host, host on Steam, address, join, join on Steam, leave
+// ... then one row per Steam friend online (Steam started): invite / join.
+constexpr int kMaxFriendRows = 16;
+std::mutex g_friend_rows_mutex;
+std::vector<mm::netplay::SteamFriend> g_friend_rows;   // as last drawn
+int session_rows() {
+    std::lock_guard lock{g_friend_rows_mutex};
+    return kSessionRows + static_cast<int>(g_friend_rows.size());
+}
 
 // Session page: the netplay join address being typed (row 4; Enter starts
 // and ends editing, text comes from SDL text input).
@@ -255,8 +263,9 @@ void move_selection(int delta) {
         return;
     }
     if (page == kPageSession) {
+        const int rows = session_rows();
         int selected = g_selected_session.load(std::memory_order_relaxed);
-        selected = (selected + delta + kSessionRows) % kSessionRows;
+        selected = ((selected % rows) + delta + rows) % rows;
         g_selected_session.store(selected, std::memory_order_relaxed);
         return;
     }
@@ -340,7 +349,15 @@ void activate_selection() {
                 break;
             }
             case 7: mm::netplay::request_join_steam(0); break;
-            default: mm::netplay::request_leave(); break;
+            case 8: mm::netplay::request_leave(); break;
+            default: {
+                const int i = g_selected_session.load(std::memory_order_relaxed) - kSessionRows;
+                std::lock_guard lock{g_friend_rows_mutex};
+                if (i >= 0 && i < static_cast<int>(g_friend_rows.size())) {
+                    mm::netplay::request_steam_friend(g_friend_rows[static_cast<size_t>(i)].id);
+                }
+                break;
+            }
         }
         return;
     }
@@ -1102,8 +1119,9 @@ void draw_overlay() {
         ImGui::TextWrapped(
             "The host plays Marina, the other player joins as player 2 from the host's "
             "game. Both need the same build. On Steam (both running Steam, signed in, "
-            "friends): the host picks Host on Steam and invites, the friend accepts the "
-            "invite or picks Join a friend on Steam. No ports or addresses. Without Steam, "
+            "friends): the host picks Host on Steam and invites a friend from the list "
+            "that appears (or Shift+Tab when Steam started the game), the friend accepts "
+            "the invite or picks Join a friend on Steam. No ports or addresses. Without Steam, "
             "the host's port (UDP 7845) must be reachable: on the same network use the "
             "host's local address; over the internet a VPN like Tailscale is easiest.");
         {
@@ -1127,6 +1145,26 @@ void draw_overlay() {
             ImGui::Selectable("      Leave the online game", selected == 8);
             const std::string net = mm::netplay::status_text();
             ImGui::BulletText("%s", net.empty() ? "Not connected" : net.c_str());
+            // Steam friends: invite them while hosting (no Steam overlay
+            // needed), or join one who is hosting.
+            std::vector<mm::netplay::SteamFriend> friends = mm::netplay::steam_friends();
+            if (friends.size() > kMaxFriendRows) friends.resize(kMaxFriendRows);
+            const bool hosting = mm::netplay::steam_hosting();
+            if (!friends.empty()) {
+                ImGui::TextDisabled(hosting ? "Steam friends online: Enter/A sends an invite"
+                                            : "Steam friends online: Enter/A joins one who is hosting");
+            }
+            for (size_t i = 0; i < friends.size(); ++i) {
+                const auto& f = friends[i];
+                const char* what = hosting ? "Invite " : (f.hosting ? "Join " : "");
+                const char* tag = f.hosting ? "   (hosting)" : (f.playing ? "   (in game)" : "");
+                const std::string label = std::string("      ") + what + f.name + tag;
+                ImGui::Selectable(label.c_str(), selected == kSessionRows + static_cast<int>(i));
+            }
+            {
+                std::lock_guard lock{g_friend_rows_mutex};
+                g_friend_rows = std::move(friends);
+            }
         }
         if (mode == mm::replay::Mode::Recording) {
             ImGui::BulletText("Recording: frame %ld", mm::replay::frame());

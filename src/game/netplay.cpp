@@ -1095,6 +1095,7 @@ void on_frame(uint8_t* rdram, recomp_context* ctx) {
     if (global == join_at) request_join(env_join);
     // Steam: an invite accepted / Join Game picked while not in a game, or
     // +connect_lobby on the command line.
+    steam_tick();
     if (g_status.load() == Status::Off && g_request.load() == Req::None && (global % 30) == 0) {
         if (const uint64_t l = steam_join_request()) request_join_steam(l);
     }
