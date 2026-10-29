@@ -596,10 +596,11 @@ public:
             }
             if (width > 0 && height > 0) {
                 float scale = (3.0f * width) / (4.0f * height);
-                // Split screen: each view is half the window's height.
+                // Split screen: each view is half the window's height, and
+                // shows only the picture's shown rows (RT64 SplitScreen).
                 const RT64::SplitScreen& split = RT64::splitScreen();
                 if (split.secondAddress.load(std::memory_order_relaxed) != 0) {
-                    scale *= 2.0f;
+                    scale *= 2.0f * RT64::splitShownFraction(split);
                     const float max_aspect = split.maxAspect.load(std::memory_order_relaxed);
                     if (max_aspect > 0.0f) scale = std::min(scale, max_aspect * 0.75f);
                 }
@@ -802,9 +803,13 @@ void set_interpolation_suppressed(bool suppressed) {
     }
 }
 
-void set_split_screen(uint32_t second_fb, bool second_on_top, float max_aspect) {
+void set_split_screen(uint32_t second_fb, bool second_on_top, float max_aspect,
+                      uint32_t shown_top, uint32_t shown_bottom, uint32_t rows_of) {
     RT64::SplitScreen& split = RT64::splitScreen();
     split.maxAspect.store(max_aspect, std::memory_order_relaxed);
+    split.cropTop.store(shown_top, std::memory_order_relaxed);
+    split.cropBottom.store(shown_bottom, std::memory_order_relaxed);
+    split.cropOf.store(rows_of, std::memory_order_relaxed);
     split.secondOnTop.store(second_on_top, std::memory_order_relaxed);
     split.secondAddress.store(second_fb & 0x00FFFFFFu, std::memory_order_relaxed);
 }

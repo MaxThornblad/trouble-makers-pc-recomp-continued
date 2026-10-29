@@ -299,6 +299,14 @@ MM_NET_DEBUG=1 (per-rollback lines), MM_NET_LAG=ms,jitter,loss%.
   game's widened tile grids reach 640 px; 2.5 broke the tile layers), and
   frame interpolation is off while split. mm::graphics::set_split_screen
   sets it; the published widescreen scale doubles accordingly.
+- Bigger views (2026-10-29): the game draws its picture in framebuffer rows
+  18..210 and leaves the rest black, so each half showed a letterboxed
+  picture (about 20% of the window black at 1440p). `SplitScreen` now takes
+  the rows to show (split_view.h kShownTop/kShownBottom): each view is
+  drawn into a taller rectangle whose shown rows fill its half, clipped to
+  it (VIRenderer clip rows), the halves `splitGap` rows apart (window
+  height / 180), and Expand / the widescreen scale take the aspect of the
+  shown rows. At 2560x1440 the views went from 1920x578 to 2372x716.
 - Person 1 is on top: while player 2 leads, the real frame follows her, so
   the second view goes on top.
 - Overlays (player 2's tag, enemy bars and damage numbers, throw charge

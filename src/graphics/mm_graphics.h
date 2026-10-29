@@ -49,9 +49,11 @@ namespace mm::graphics {
     // framebuffer the game draws a second view into) is not zero, each
     // present shows the VI's framebuffer and that one in the top and bottom
     // halves of the window (second_on_top swaps them), each expanded to the
-    // half-height window's aspect ratio, at most max_aspect. Thread-safe;
-    // 0 ends split screen.
-    void set_split_screen(uint32_t second_fb, bool second_on_top, float max_aspect);
+    // half-height window's aspect ratio, at most max_aspect. Of each
+    // picture's rows_of rows, rows shown_top..shown_bottom-1 fill its half
+    // (the game's letterbox rows are cut). Thread-safe; 0 ends split screen.
+    void set_split_screen(uint32_t second_fb, bool second_on_top, float max_aspect,
+                          uint32_t shown_top = 0, uint32_t shown_bottom = 0, uint32_t rows_of = 0);
 
     // Save-state support. The RDP keeps texture memory, tile descriptors,
     // render modes and colours between display lists, and some of the

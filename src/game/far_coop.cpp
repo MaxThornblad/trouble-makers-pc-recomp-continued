@@ -1,4 +1,5 @@
 #include "far_coop.h"
+#include "split_view.h"
 #include "state_registry.h"
 #include "replay.h"
 
@@ -882,7 +883,8 @@ extern "C" void mm_far_shadow(uint8_t* rdram, recomp_context* ctx, uint32_t task
 #ifdef MM_HAS_GRAPHICS
         // Person 1 on top: the real frame follows slot 0, which is player 2's
         // person while she leads (player2.h).
-        mm::graphics::set_split_screen(fb_split, mm::player2::lead_swapped(rdram), kSplitMaxAspect);
+        mm::graphics::set_split_screen(fb_split, mm::player2::lead_swapped(rdram), kSplitMaxAspect,
+                                       mm::split_view::kShownTop, mm::split_view::kShownBottom, mm::split_view::kPictureRows);
 #endif
     } else {
         // The real list (frame arenas are outside the netplay fingerprint)

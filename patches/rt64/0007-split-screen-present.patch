@@ -13,10 +13,18 @@ index e1889e5..042d26c 100644
          uint64_t workloadId = 0;
      };
 diff --git a/src/hle/rt64_present_queue.cpp b/src/hle/rt64_present_queue.cpp
-index fcfa6e0..b79153c 100644
+index fcfa6e0..767c18d 100644
 --- a/src/hle/rt64_present_queue.cpp
 +++ b/src/hle/rt64_present_queue.cpp
-@@ -254,6 +254,7 @@ namespace RT64 {
+@@ -3,6 +3,7 @@
+ //
+ 
+ #include "rt64_present_queue.h"
++#include "rt64_split_screen.h"
+ 
+ #include "common/rt64_thread.h"
+ #include "rhi/rt64_render_hooks.h"
+@@ -254,6 +255,7 @@ namespace RT64 {
          this->ext = ext;
  
          viRenderer = std::make_unique<VIRenderer>();
@@ -24,7 +32,7 @@ index fcfa6e0..b79153c 100644
  
          presentThreadRunning = true;
          presentThread = new std::thread(&PresentQueue::threadLoop, this);
-@@ -289,6 +290,7 @@ namespace RT64 {
+@@ -289,6 +291,7 @@ namespace RT64 {
              std::memory_order_relaxed);
  
          RenderTarget *colorTarget = nullptr;
@@ -32,7 +40,7 @@ index fcfa6e0..b79153c 100644
          int32_t framesToPresent = 1;
          bool lockedWorkloadMutex = false;
          InterpolatedFrameCounters &frameCounters = ext.sharedResources->interpolatedFrames[ext.sharedResources->interpolatedFramesIndex];
-@@ -360,6 +362,12 @@ namespace RT64 {
+@@ -360,6 +363,12 @@ namespace RT64 {
                      }
                  }
  
@@ -45,7 +53,7 @@ index fcfa6e0..b79153c 100644
                  if (presentFb->interpolationEnabled) {
                      framesToPresent = frameCounters.count;
                  }
-@@ -386,6 +394,18 @@ namespace RT64 {
+@@ -386,6 +395,18 @@ namespace RT64 {
                      colorTarget = nullptr;
                  }
  
@@ -64,7 +72,7 @@ index fcfa6e0..b79153c 100644
                  if (!present.paused && (viHistory.top().vi != present.screenVI)) {
                      viHistory.pushVI(present.screenVI, viFb->width);
                  }
-@@ -542,6 +562,37 @@ namespace RT64 {
+@@ -542,6 +563,54 @@ namespace RT64 {
                      }
                  }
                  
@@ -89,20 +97,37 @@ index fcfa6e0..b79153c 100644
 +                        splitParams.textureHeight = splitTarget->height;
 +                    }
 +
-+                    const uint32_t halfHeight = ext.swapChain->getHeight() / 2;
++                    // Two halves splitGap rows apart; each shows the shown
++                    // rows of its picture filling it: drawn into a taller
++                    // rectangle, clipped to its half.
++                    const uint32_t windowHeight = ext.swapChain->getHeight();
++                    const uint32_t gap = std::min(splitGap(windowHeight), windowHeight / 4);
++                    const int32_t topHeight = int32_t((windowHeight - gap) / 2);
++                    const int32_t bottomY = topHeight + int32_t(gap);
++                    const int32_t bottomHeight = int32_t(windowHeight) - bottomY;
++                    const SplitScreen &split = splitScreen();
++                    const float shown = splitShownFraction(split);
++                    const uint32_t cropOf = split.cropOf.load(std::memory_order_relaxed);
++                    const float aboveShown = (shown < 1.0f) ? float(split.cropTop.load(std::memory_order_relaxed)) / float(cropOf) : 0.0f;
++                    auto place = [&](VIRenderer::RenderParams &params, int32_t y, int32_t height) {
++                        const float pictureHeight = float(height) / shown;
++                        params.destX = 0;
++                        params.destWidth = ext.swapChain->getWidth();
++                        params.destY = int32_t(lround(float(y) - aboveShown * pictureHeight));
++                        params.destHeight = uint32_t(lround(pictureHeight));
++                        params.clipTop = y;
++                        params.clipBottom = y + height;
++                    };
++
 +                    const bool secondOnTop = present.splitSecondOnTop;
-+                    renderParams.destWidth = ext.swapChain->getWidth();
-+                    renderParams.destHeight = halfHeight;
-+                    renderParams.destY = secondOnTop ? int32_t(halfHeight) : 0;
-+                    splitParams.destWidth = ext.swapChain->getWidth();
-+                    splitParams.destHeight = ext.swapChain->getHeight() - halfHeight;
-+                    splitParams.destY = secondOnTop ? 0 : int32_t(halfHeight);
++                    place(renderParams, secondOnTop ? bottomY : 0, secondOnTop ? bottomHeight : topHeight);
++                    place(splitParams, secondOnTop ? 0 : bottomY, secondOnTop ? topHeight : bottomHeight);
 +                }
 +
                  commandList->setFramebuffer(swapChainFramebuffer);
                  commandList->clearColor();
  
-@@ -550,6 +601,11 @@ namespace RT64 {
+@@ -550,6 +619,11 @@ namespace RT64 {
                      viRenderer->render(renderParams);
                  }
  
@@ -128,16 +153,17 @@ index c4277bf..bccddf3 100644
          Timestamp presentTimestamp;
 diff --git a/src/hle/rt64_split_screen.h b/src/hle/rt64_split_screen.h
 new file mode 100644
-index 0000000..76c132c
+index 0000000..57ddb19
 --- /dev/null
 +++ b/src/hle/rt64_split_screen.h
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,53 @@
 +//
 +// RT64
 +//
 +
 +#pragma once
 +
++#include <algorithm>
 +#include <atomic>
 +#include <cstdint>
 +
@@ -147,11 +173,37 @@ index 0000000..76c132c
 +    // secondAddress into the top and bottom halves of the window (the VI's
 +    // on top unless secondOnTop), and Expand derives the aspect ratio from a
 +    // half-height window, capped at maxAspect when it is above zero.
++    //
++    // A game that leaves rows of its picture black (a letterbox in the
++    // framebuffer) sets cropTop/cropBottom: of the cropOf rows of the
++    // picture, only rows cropTop..cropBottom-1 are shown, scaled to fill each
++    // half (none cut when cropBottom <= cropTop). The halves are splitGap
++    // rows apart.
 +    struct SplitScreen {
 +        std::atomic<uint32_t> secondAddress{ 0 };
 +        std::atomic<bool> secondOnTop{ false };
 +        std::atomic<float> maxAspect{ 0.0f };
++        std::atomic<uint32_t> cropTop{ 0 };
++        std::atomic<uint32_t> cropBottom{ 0 };
++        std::atomic<uint32_t> cropOf{ 0 };
 +    };
++
++    // Rows between the two halves of a window this tall.
++    inline uint32_t splitGap(uint32_t windowHeight) {
++        return std::max<uint32_t>(2, windowHeight / 180);
++    }
++
++    // The fraction of the picture's height one view shows (1 = all of it).
++    inline float splitShownFraction(const SplitScreen &s) {
++        const uint32_t top = s.cropTop.load(std::memory_order_relaxed);
++        const uint32_t bottom = s.cropBottom.load(std::memory_order_relaxed);
++        const uint32_t of = s.cropOf.load(std::memory_order_relaxed);
++        if ((bottom <= top) || (of == 0) || (bottom > of)) {
++            return 1.0f;
++        }
++
++        return float(bottom - top) / float(of);
++    }
 +
 +    inline SplitScreen &splitScreen() {
 +        static SplitScreen state;
@@ -180,7 +232,7 @@ index 0722486..9123581 100644
              ext.presentQueue->advanceToNextPresent();
  
 diff --git a/src/hle/rt64_workload_queue.cpp b/src/hle/rt64_workload_queue.cpp
-index b706578..e2b6643 100644
+index b706578..4c51fb3 100644
 --- a/src/hle/rt64_workload_queue.cpp
 +++ b/src/hle/rt64_workload_queue.cpp
 @@ -2,6 +2,7 @@
@@ -199,7 +251,7 @@ index b706578..e2b6643 100644
 +                float derivedRatioTarget = float(ext.sharedResources->swapChainWidth) / float(ext.sharedResources->swapChainHeight);
 +                // Split screen: each view gets half the window's height.
 +                if (splitScreen().secondAddress.load(std::memory_order_relaxed) != 0) {
-+                    derivedRatioTarget *= 2.0f;
++                    derivedRatioTarget *= 2.0f * splitShownFraction(splitScreen());
 +                    const float maxAspect = splitScreen().maxAspect.load(std::memory_order_relaxed);
 +                    if (maxAspect > 0.0f) {
 +                        derivedRatioTarget = std::min(derivedRatioTarget, maxAspect);
@@ -210,19 +262,24 @@ index b706578..e2b6643 100644
              }
              else {
 diff --git a/src/render/rt64_vi_renderer.cpp b/src/render/rt64_vi_renderer.cpp
-index 89d6822..8878b80 100644
+index 89d6822..d2f4dc8 100644
 --- a/src/render/rt64_vi_renderer.cpp
 +++ b/src/render/rt64_vi_renderer.cpp
-@@ -72,7 +72,7 @@ namespace RT64 {
+@@ -72,7 +72,12 @@ namespace RT64 {
          RenderViewport viewport;
          RenderRect scissor;
          hlslpp::float2 fbHdRegion;
 -        getViewportAndScissor(p.swapChain, *p.vi, p.resolutionScale, p.downsamplingScale, viewport, scissor, fbHdRegion);
 +        getViewportAndScissor(p.swapChain, *p.vi, p.resolutionScale, p.downsamplingScale, viewport, scissor, fbHdRegion, p.destX, p.destY, p.destWidth, p.destHeight);
++        if (p.clipBottom > p.clipTop) {
++            scissor.top = std::max(scissor.top, p.clipTop);
++            scissor.bottom = std::min(scissor.bottom, p.clipBottom);
++        }
++
          p.commandList->setViewports(viewport);
          p.commandList->setScissors(scissor);
  
-@@ -103,7 +103,8 @@ namespace RT64 {
+@@ -103,7 +108,8 @@ namespace RT64 {
          p.commandList->drawInstanced(3, 1, 0, 0);
      }
  
@@ -232,7 +289,7 @@ index 89d6822..8878b80 100644
          // We define three different coordinate spaces to work with to translate the VI parameters into the Window.
          //
          // VideoSD: This corresponds to the SD TV Scanline space, which is what the VI natively works on.
-@@ -119,7 +120,9 @@ namespace RT64 {
+@@ -119,7 +125,9 @@ namespace RT64 {
          // specified by the VI.
          const hlslpp::float2 sdSize = { float(VI::Width), float(VI::Height) };
          const hlslpp::float2 hdSize = computeHDSize(sdSize, resolutionScale, downsamplingScale);
@@ -243,7 +300,7 @@ index 89d6822..8878b80 100644
          const hlslpp::uint2 fbSize = vi.fbSize();
          const hlslpp::float2 fbSdRegion = { float(fbSize.x), float(fbSize.y) };
          fbHdRegion = computeHDSize(fbSdRegion, resolutionScale, downsamplingScale);
-@@ -130,13 +133,13 @@ namespace RT64 {
+@@ -130,13 +138,13 @@ namespace RT64 {
          RectI viCropRect = vi.cropRectangle();
          hlslpp::float2 topLeftViewport = fromSDtoHD({ float(viViewRect.x), float(viViewRect.y) }, sdSize, hdSize);
          hlslpp::float2 bottomRightViewport = fromSDtoHD({ float(viViewRect.x + viViewRect.w), float(viViewRect.y + viViewRect.h) }, sdSize, hdSize);
@@ -262,16 +319,18 @@ index 89d6822..8878b80 100644
          viewport = RenderViewport(topLeftViewport.x, topLeftViewport.y, bottomRightViewport.x - topLeftViewport.x, bottomRightViewport.y - topLeftViewport.y);
          scissor = RenderRect(lround(topLeftScissor.x), lround(topLeftScissor.y), lround(bottomRightScissor.x), lround(bottomRightScissor.y));
 diff --git a/src/render/rt64_vi_renderer.h b/src/render/rt64_vi_renderer.h
-index c9d8f29..e5260a4 100644
+index c9d8f29..57ec5b5 100644
 --- a/src/render/rt64_vi_renderer.h
 +++ b/src/render/rt64_vi_renderer.h
-@@ -31,11 +31,15 @@ namespace RT64 {
+@@ -31,11 +31,17 @@ namespace RT64 {
              // Extra rows below VI_ORIGIN to hide from the top of the output
              // (CRT-overscan emulation; see EnhancementConfiguration).
              uint32_t extraTopCropRows = 0;
 +            // Where in the swapchain to draw (split screen); zero size = all of it.
 +            int32_t destX = 0, destY = 0;
 +            uint32_t destWidth = 0, destHeight = 0;
++            // Swapchain rows to draw in (split screen); clipBottom <= clipTop = no limit.
++            int32_t clipTop = 0, clipBottom = 0;
          };
  
          VIRenderer();

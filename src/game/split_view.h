@@ -13,6 +13,11 @@
 
 namespace mm::split_view {
 
+// The game draws its picture in framebuffer rows 18..210 of 240 and leaves
+// the rest black (its own letterbox, every stage). Split screen shows only
+// those rows, scaled to fill each half of the window (RT64 SplitScreen).
+constexpr uint32_t kShownTop = 18, kShownBottom = 211, kPictureRows = 240;
+
 // Game thread, once a frame from the real frame's tick.
 void publish(uint8_t* rdram);
 

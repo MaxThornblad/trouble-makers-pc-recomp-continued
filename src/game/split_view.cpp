@@ -1,6 +1,7 @@
 #include "split_view.h"
 
 #include <algorithm>
+#include <cmath>
 #include <mutex>
 
 #include "far_coop.h"
@@ -46,23 +47,34 @@ Mapping mapping(int view, float w, float h, bool widescreen) {
     m.y0 = 0;
     m.y1 = h;
     float aspect = widescreen ? std::max(w / std::max(h, 1.0f), 4.0f / 3.0f) : 4.0f / 3.0f;
+    // The rectangle the whole 240-row picture is fitted into: the view's,
+    // or in split screen a taller one whose shown rows cover the view.
+    float py0 = 0, ph = h;
     if (s.on) {
+        // As RT64's present (rt64_split_screen.h splitGap, rt64_present_queue.cpp): two
+        // halves a gap apart, each showing rows kShownTop..kShownBottom-1.
+        const int wh = static_cast<int>(h);
+        const int gap = std::min(std::max(2, wh / 180), wh / 4);
+        const int top_h = (wh - gap) / 2;
         const bool top = (view == 1) == s.second_on_top;
-        const float half = h * 0.5f;
-        m.y0 = top ? 0 : half;
-        m.y1 = top ? half : h;
-        aspect = widescreen ? std::clamp(w / std::max(half, 1.0f), 4.0f / 3.0f, kMaxAspect) : 4.0f / 3.0f;
+        m.y0 = top ? 0.0f : static_cast<float>(top_h + gap);
+        m.y1 = top ? static_cast<float>(top_h) : h;
+        const float shown = static_cast<float>(kShownBottom - kShownTop) / kPictureRows;
+        ph = (m.y1 - m.y0) / shown;
+        py0 = std::round(m.y0 - (static_cast<float>(kShownTop) / kPictureRows) * ph);
+        ph = std::round(ph);
+        aspect = widescreen ? std::clamp(w / std::max(ph, 1.0f), 4.0f / 3.0f, kMaxAspect) : 4.0f / 3.0f;
         if (view == 1) {
             m.dx = s.dx;
             m.dy = s.dy;
         }
     }
-    const float rw = m.x1 - m.x0, rh = m.y1 - m.y0;
+    const float rw = m.x1 - m.x0;
     // The renderer fits the 240-line picture of that aspect into the
     // rectangle (pillar- or letterboxed).
-    m.scale = (rw / std::max(rh, 1.0f) > aspect) ? rh / 240.0f : rw / (240.0f * aspect);
+    m.scale = (rw / std::max(ph, 1.0f) > aspect) ? ph / 240.0f : rw / (240.0f * aspect);
     m.cx = (m.x0 + m.x1) * 0.5f;
-    m.cy = (m.y0 + m.y1) * 0.5f;
+    m.cy = py0 + ph * 0.5f;
     m.half_w = 120.0f * aspect;
     m.half_h = 120.0f;
     return m;
