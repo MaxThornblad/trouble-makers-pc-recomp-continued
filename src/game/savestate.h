@@ -68,6 +68,9 @@ bool apply_memory(unsigned char* rdram, recomp_context* ctx, const MemorySnapsho
 const uint8_t* memory_image(const MemorySnapshot& snap, size_t* size);
 const std::vector<mm::state::Blob>& memory_modules(const MemorySnapshot& snap);
 
+// A short on-screen notice in the same place ("Player 2: Xbox Controller").
+void notice(const std::string& text);
+
 #ifdef MM_HAS_GRAPHICS
 // Draws the short "Saved slot 3" style notification (ImGui, post-present).
 void draw_overlay();

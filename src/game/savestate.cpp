@@ -706,6 +706,14 @@ bool handle_event(const SDL_Event& event) {
     InputBinding binding{};
     ControlDevice device = ControlDevice::Keyboard;
 
+    // Hotkeys answer to player 1's controller only (player 2's has the same
+    // layout and would save, load or fast-forward too).
+    if ((event.type == SDL_CONTROLLERBUTTONDOWN || event.type == SDL_CONTROLLERBUTTONUP) &&
+        !is_player1_controller(event.cbutton.which)) {
+        return false;
+    }
+    if (event.type == SDL_CONTROLLERAXISMOTION && !is_player1_controller(event.caxis.which)) return false;
+
     if (event.type == SDL_KEYUP) {
         return handle_release({BindingType::Keyboard, static_cast<int>(event.key.keysym.scancode)});
     }
@@ -801,6 +809,10 @@ void cancel_fast_forward() {
     if (g_ff_binding.type != mm_audio_input::BindingType::None) {
         set_fast_forward(false, {});
     }
+}
+
+void notice(const std::string& text) {
+    toast(text);
 }
 
 #ifdef MM_HAS_GRAPHICS

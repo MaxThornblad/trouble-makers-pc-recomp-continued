@@ -447,6 +447,9 @@ void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t) {
         save_display_config();
     };
 
+    if (std::string n = mm_audio_input::take_controller_notice(); !n.empty()) {
+        mm::savestate::notice(n);   // "Player 2: <controller>" (press A to join)
+    }
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
         if (mm::debug_menu::handle_event(ev)) {
@@ -459,6 +462,7 @@ void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t) {
             ultramodern::quit();
         } else if (ev.type == SDL_CONTROLLERBUTTONDOWN &&
                    ev.cbutton.button == SDL_CONTROLLER_BUTTON_BACK &&
+                   mm_audio_input::is_player1_controller(ev.cbutton.which) &&
                    !mm_audio_input::binding_is_assigned(
                        mm_audio_input::ControlDevice::Controller,
                        {mm_audio_input::BindingType::ControllerButton,

@@ -5,6 +5,8 @@
 #include <cstdlib>
 
 #include "cheats.h"
+#include "netplay.h"
+#include "player2.h"
 #include "mm_audio_input.hpp"
 #include "recomp.h"
 #include "savestate.h"
@@ -44,15 +46,34 @@ bool gold_gem(uint8_t* rdram, int row) {
 }
 
 long g_frame = 0;
-long g_pulse_until = 0;          // frame the last event pulse ends
-float g_pulse_strength = 0.0f;
+// Per person (index 0: player 1's person, 1: player 2's).
+long g_pulse_until[2] = {};      // frame the last event pulse ends
+float g_pulse_strength[2] = {};
 
-// strength 0..1 for each motor, scaled by the user's setting.
-void pulse(float low, float high, uint32_t ms) {
+// The controller on this machine that a person (1 or 2) holds: online, this
+// machine's own person plays on its first controller; locally, person 2 on
+// the second (co-op). -1: not here.
+int local_pad(int person) {
+    if (mm::netplay::active()) return person == mm::netplay::player() ? 0 : -1;
+    return person == 1 ? 0 : (mm::cheats::coop_enabled() ? 1 : -1);
+}
+
+// strength 0..1 for each motor, scaled by the user's setting; person 1 or 2,
+// or 0 for everyone here (explosions, screen shakes, a golden gem).
+void pulse(int person, float low, float high, uint32_t ms) {
+    if (person == 0) {
+        pulse(1, low, high, ms);
+        pulse(2, low, high, ms);
+        return;
+    }
+    const int pad = local_pad(person);
+    if (pad < 0) return;
+    long& until = g_pulse_until[person - 1];
+    float& strength = g_pulse_strength[person - 1];
     // A weaker pulse never cuts a stronger one short.
-    if (g_frame < g_pulse_until && std::max(low, high) < g_pulse_strength) return;
-    g_pulse_until = g_frame + static_cast<long>(ms) * 60 / 1000;
-    g_pulse_strength = std::max(low, high);
+    if (g_frame < until && std::max(low, high) < strength) return;
+    until = g_frame + static_cast<long>(ms) * 60 / 1000;
+    strength = std::max(low, high);
     static const float kScale[] = {0.0f, 0.35f, 0.65f, 1.0f};
     const int level = std::clamp(mm::cheats::rumble_level(), 0, 3);
     const float scale = kScale[level];
@@ -60,7 +81,7 @@ void pulse(float low, float high, uint32_t ms) {
     const auto motor = [scale](float v) {
         return static_cast<uint16_t>(std::clamp(v * scale, 0.0f, 1.0f) * 65535.0f);
     };
-    mm_audio_input::request_rumble(motor(low), motor(high), ms);
+    mm_audio_input::request_rumble(motor(low), motor(high), ms, pad);
 }
 
 // Sound effects that stand for impacts (ids passed to Sound_AddSfx), found by
@@ -78,19 +99,75 @@ constexpr SfxRumble kSfxRumble[] = {
 
 bool g_gameplay = false;
 
+// One person's character (hits, landings, jets).
 struct Watch {
     bool valid = false;
     int hp = 0;
     uint16_t state = 0;
+    int32_t fall_speed = 0;      // fastest downward speed this time in the air
+    int since_hit = 1000;        // frames since the last damage pulse
+};
+// The stage (golden gem, screen shake), shared.
+struct Shared {
+    bool valid = false;
     int row = -1;
     bool gem = false;
-    int32_t fall_speed = 0;      // fastest downward speed this time in the air
     uint32_t load_generation = 0;
-    int since_hit = 1000;        // frames since the last damage pulse
     int shake_frames = 0;        // frames left in the current shake window
     int shake_peak = 0;          // largest offset seen in it, Q16.16
 };
-Watch g_watch;
+Watch g_watch[2];
+Shared g_shared;
+
+// The record of the character a person (1 or 2) plays: slot 0, or player 2's
+// slot (the lead swap trades them), 0 when there is none.
+uint32_t character(uint8_t* rdram, int person) {
+    const bool slot0 = (person == 1) != mm::player2::lead_swapped(rdram);
+    if (slot0) return kMarina;
+    const int p2 = mm::player2::slot(rdram);
+    return p2 > 0 ? kMarina + static_cast<uint32_t>(p2) * 0x198u : 0;
+}
+
+void watch_character(uint8_t* rdram, int person) {
+    Watch& w = g_watch[person - 1];
+    const uint32_t rec = character(rdram, person);
+    if (rec == 0) {
+        w.valid = false;
+        return;
+    }
+    const gpr a = addr(rec);
+    const int hp = MEM_H(0xE0, a);
+    const uint16_t state = MEM_HU(0xD0, a);
+    const int32_t vy = MEM_W(0xF0, a);
+    if (w.valid && g_shared.valid) {
+        // Damage, scaled by the hit (a lava touch takes 100 of 1000).
+        if (hp < w.hp) {
+            w.since_hit = 0;
+            if (hp <= 0) {
+                pulse(person, 1.0f, 1.0f, 700);
+            } else {
+                const int lost = w.hp - hp;
+                pulse(person, 1.0f, 0.8f, static_cast<uint32_t>(std::clamp(140 + lost, 160, 420)));
+            }
+        }
+        // Landing after a long fall.
+        else if (airborne(w.state) && !airborne(state) && w.fall_speed >= kHardLanding && w.since_hit > 45) {
+            const float speed = static_cast<float>(w.fall_speed) / 65536.0f;
+            pulse(person, std::clamp(speed / 10.0f, 0.35f, 1.0f), 0.2f,
+                  static_cast<uint32_t>(std::clamp(speed * 18.0f, 70.0f, 200.0f)));
+        }
+        // Jet dash start.
+        else if ((state == kGroundJetState || state == kAirJetState) && state != w.state &&
+                 w.state != kGroundJetState && w.state != kAirJetState) {
+            pulse(person, 0.15f, 0.55f, 90);
+        }
+    }
+    w.fall_speed = airborne(state) ? std::max(airborne(w.state) ? w.fall_speed : 0, -vy) : 0;
+    w.since_hit = std::min(w.since_hit + 1, 1000);
+    w.valid = true;
+    w.hp = hp;
+    w.state = state;
+}
 
 } // namespace
 
@@ -101,78 +178,43 @@ void tick(uint8_t* rdram) {
                           MEM_HU(0, addr(kGamePaused)) == 0;
     g_gameplay = gameplay;
     const uint32_t generation = mm::savestate::load_generation();
-    if (!gameplay || mm::cheats::rumble_level() == 0 ||
-        generation != g_watch.load_generation) {
-        g_watch.valid = false;
-        g_watch.load_generation = generation;
+    if (!gameplay || mm::cheats::rumble_level() == 0 || generation != g_shared.load_generation) {
+        g_shared.valid = false;
+        g_watch[0].valid = g_watch[1].valid = false;
+        g_shared.load_generation = generation;
         return;
     }
 
-    const gpr marina = addr(kMarina);
-    const int hp = MEM_H(0xE0, marina);
-    const uint16_t state = MEM_HU(0xD0, marina);
     const int row = MEM_HU(0, addr(kCurrentStage));
     const bool gem = gold_gem(rdram, row);
-    const int32_t vy = MEM_W(0xF0, marina);
+    if (g_shared.valid && row != g_shared.row) g_shared.valid = false;   // a new stage
+    watch_character(rdram, 1);
+    watch_character(rdram, 2);
+    // Golden gem collected (for both).
+    if (g_shared.valid && gem && !g_shared.gem) pulse(0, 0.6f, 1.0f, 450);
 
-    if (g_watch.valid && row == g_watch.row) {
-        // Damage, scaled by the hit (a lava touch takes 100 of 1000).
-        if (hp < g_watch.hp) {
-            g_watch.since_hit = 0;
-            if (hp <= 0) {
-                pulse(1.0f, 1.0f, 700);
-            } else {
-                const int lost = g_watch.hp - hp;
-                pulse(1.0f, 0.8f, static_cast<uint32_t>(std::clamp(140 + lost, 160, 420)));
-            }
-        }
-        // Golden gem collected.
-        else if (gem && !g_watch.gem) {
-            pulse(0.6f, 1.0f, 450);
-        }
-        // Landing after a long fall.
-        else if (airborne(g_watch.state) && !airborne(state) &&
-                 g_watch.fall_speed >= kHardLanding && g_watch.since_hit > 45) {
-            const float speed = static_cast<float>(g_watch.fall_speed) / 65536.0f;
-            pulse(std::clamp(speed / 10.0f, 0.35f, 1.0f), 0.2f,
-                  static_cast<uint32_t>(std::clamp(speed * 18.0f, 70.0f, 200.0f)));
-        }
-        // Jet dash start.
-        else if ((state == kGroundJetState || state == kAirJetState) &&
-                 state != g_watch.state && g_watch.state != kGroundJetState &&
-                 g_watch.state != kAirJetState) {
-            pulse(0.15f, 0.55f, 90);
-        }
-    }
-
-    g_watch.fall_speed = airborne(state)
-        ? std::max(airborne(g_watch.state) ? g_watch.fall_speed : 0, -vy)
-        : 0;
     // Screen shake: a steady low rumble while it lasts, stronger for bigger
     // shakes. Re-issued in short overlapping pulses so it stops promptly when
     // the shake ends, and never over a stronger event pulse still running.
     const int shake = std::max(std::abs(static_cast<int>(MEM_W(0, addr(kShakeX)))),
                                std::abs(static_cast<int>(MEM_W(0, addr(kShakeY)))));
     if (shake != 0) {
-        g_watch.shake_peak = std::max(g_watch.shake_peak, shake);
-        g_watch.shake_frames = 8;
+        g_shared.shake_peak = std::max(g_shared.shake_peak, shake);
+        g_shared.shake_frames = 8;
     }
-    if (g_watch.shake_frames > 0) {
-        --g_watch.shake_frames;
-        const float amount = std::clamp(static_cast<float>(g_watch.shake_peak) / 65536.0f / 4.0f, 0.3f, 1.0f);
+    if (g_shared.shake_frames > 0) {
+        --g_shared.shake_frames;
+        const float amount = std::clamp(static_cast<float>(g_shared.shake_peak) / 65536.0f / 4.0f, 0.3f, 1.0f);
         if ((g_frame % 6) == 0) {
-            pulse(amount, amount * 0.4f, 160);
-            g_pulse_until = g_frame;                // shake pulses never block events
+            pulse(0, amount, amount * 0.4f, 160);
+            g_pulse_until[0] = g_pulse_until[1] = g_frame;   // shake pulses never block events
         }
-        if (g_watch.shake_frames == 0) g_watch.shake_peak = 0;
+        if (g_shared.shake_frames == 0) g_shared.shake_peak = 0;
     }
 
-    g_watch.since_hit = std::min(g_watch.since_hit + 1, 1000);
-    g_watch.valid = true;
-    g_watch.hp = hp;
-    g_watch.state = state;
-    g_watch.row = row;
-    g_watch.gem = gem;
+    g_shared.valid = true;
+    g_shared.row = row;
+    g_shared.gem = gem;
 }
 
 } // namespace mm::rumble
@@ -188,7 +230,7 @@ extern "C" void mm_rumble_sfx(uint8_t* rdram, uint32_t id, uint32_t volume) {
     for (const auto& s : mm::rumble::kSfxRumble) {
         if (s.id == (id & 0xFFFFu)) {
             const float v = std::clamp(static_cast<float>(volume & 0xFFu) / 255.0f, 0.25f, 1.0f);
-            mm::rumble::pulse(s.low * v, s.high * v, s.ms);
+            mm::rumble::pulse(0, s.low * v, s.high * v, s.ms);
             return;
         }
     }

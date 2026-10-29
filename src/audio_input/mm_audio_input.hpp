@@ -124,14 +124,25 @@ std::filesystem::path control_config_path();
 bool binding_from_event(ControlDevice device, const SDL_Event& event,
                         InputBinding& binding);
 
-// Keep the single active SDL controller in sync with hotplug events. The
-// launcher calls this before the runtime begins polling gameplay input.
+// Keep the open controllers in sync with hotplug events and let players
+// claim them ("press A to join": a lone controller is player 1 at once;
+// otherwise the first controller a button is pressed on is player 1's and,
+// with co-op on, the next different one player 2's). The launcher calls this
+// before the runtime begins polling gameplay input.
 void refresh_controllers();
+// Whether an SDL joystick instance is player 1's controller (or no controller
+// is player 1's yet). Host shortcuts (fullscreen, save states, fast-forward)
+// answer to player 1's controller only. Any thread.
+bool is_player1_controller(int instance_id);
+// The last "Player 2: <controller>" style notice since the previous call,
+// or empty (shown on screen by the game).
+std::string take_controller_notice();
 
 // Starts a controller rumble pulse (SDL low/high-frequency motor strengths,
-// duration in ms), replacing any pulse still running. Safe from any thread;
-// applied on the next input poll. No-op without a rumble-capable controller.
-void request_rumble(uint16_t low, uint16_t high, uint32_t ms);
+// duration in ms) on player 0's or 1's controller, replacing any pulse still
+// running there. Safe from any thread; applied on the next input poll. No-op
+// without a rumble-capable controller.
+void request_rumble(uint16_t low, uint16_t high, uint32_t ms, int player = 0);
 
 // One-time setup. Idempotent. Brings up the SDL2 audio + game-controller
 // subsystems, opens the audio device, and opens the first attached

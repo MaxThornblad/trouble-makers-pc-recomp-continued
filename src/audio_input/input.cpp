@@ -11,6 +11,10 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <mutex>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "mm_audio_input.hpp"
 
@@ -35,11 +39,20 @@ constexpr uint16_t BTN_CR     = 0x0001; // CONT_F
 
 const Uint8* g_keys = nullptr;
 int g_numkeys = 0;
-SDL_GameController* g_controller = nullptr;
-// Host-side rumble pulse requested by src/game/rumble.cpp, applied on the
-// input-polling path that owns g_controller: low motor << 48 | high motor << 32
-// | milliseconds.
-std::atomic<uint64_t> g_rumble_request{0};
+// Every attached game controller is open; a player claims one by pressing a
+// button on it ("press A to join"): the first to press is player 1, the next
+// different one player 2 (with co-op on). A lone controller is player 1 at
+// once, so single-player needs no press. Owned by the input-polling path.
+std::vector<SDL_GameController*> g_pads;
+SDL_GameController* g_controller = nullptr;    // player 1's
+SDL_GameController* g_controller2 = nullptr;   // player 2's (co-op)
+std::atomic<SDL_JoystickID> g_player1_id{-1};  // for host shortcuts, any thread
+std::mutex g_notice_mutex;
+std::string g_notice;                          // "Player 2: <name>", taken by the game
+// Host-side rumble pulses requested by src/game/rumble.cpp, one per player,
+// applied on the input-polling path: low motor << 48 | high motor << 32 |
+// milliseconds.
+std::array<std::atomic<uint64_t>, 2> g_rumble_request{};
 std::atomic<bool> g_rumble_muted{false};   // presentation off
 // Last time the player pressed anything (SDL ticks). Rumble is skipped when
 // nobody has touched the controls for a minute, so the attract-mode demo on
@@ -59,65 +72,87 @@ inline float axis_norm(Sint16 v) {
     return static_cast<float>(v) / (v < 0 ? 32768.0f : 32767.0f);
 }
 
-void open_first_controller() {
-    if (g_controller != nullptr) return;
-    for (int i = 0; i < SDL_NumJoysticks(); ++i) {
-        if (SDL_IsGameController(i)) {
-            g_controller = SDL_GameControllerOpen(i);
-            if (g_controller != nullptr) {
-                SDL_Joystick* joystick = SDL_GameControllerGetJoystick(g_controller);
-                char guid[33] = {};
-                if (joystick != nullptr) {
-                    SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(joystick), guid,
-                                              static_cast<int>(sizeof(guid)));
-                }
-                char* mapping = SDL_GameControllerMapping(g_controller);
-                const char* name = SDL_GameControllerName(g_controller);
-                std::fprintf(stderr,
-                    "[input] Controller connected: %s (GUID %s, SDL mapping: %s)\n",
-                    name != nullptr ? name : "Unknown controller",
-                    guid[0] != '\0' ? guid : "unknown",
-                    mapping != nullptr ? "yes" : "no");
-                SDL_free(mapping);
-                return;
-            }
-        }
-    }
+const char* pad_name(SDL_GameController* c) {
+    const char* name = SDL_GameControllerName(c);
+    return name != nullptr ? name : "Unknown controller";
 }
 
-// Player 2 (co-op): the second game controller, with a fixed N64-style
-// layout, plus keyboard keys that don't clash with player 1's defaults.
-SDL_GameController* g_controller2 = nullptr;
+SDL_JoystickID pad_id(SDL_GameController* c) {
+    SDL_Joystick* j = c != nullptr ? SDL_GameControllerGetJoystick(c) : nullptr;
+    return j != nullptr ? SDL_JoystickInstanceID(j) : -1;
+}
+
+void notice(const std::string& text) {
+    std::fprintf(stderr, "[input] %s\n", text.c_str());
+    std::lock_guard lock{g_notice_mutex};
+    g_notice = text;
+}
+
+// Player 2 (co-op): controller 2 is reported to the game.
 std::atomic_bool g_player2_input{false};
 
-void open_second_controller() {
-    if (g_controller2 != nullptr || g_controller == nullptr) return;
-    SDL_Joystick* first = SDL_GameControllerGetJoystick(g_controller);
-    const SDL_JoystickID first_id = first != nullptr ? SDL_JoystickInstanceID(first) : -1;
-    for (int i = 0; i < SDL_NumJoysticks(); ++i) {
-        if (!SDL_IsGameController(i) || SDL_JoystickGetDeviceInstanceID(i) == first_id) continue;
-        g_controller2 = SDL_GameControllerOpen(i);
-        if (g_controller2 != nullptr) {
-            const char* name = SDL_GameControllerName(g_controller2);
-            std::fprintf(stderr, "[input] Player 2 controller: %s\n", name != nullptr ? name : "Unknown controller");
-            return;
+// A button down on this controller (not Guide, which the system may own).
+bool pressing(SDL_GameController* c) {
+    for (int b = 0; b < SDL_CONTROLLER_BUTTON_MAX; ++b) {
+        if (b != SDL_CONTROLLER_BUTTON_GUIDE && SDL_GameControllerGetButton(c, static_cast<SDL_GameControllerButton>(b))) {
+            return true;
         }
     }
+    return false;
 }
 
 void refresh_controller_internal() {
-    if (g_controller != nullptr && !SDL_GameControllerGetAttached(g_controller)) {
-        std::fprintf(stderr, "[input] Controller disconnected.\n");
-        SDL_GameControllerClose(g_controller);
-        g_controller = nullptr;
+    // Gone: close it and free its player.
+    for (auto it = g_pads.begin(); it != g_pads.end();) {
+        if (SDL_GameControllerGetAttached(*it)) {
+            ++it;
+            continue;
+        }
+        if (*it == g_controller) {
+            notice("Player 1's controller disconnected");
+            g_controller = nullptr;
+        }
+        if (*it == g_controller2) {
+            notice("Player 2's controller disconnected");
+            g_controller2 = nullptr;
+        }
+        SDL_GameControllerClose(*it);
+        it = g_pads.erase(it);
     }
-    if (g_controller2 != nullptr && !SDL_GameControllerGetAttached(g_controller2)) {
-        std::fprintf(stderr, "[input] Player 2 controller disconnected.\n");
-        SDL_GameControllerClose(g_controller2);
-        g_controller2 = nullptr;
+    // New: open it.
+    for (int i = 0; i < SDL_NumJoysticks(); ++i) {
+        if (!SDL_IsGameController(i)) continue;
+        const SDL_JoystickID id = SDL_JoystickGetDeviceInstanceID(i);
+        if (std::any_of(g_pads.begin(), g_pads.end(), [id](SDL_GameController* c) { return pad_id(c) == id; })) continue;
+        if (SDL_GameController* c = SDL_GameControllerOpen(i)) {
+            SDL_Joystick* joystick = SDL_GameControllerGetJoystick(c);
+            char guid[33] = {};
+            if (joystick != nullptr) {
+                SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(joystick), guid, static_cast<int>(sizeof(guid)));
+            }
+            char* mapping = SDL_GameControllerMapping(c);
+            std::fprintf(stderr, "[input] Controller connected: %s (GUID %s, SDL mapping: %s)\n", pad_name(c),
+                         guid[0] != '\0' ? guid : "unknown", mapping != nullptr ? "yes" : "no");
+            SDL_free(mapping);
+            g_pads.push_back(c);
+        }
     }
-    open_first_controller();
-    if (g_player2_input.load(std::memory_order_relaxed)) open_second_controller();
+    // Claims.
+    const bool coop = g_player2_input.load(std::memory_order_relaxed);
+    if (g_controller == nullptr && g_pads.size() == 1 && g_pads[0] != g_controller2) {
+        g_controller = g_pads[0];
+    }
+    for (SDL_GameController* c : g_pads) {
+        if (c == g_controller || c == g_controller2 || !pressing(c)) continue;
+        if (g_controller == nullptr) {
+            g_controller = c;
+            notice(std::string("Player 1: ") + pad_name(c));
+        } else if (coop && g_controller2 == nullptr) {
+            g_controller2 = c;
+            notice(std::string("Player 2: ") + pad_name(c));
+        }
+    }
+    g_player1_id.store(pad_id(g_controller), std::memory_order_relaxed);
 }
 
 float binding_strength(InputBinding binding, SDL_GameController* controller) {
@@ -210,12 +245,14 @@ void poll_input() {
     SDL_PumpEvents();
     g_keys = SDL_GetKeyboardState(&g_numkeys);
     refresh_controller_internal();
-    const uint64_t rumble = g_rumble_request.exchange(0, std::memory_order_acq_rel);
     const bool active = SDL_GetTicks64() - g_last_activity.load(std::memory_order_relaxed) < kRumbleIdleMs;
-    if (rumble != 0 && active && g_controller != nullptr && SDL_GameControllerHasRumble(g_controller)) {
-        SDL_GameControllerRumble(g_controller, static_cast<uint16_t>(rumble >> 48),
-                                 static_cast<uint16_t>(rumble >> 32),
-                                 static_cast<uint32_t>(rumble & 0xFFFFFFFFu));
+    for (int player = 0; player < 2; ++player) {
+        const uint64_t rumble = g_rumble_request[player].exchange(0, std::memory_order_acq_rel);
+        SDL_GameController* const c = player == 0 ? g_controller : g_controller2;
+        if (rumble != 0 && active && c != nullptr && SDL_GameControllerHasRumble(c)) {
+            SDL_GameControllerRumble(c, static_cast<uint16_t>(rumble >> 48), static_cast<uint16_t>(rumble >> 32),
+                                     static_cast<uint32_t>(rumble & 0xFFFFFFFFu));
+        }
     }
 }
 
@@ -296,16 +333,26 @@ void set_rumble_muted(bool muted) {
     g_rumble_muted.store(muted, std::memory_order_relaxed);
 }
 
-void request_rumble(uint16_t low, uint16_t high, uint32_t ms) {
-    if (ms == 0 || (low == 0 && high == 0)) return;
+void request_rumble(uint16_t low, uint16_t high, uint32_t ms, int player) {
+    if (ms == 0 || (low == 0 && high == 0) || player < 0 || player > 1) return;
     if (g_rumble_muted.load(std::memory_order_relaxed)) return;
-    g_rumble_request.store((static_cast<uint64_t>(low) << 48) |
+    g_rumble_request[player].store((static_cast<uint64_t>(low) << 48) |
                            (static_cast<uint64_t>(high) << 32) | ms,
                            std::memory_order_release);
 }
 
 void refresh_controllers() {
     refresh_controller_internal();
+}
+
+bool is_player1_controller(int instance_id) {
+    const SDL_JoystickID p1 = g_player1_id.load(std::memory_order_relaxed);
+    return p1 < 0 || instance_id == p1;   // nobody's yet: as before
+}
+
+std::string take_controller_notice() {
+    std::lock_guard lock{g_notice_mutex};
+    return std::exchange(g_notice, {});
 }
 
 void set_player2_input(bool on) {
