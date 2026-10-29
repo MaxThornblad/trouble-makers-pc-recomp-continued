@@ -24,16 +24,26 @@ constexpr uint32_t kFullHealth = 0x807F040Cu;      // the most health either pla
 
 // Player 2's block (layout in player2.cpp's header).
 constexpr uint32_t kDown = 0x807F0638u;            // s32: frames until the downed character comes back, 0 = up
-constexpr uint32_t kCreditFrom = 0x807F063Cu;      // s16: player 1's health when a pickup went to her for player 2
-constexpr uint32_t kCreditFrames = 0x807F063Eu;    // s16: frames that credit stays open
 constexpr uint32_t kSavedHealth = 0x807F0640u;     // s16: player 2's health, kept for her next scene
 constexpr uint32_t kSavedStage = 0x807F0642u;      // u16: ... of this stage
 constexpr uint32_t kComeBack = 0x807F0644u;        // s32: the next join is a come-back (half health)
+constexpr uint32_t kGemMarks = 0x807F0650u;        // 0xD0 bits: gem actors she touched, not yet collected
 
 // +0x80 bits a downed character loses: drawn, attack box, hit box.
 constexpr uint32_t kHiddenBits = 0x00000001u | 0x00000080u | 0x00000400u;
 constexpr uint16_t kFall = 0x0216;                 // Marina's fall state
 constexpr uint16_t kCarried = 0x2F;                // (low byte) held by the other player
+constexpr uint16_t kGemActor = 8;
+
+// A pickup collected for player 2 (pickup_begin / pickup_end): within one
+// collection, never across frames.
+struct Pickup {
+    bool on = false;
+    int16_t p1 = 0;    // player 1's own health, put back after
+    int p2 = -1;
+};
+Pickup g_pickup;
+constexpr int kSlots = 0xD0;
 
 gpr addr(uint32_t vaddr) {
     return static_cast<gpr>(static_cast<int32_t>(vaddr));
@@ -45,6 +55,23 @@ bool gameplay(uint8_t* rdram) {
     const uint16_t s = MEM_HU(0, addr(kGameState));
     return s == 6 || s == 10;
 }
+// A gem actor's mark: set when player 2 touches it, kept until it is
+// collected (it may not be catchable yet: one knocked out of an enemy
+// waits a few frames) or gone.
+bool marked(uint8_t* rdram, int actor) {
+    return (MEM_BU(actor >> 3, addr(kGemMarks)) >> (actor & 7)) & 1;
+}
+void set_mark(uint8_t* rdram, int actor, bool on) {
+    const gpr b = addr(kGemMarks);
+    const uint8_t bit = static_cast<uint8_t>(1u << (actor & 7));
+    const uint8_t v = MEM_BU(actor >> 3, b);
+    MEM_B(actor >> 3, b) = static_cast<int8_t>(on ? (v | bit) : (v & ~bit));
+}
+bool gem_actor(uint8_t* rdram, int actor) {
+    const gpr r = record(actor);
+    return MEM_W(0x80, r) != 0 && MEM_HU(0xD2, r) == kGemActor;
+}
+
 void log(const char* what) {
     if (!mm::faraway::in_shadow()) {
         std::fprintf(stderr, "[player2] %s (frame %ld)\n", what, mm::frame_input::number());
@@ -126,30 +153,46 @@ bool down_update(uint8_t* rdram, int slot) {
     return true;
 }
 
-void credit_to_p2(uint8_t* rdram) {
-    if (MEM_H(0, addr(kCreditFrames)) > 0) return;   // already open: the first snapshot stands
-    MEM_H(0, addr(kCreditFrom)) = MEM_H(0xE0, record(0));
-    MEM_H(0, addr(kCreditFrames)) = 3;               // item records go this frame, gem actors next
+void pickup_begin(uint8_t* rdram) {
+    const int p2 = slot(rdram);
+    if (g_pickup.on || p2 <= 0 || is_down(rdram)) return;
+    const gpr m = record(0);
+    g_pickup = {true, MEM_H(0xE0, m), p2};
+    MEM_H(0xE0, m) = MEM_H(0xE0, record(p2));
+}
+
+void pickup_end(uint8_t* rdram) {
+    if (!g_pickup.on) return;
+    g_pickup.on = false;
+    const gpr m = record(0);
+    const int16_t healed = MEM_H(0xE0, m);
+    MEM_H(0xE0, m) = g_pickup.p1;
+    if (slot(rdram) == g_pickup.p2 && healed > MEM_H(0xE0, record(g_pickup.p2))) {
+        MEM_H(0xE0, record(g_pickup.p2)) = healed;
+    }
+}
+
+void gem_actor_touched(uint8_t* rdram, int actor) {
+    if (actor > 0 && actor < kSlots) set_mark(rdram, actor, true);
+}
+
+void actor_begin(uint8_t* rdram, int actor) {
+    pickup_end(rdram);
+    if (actor <= 0 || actor >= kSlots || !marked(rdram, actor)) return;
+    if (!gem_actor(rdram, actor)) {
+        set_mark(rdram, actor, false);   // collected (or gone) since
+        return;
+    }
+    pickup_begin(rdram);
 }
 
 void tick(uint8_t* rdram) {
+    pickup_end(rdram);   // (none is left open past the actor loop)
+    for (int a = 1; a < kSlots; ++a) {
+        if (marked(rdram, a) && !gem_actor(rdram, a)) set_mark(rdram, a, false);
+    }
     const int p2 = slot(rdram);
-    if (p2 <= 0) {
-        MEM_H(0, addr(kCreditFrames)) = 0;
-        return;
-    }
-    // Health player 1 gained from player 2's pickups is hers.
-    if (int16_t frames = MEM_H(0, addr(kCreditFrames)); frames > 0) {
-        const gpr m = record(0), b = record(p2);
-        const int16_t now = MEM_H(0xE0, m);
-        const int gain = now - MEM_H(0, addr(kCreditFrom));
-        if (gain > 0 && now > 0 && !is_down(rdram)) {
-            MEM_H(0xE0, m) = static_cast<int16_t>(now - gain);
-            MEM_H(0xE0, b) = static_cast<int16_t>(std::min<int>(full(rdram), MEM_H(0xE0, b) + gain));
-        }
-        MEM_H(0, addr(kCreditFrom)) = MEM_H(0xE0, m);
-        MEM_H(0, addr(kCreditFrames)) = static_cast<int16_t>(frames - 1);
-    }
+    if (p2 <= 0) return;
     // Kept for her next scene of this stage (she joins each scene afresh).
     if (!is_down(rdram) && MEM_H(0xE0, record(p2)) > 0 && gameplay(rdram)) {
         MEM_H(0, addr(kSavedHealth)) = MEM_H(0xE0, record(p2));

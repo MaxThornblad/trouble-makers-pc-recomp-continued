@@ -14,7 +14,7 @@
 //
 // Only when both are down does the game's own defeat run. Health a pickup
 // gives goes to whoever touched it (player 2's gems are collected against
-// player 1's hit box, then the gain moves to player 2).
+// player 1's hit box with player 2's health swapped in for the collection).
 //
 // All of it lives in game memory (player 2's block, see player2.cpp), so save
 // states, replays, rollback and the second machine carry it.
@@ -43,9 +43,19 @@ void frame_begin(uint8_t* rdram);
 bool down_update(uint8_t* rdram, int slot);
 bool is_down(uint8_t* rdram);
 
-// A pickup player 2 touched is about to be collected against player 1's hit
-// box: what player 1 gains in the next few frames is player 2's.
-void credit_to_p2(uint8_t* rdram);
+// Player 2's pickups are collected against slot 0's hit box (the game's
+// gem code knows only Marina). For that collection slot 0 carries player 2's
+// health, so the game heals her (up to the cap, even with player 1's bar
+// full), then player 1's own health goes back:
+// - stage gems (item records), around the item pass (func_800451E4);
+void pickup_begin(uint8_t* rdram);
+void pickup_end(uint8_t* rdram);
+// - gem actors (knocked out of enemies): marked when she touches one (in
+//   game memory, until it is collected or gone), and swapped around that
+//   actor's own update, where the game collects it (func_800303A8; the actor
+//   loop calls actor_begin before each actor, tick ends any left open).
+void gem_actor_touched(uint8_t* rdram, int actor);
+void actor_begin(uint8_t* rdram, int actor);
 
 // Once a frame, after the actors (mm_debug_menu_tick).
 void tick(uint8_t* rdram);

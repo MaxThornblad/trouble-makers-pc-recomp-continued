@@ -96,6 +96,10 @@ for slot, label in BOSSES:
 STAR_SHAKE = "60:,8:r,10:uB," + ",".join(["6:Bl,6:Br"] * 25) + ",600:"
 FAR = [
     ("far-apart-1", 1, 900, "60:,840:r", "60:,840:l", 600),
+    # Player 2 carries player 1 across the stage far-apart style (split
+    # screen, online): at Marina's carry speed too (the owner saw her slow).
+    ("far-p2-carries-p1-walk", 1, 520, "520:", "80:,6:r,10:B,30:,400:r", 0,
+     dict(final=lambda s0, s2: s2[0] > 650)),
     ("far-apart-4", 4, 900, "60:,840:l", "60:,840:r", 0),
     ("far-apart-6", 6, 900, "60:,840:r", "60:,840:l", 0),
     ("far-apart-9", 9, 900, "60:,840:r", "60:,840:l", 0),

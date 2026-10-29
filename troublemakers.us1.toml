@@ -364,6 +364,8 @@ hook = [
     # the golden gem compass reads it and the gem magnet pulls gem records
     # toward Marina before the item pass collects them.
     { func = "func_800451E4", text = '{ extern void mm_test_trace_streaming(uint8_t*, recomp_context*); extern void mm_item_list_hook(uint8_t*, uint32_t); mm_item_list_hook(rdram, (uint32_t)ctx->r4); mm_test_trace_streaming(rdram, ctx); }' },
+    # ... and its return: player 2's gem collection is over (player2_health.h).
+    { func = "func_800451E4", before_vram = 0x800454F8, text = '{ extern void mm_item_pass_end(uint8_t*); mm_item_pass_end(rdram); }' },
     { func = "func_80082820", text = '{ extern void mm_ws_band_repack(uint8_t*, recomp_context*); mm_ws_band_repack(rdram, ctx); }' },
     { func = "func_80082380", text = '{ extern void mm_ws_static_repack(uint8_t*, recomp_context*); mm_ws_static_repack(rdram, ctx); }' },
     # Snow-stage panorama: transform each completed rectangle and its UV step.

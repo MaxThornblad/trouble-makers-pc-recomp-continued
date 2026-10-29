@@ -88,7 +88,7 @@ constexpr size_t globals_size() {
 // 0x500 the second camera (far_coop.cpp), 0x600 the lead swap
 // (player2_lead.cpp), 0x610 moon jump rises left per player (cheats.cpp),
 // 0x620 throw charge and 0x628 pending throw strength per character
-// and 0x630 aim per character (throw_cheats.cpp), 0x634 what she shook, 0x638..0x647 health (player2_health.cpp),
+// and 0x630 aim per character (throw_cheats.cpp), 0x634 what she shook, 0x638..0x66F health (player2_health.cpp),
 // 0x418 player 2's mount (player2_mount.cpp),
 // 0x1000 display lists, 0x2000 textures, 0x4000 packed frame.
 constexpr uint32_t kP2Globals = 0x807F0000u;
@@ -519,6 +519,7 @@ HeldSwap g_held;
 }
 
 void held_swap_end(uint8_t* rdram) {
+    health::pickup_end(rdram);   // a gem actor's update is over
     if (!g_held.on) return;
     g_held.on = false;
     const int p2 = g_held.p2;
@@ -539,6 +540,7 @@ void held_swap_end(uint8_t* rdram) {
 
 void held_swap_begin(uint8_t* rdram, int actor) {
     held_swap_end(rdram);
+    health::actor_begin(rdram, actor);   // a gem actor she touched: her health in slot 0 for its update
     if (!mm::cheats::coop_enabled()) return;
     // Shaken by player 2 last frame (update_core): the object sees it now.
     if (MEM_W(0, addr(kP2Shaken)) == actor + 1) {
@@ -570,8 +572,8 @@ void held_swap_begin(uint8_t* rdram, int actor) {
 // hitbox only (func_800446F0 from func_800451E4, see cheats.cpp's magnet),
 // gems knocked out of enemies are type-8 actors caught the same way. One
 // touched by player 2 goes to player 1's hitbox, where the game collects it
-// for the team (the HUD's count); the health it gives moves on to player 2
-// (health::credit_to_p2).
+// for the team (the HUD's count); its health goes to player 2
+// (health::pickup_begin / gem_actor_touched).
 void collect_pickups(uint8_t* rdram, uint32_t list) {
     constexpr uint32_t kItemHandlers = 0x800D37BCu, kGemHandler = 0x800446F0u;
     constexpr uint16_t kGemActor = 8;
@@ -608,6 +610,7 @@ void collect_pickups(uint8_t* rdram, uint32_t list) {
             std::fprintf(stderr, "[gems] %d in the list; nearest to p2 (%d,%d) at %d,%d\n", gems, bx + cx, by + cy, bxw, byw);
         }
     }
+    bool records_taken = false;
     for (int i = 0; i < 512 && list != 0; ++i) {
         const gpr rec = addr(list + static_cast<uint32_t>(i) * 6u);
         const uint16_t kind = MEM_HU(0, rec);
@@ -618,9 +621,12 @@ void collect_pickups(uint8_t* rdram, uint32_t list) {
         if (x < left || x > right || y < bottom || y > top) continue;
         MEM_H(2, rec) = static_cast<int16_t>(tx + cx);
         MEM_H(4, rec) = static_cast<int16_t>(ty + cy);
-        health::credit_to_p2(rdram);
+        records_taken = true;
         if (trace_on()) std::fprintf(stderr, "[p2trace] gem %03X at %d,%d goes to player 1\n", kind, x + cx, y + cy);
     }
+    // The item pass collects them right after this (func_800451E4): with
+    // her health in slot 0 (ended at its return, mm_item_pass_end).
+    if (records_taken) health::pickup_begin(rdram);
     for (int s = 1; s < 0xD0; ++s) {
         const gpr a = addr(kActors + static_cast<uint32_t>(s) * kStride);
         if (MEM_W(0x80, a) == 0 || MEM_HU(0xD2, a) != kGemActor) continue;
@@ -630,7 +636,7 @@ void collect_pickups(uint8_t* rdram, uint32_t list) {
         MEM_W(0x8C, a) = ty << 16;
         MEM_W(0xEC, a) = 0;
         MEM_W(0xF0, a) = 0;
-        health::credit_to_p2(rdram);
+        health::gem_actor_touched(rdram, s);
         if (trace_on()) std::fprintf(stderr, "[p2trace] gem actor %d goes to player 1\n", s);
     }
 }
@@ -775,13 +781,14 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
     // rebased between cameras (far_coop.cpp), so she got it twice: carrying
     // something, she ran ahead of her camera, it followed, she ran further
     // (super speed, super jumps).
-    // That is her camera's step (far apart). On the shared camera, carrying
-    // player 1, the step is the one the carry makes (the camera follows
-    // player 1, who is in her hands), and the carry code needs it as it
-    // does for Marina: zeroed, she walked at half speed once the camera
-    // moved (normal at a stage's left edge, where it does not).
+    // Carrying player 1, the step is the one the carry makes (the game's
+    // camera follows player 1, who is in her hands), and the carry code
+    // needs it as it does for Marina: zeroed, she walked at half speed once
+    // the camera moved (normal at a stage's left edge, where it does not).
+    // That holds far apart too (split screen, online: the two are together
+    // while one carries the other); it was zeroed there until 2026-10-29.
     const int32_t prev_x = MEM_W(0, addr(kCameraPrevX)), prev_y = MEM_W(0, addr(kCameraPrevY));
-    const bool own_step = holding_p1 && !mm::faraway::active(rdram);
+    const bool own_step = holding_p1;
     if (!own_step) {
         MEM_W(0, addr(kCameraPrevX)) = MEM_W(0, addr(kCameraX));
         MEM_W(0, addr(kCameraPrevY)) = MEM_W(0, addr(kCameraY));
@@ -1134,6 +1141,11 @@ extern "C" void mm_p2_contacts_end(uint8_t* rdram) {
 // func_8004ED10's entry (troublemakers.us1.toml): nonzero = skip this call.
 // Player 1's update moves to the end of player 2's while player 2 carries
 // her (update_core).
+// func_800451E4's return: the item pass is over (player2_health.h).
+extern "C" void mm_item_pass_end(uint8_t* rdram) {
+    mm::player2::health::pickup_end(rdram);
+}
+
 extern "C" int mm_marina_update_hook(uint8_t* rdram) {
     using namespace mm::player2;
     if (!g_in_own_call) {
