@@ -313,6 +313,10 @@ def check_trace(text, allowed_rejoins, far=False):
                 # player's x back by a whole lap; not a jump.
                 if abs(a[0] - b[0]) > 600 and abs(a[1] - b[1]) <= 8:
                     continue
+                # A looping vertical arena (5-6, PHOENIX: a free fall about
+                # 1010 px round) wraps the camera and the players back up.
+                if abs(a[1] - b[1]) > 600 and abs(a[0] - b[0]) <= 8:
+                    continue
                 if states[k] in CARRY_STATES or prev[2][k] in CARRY_STATES:
                     continue
                 if states[k] in SCRIPTED_STATES or prev[2][k] in SCRIPTED_STATES:
