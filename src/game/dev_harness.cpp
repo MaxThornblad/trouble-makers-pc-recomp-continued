@@ -27,6 +27,7 @@
 // With MM_TEST_SCRIPT, "[clock] t<frame> <unix time>" lines every 10 frames
 // line screenshots up with frames (Wine runs far slower than 60 fps).
 #include "dev_harness.h"
+#include "player2.h"
 
 #include <chrono>
 #include <csignal>
@@ -223,9 +224,12 @@ void tick(uint8_t* rdram) {
         *reinterpret_cast<volatile int*>(static_cast<uintptr_t>(0x10)) = 1;
     }
     if (const char* sh = std::getenv("MM_TEST_SETHP")) {
-        int slot = 0, hp = 0;                    // "slot:hp[@frame]" (frame 10 by default)
+        int slot = 0, hp = 0;                    // "slot:hp[@frame]" (frame 10 by default); slot "p2": player 2's
         long at = 10;
-        if (std::sscanf(sh, "%d:%d@%ld", &slot, &hp, &at) >= 2 && t == at) {
+        const bool p2 = std::strncmp(sh, "p2:", 3) == 0;
+        if (p2) slot = mm::player2::slot(rdram);
+        if ((p2 ? std::sscanf(sh + 3, "%d@%ld", &hp, &at) >= 1 : std::sscanf(sh, "%d:%d@%ld", &slot, &hp, &at) >= 2) &&
+            t == at && slot >= 0) {
             MEM_H(0xE0, slot_addr(slot)) = static_cast<int16_t>(hp);
         }
     }

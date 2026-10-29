@@ -61,6 +61,14 @@ SCENARIOS = [
     ("both-grab", 1, 400, "80:,6:l,10:B,100:,10:B,200:", "80:,6:r,10:B,100:,10:B,200:", 0),
     ("carry-jump-throw", 4, 500, "80:,6:r,10:B,20:,10:A,40:,30:r,10:B,300:", "500:", 0),
     ("p2-carry-jump", 4, 500, "500:", "80:,6:l,10:B,20:,10:A,40:,30:l,10:B,300:", 0),
+    # A health bar each (player2_health.cpp): player 2 at 0 health goes down
+    # and comes back next to player 1 three seconds later, with no defeat.
+    ("p2-down", 1, 600, "60:,300:r,240:", "60:,300:l,240:", 1,
+     dict(env={"MM_TEST_SETHP": "p2:0@150"}, expect=["[player2] down", "[player2] back next to the other player"])),
+    # Player 1 at 0 health while player 2 is up: the two swap (player 2 leads)
+    # and player 1's person comes back; the stage goes on.
+    ("p1-down", 1, 600, "60:,300:r,240:", "60:,300:l,240:", 1,
+     dict(env={"MM_TEST_SETHP": "0:0@150"}, expect=["slot 0's character is down", "[player2] back next to the other player"])),
 ]
 # Slot 9: stage 3-12 (CERBERUS), where the owner saw trouble.
 for slot in (1, 2, 3, 4, 5, 6, 7, 8, 9):
@@ -236,7 +244,9 @@ def check_trace(text, allowed_rejoins, far=False):
             if first:
                 first = (first[1], first[0])
             continue
-        if "joined in slot" in line or "rejoining" in line or "[test] player" in line:
+        # (Going down: the hidden character moves to the other at once,
+        # player2_health.cpp; not a jump.)
+        if "joined in slot" in line or "rejoining" in line or "[test] player" in line or "[player2] down" in line:
             joined_recently = 3
             continue
         m = HELD.match(line)
@@ -323,6 +333,9 @@ def check_extra(extra, out, moved):
     for want in extra.get("expect", []):
         if want not in out:
             problems.append("no '%s'" % want)
+    for unwanted in extra.get("absent", []):
+        if unwanted in out:
+            problems.append("'%s' appeared" % unwanted)
     limit = extra.get("max_step2")
     if limit is not None and check_trace.max_step[1] > limit:
         problems.append("player 2 moved %d px in one frame (at most %d)" % (check_trace.max_step[1], limit))
@@ -359,7 +372,7 @@ def play_with_rollback(args, rec_dir, frames, extra_env=None):
     return problems
 
 
-def run_local(args, name, slot, frames, pad1, pad2, allowed, extra_env=None, far=False, want_apart=0):
+def run_local(args, name, slot, frames, pad1, pad2, allowed, extra_env=None, far=False, want_apart=0, extra=None):
     with tempfile.TemporaryDirectory() as tmp:
         env = dict(os.environ, **BASE_ENV, HOME=args.home, MM_P2_TRACE="1",
                    MM_REPLAY_RECORD="%s/rec@200" % tmp, MM_REPLAY_LENGTH=str(frames),
@@ -379,6 +392,8 @@ def run_local(args, name, slot, frames, pad1, pad2, allowed, extra_env=None, far
         return ["did not start recording"], 0
     problems, traced, apart = check_trace(section, allowed, far)
     problems += rollback_problems
+    if extra:
+        problems += check_extra(extra, out, check_trace.moved)
     if want_apart and apart < want_apart:
         problems.append("only %d px apart at most (want %d)" % (apart, want_apart))
     return problems, traced
@@ -531,9 +546,8 @@ def main():
     for name, slot, frames, p1, p2, allowed, *extra in SCENARIOS:
         if args.only and not any(o in name for o in args.only.split(',')):
             continue
-        problems, traced = run_local(args, name, slot, frames, p1, p2, allowed)
-        if extra and not problems:
-            problems += check_extra(extra[0], "", check_trace.moved)
+        problems, traced = run_local(args, name, slot, frames, p1, p2, allowed,
+                                     extra_env=extra[0].get("env") if extra else None, extra=extra[0] if extra else None)
         print("%-18s %s (%d frames)%s" % (name, "ok  " if not problems else "FAIL", traced,
                                           "" if not problems else ": " + "; ".join(problems[:4])), flush=True)
         failed += bool(problems)
