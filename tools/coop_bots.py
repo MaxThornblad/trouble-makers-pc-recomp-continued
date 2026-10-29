@@ -214,7 +214,8 @@ def run_game(args, env, timeout):
 # carrier turns), reaching (0x11F), carrying / throwing (0x122, 0x126).
 CARRY_STATES = {0x16, 0x2F, 0x11F, 0x122, 0x126}
 # Scripted moves: a star teleporter's flight (0x301).
-SCRIPTED_STATES = {0x301, 0x231}   # 0x231: back onto her cat (3-12) after a fall
+SCRIPTED_STATES = {0x301, 0x231,   # 0x231: back onto her cat (3-12) after a fall
+                   0x401}          # hurt: a hazard (2-6's lava) puts her back on safe ground (the same spot each time)
 # Riding a mount (3-12's cats: 0x003, getting on / off and bucked 0x230,
 # 0x231, 0x233, 0x531): the stage keeps riders in view itself, out to
 # about 240 px from the camera, so the shared-screen check allows that
