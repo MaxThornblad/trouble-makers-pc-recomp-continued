@@ -293,8 +293,16 @@ netcode, and the owner decides.
   with player 1 full); a thrown player lies as long as at 100% at any throw
   strength; player 2's charged throw aims again (her aim shared a word with
   "what she shook": she put player 1 down instead of throwing). New
-  scenarios far-p2-carries-p1-walk, p2-throws-p1. Open: the owner's 1-2
-  split-screen save state "glitching out" (file and description asked for).
+  scenarios far-p2-carries-p1-walk, p2-throws-p1. Preview 7.
+- 2026-10-29: split-screen views fill their halves (the game's letterbox
+  rows 0-17 and 211-239 cut; NETCODE-V2.md Phase 5). Preview 8. Open: the
+  owner's 1-2 split-screen save state "glitching out": his slot0.tmstate is
+  copied to the test home as slot 26 (player 2 carries player 1, 1-2,
+  stage 3 scene 68); headless it runs normally, so his description of the
+  glitch is needed.
+- The owner's PC is linked through the desktop app (file tools + screen
+  control, no shell yet). His real install and saves are in the connected
+  folders: read only. Tests go to C:\TroubleMakersTest (he creates it).
 - Bot tools: coop_bots --keep DIR keeps every scenario's logs, --port picks
   ports (run two suites at once); traces carry frame numbers (rollbacks).
 - Stage 3-12 (CERBERUS): the owner reported trouble there (details not
