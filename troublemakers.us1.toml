@@ -20,20 +20,22 @@ instruction = [
     # from the dst array D_80180D90 (140 s32 slots, filled 70 at stride 10).
     # Its ultimate source is the level's backdrop tilemap: a 16x16 byte grid
     # that WRAPS on both axes (col = (srcX>>5)&0xF, rowblk = (srcY>>1)&0xF0),
-    # so tiles 5 columns beyond each 4:3 edge are genuine neighboring map
-    # tiles, not mirrored/stretched pixels. These 5 instruction patches widen
-    # the draw loop to 20 columns starting 5 left (cols -5..14) with an 80-byte
-    # (20-slot) row stride and the two 4:3 left-edge assumptions removed; the
-    # entry hook below rebuilds D_80180D90 at stride 20 with all 20 real
-    # columns. Fill path and every word here were verified against the ROM.
-    { func = "func_80082820", vram = 0x800829D0, value = 0x2414000F }, # col limit s4 10 -> 15
-    { func = "func_80082820", vram = 0x80082A08, value = 0x240CFFFB }, # col start t4 0 -> -5
-    { func = "func_80082820", vram = 0x80082A20, value = 0x24F900C0 }, # left-edge skip 0x20 -> 0xC0
+    # so tiles 6 columns beyond each 4:3 edge are genuine neighboring map
+    # tiles, not mirrored/stretched pixels. These instruction patches widen
+    # the draw loop to 22 columns starting 6 left (cols -6..15) with a 96-byte
+    # (24-slot) row stride and the two 4:3 left-edge assumptions removed; the
+    # entry hook below rebuilds D_80180D90 at stride 24 with all 22 real
+    # columns. 22 columns (704 px) cover an 8:3 view (640 px) at every fine
+    # scroll; 20 left a sliver at one edge (split screen shows 8:3 views). Fill path and every word here were verified against the ROM.
+    { func = "func_80082820", vram = 0x800829D0, value = 0x24140010 }, # col limit s4 10 -> 16
+    { func = "func_80082820", vram = 0x80082A08, value = 0x240CFFFA }, # col start t4 0 -> -6
+    { func = "func_80082820", vram = 0x80082A20, value = 0x24F900E0 }, # left-edge skip 0x20 -> 0xE0
     { func = "func_80082820", vram = 0x80082B24, value = 0x04010003 }, # drop max(0,upper_x) clamp
     # The original x<0 path compensated for clipping by starting texture S at
     # -x. Wing rectangles are no longer clipped, so their S must remain zero.
     { func = "func_80082820", vram = 0x80082B70, value = 0x10000003 }, # always take S=0 path
-    { func = "func_80082820", vram = 0x80082A00, value = 0x00197900 }, # dst row stride <<3 -> <<4 (80B)
+    { func = "func_80082820", vram = 0x800829F0, value = 0x0011C840 }, # row*5 -> row*3: sll t9,s1,1
+    { func = "func_80082820", vram = 0x80082A00, value = 0x00197940 }, # dst row stride (row*3)<<5 (96B)
     # Clamp fractional high-resolution samples at the edge of each 32x32
     # slice instead of wrapping them to texel 0 of that same slice. The next
     # rectangle supplies the genuine neighboring map tile.
@@ -43,19 +45,19 @@ instruction = [
     # REAL-CONTENT WIDESCREEN — shared static tile-grid draw func_80082380
     # (midground D_80180930 / env D_80180B60 / static-bg D_80180D90 / possible
     # overlay callers). Loop is hardcoded 7 rows x 10 cols reading a stride-10
-    # 70-slot array, so EVERY caller passes that layout. Same 10->20 widening
+    # 70-slot array, so EVERY caller passes that layout. Same 10->22 widening
     # as func_80082820; the entry hook below repacks WHATEVER buffer arrives
-    # into scratch at stride 20 (catch-all — the first attempt guarded only the
+    # into scratch at stride 24 (catch-all — the first attempt guarded only the
     # 3 known buffers, and an unlisted overlay caller's stride-10 data was
     # misread as stride-20 = stale-texture garbage in the wings). Known layers
     # get real map content in the wings; unknown callers get black wings and a
     # byte-identical center. All 5 words ROM-verified.
-    { func = "func_80082380", vram = 0x8008252C, value = 0x2413000F }, # col limit s3 10 -> 15
-    { func = "func_80082380", vram = 0x80082534, value = 0x240DFFFB }, # col start t5 0 -> -5
-    { func = "func_80082380", vram = 0x8008254C, value = 0x24EE00C0 }, # left-edge skip 0x20 -> 0xC0
+    { func = "func_80082380", vram = 0x8008252C, value = 0x24130010 }, # col limit s3 10 -> 16
+    { func = "func_80082380", vram = 0x80082534, value = 0x240DFFFA }, # col start t5 0 -> -6
+    { func = "func_80082380", vram = 0x8008254C, value = 0x24EE00E0 }, # left-edge skip 0x20 -> 0xE0
     { func = "func_80082380", vram = 0x80082644, value = 0x04010003 }, # drop max(0,upper_x) clamp
     { func = "func_80082380", vram = 0x80082690, value = 0x10000003 }, # unclipped wing tile starts at S=0
-    { func = "func_80082380", vram = 0x800826F4, value = 0x27190050 }, # dst row stride 0x28 -> 0x50 (20 slots)
+    { func = "func_80082380", vram = 0x800826F4, value = 0x27190060 }, # dst row stride 0x28 -> 0x60 (24 slots)
     { func = "func_80082380", vram = 0x800825DC, value = 0x3C180009 }, # render tile CMT=CLAMP
     { func = "func_80082380", vram = 0x800825EC, value = 0x37184250 }, # render tile CMS=CLAMP
 
@@ -315,7 +317,7 @@ hook = [
     # the shadow frame), just before the frame's graphics task goes out.
     { func = "Thread_MainProc", before_vram = 0x80000EA4, text = '{ extern void mm_far_shadow(uint8_t*, recomp_context*, uint32_t); mm_far_shadow(rdram, ctx, (uint32_t)MEM_W(0, ctx->r16)); }' },
     { func = "LookAt_Update", before_vram = 0x800108B8, text = '{ MEM_W(0, (gpr)(int32_t)0x801780F0u) = 0x80460000u; ctx->r15 = (gpr)(int32_t)0x80470000u; }' },
-    # Layer repacks: rebuild each 7x10 layer grid at stride 20 with real
+    # Layer repacks: rebuild each 7x10 layer grid at stride 24 (22 columns) with real
     # map-derived wing columns (exact func_8001107C formulas, all parallax
     # modes) and a per-tile texture-residency check in place of the former
     # per-scene blacklists. Logic lives in src/game/widescreen.cpp.

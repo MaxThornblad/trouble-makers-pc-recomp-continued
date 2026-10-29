@@ -18,7 +18,13 @@
 
 namespace {
 
-// Scratch grids (7x20 s32) the repack hooks hand to the widened draw loops.
+// Scratch grids the repack hooks hand to the widened draw loops: 7 rows of
+// kGridCols tiles (columns -kWingCols..9+kWingCols) at a row stride of
+// kGridStride s32 slots. These must match the draw-loop patches in
+// troublemakers.us1.toml (column start/limit, left skip, row stride).
+constexpr int kWingCols = 6;
+constexpr int kGridCols = 10 + 2 * kWingCols;   // 22: 704 px covers 640 at any fine scroll
+constexpr int kGridStride = 24;                 // what the patched loops step by
 constexpr uint32_t kGenericScratch = 0x9FFFC000u;
 constexpr uint32_t kEnvScratch = 0x9FFFD000u;
 constexpr uint32_t kMidScratch = 0x9FFFE000u;
@@ -1417,7 +1423,7 @@ void compute_mid_fill_bases(uint8_t* rdram, uint16_t& x0, uint16_t& y0) {
 // s16-grid fill + draw-side conversion: value = ((tile + addend) << 10) +
 // pool base, INCLUDING tile 0 (the game draws pool slot addend<<10 for it;
 // skipping it leaves holes where authored maps use tile 0 -- safe now that
-// the display-list arenas are relocated and can hold all 140 tiles). The
+// the display-list arenas are relocated and can hold all 154 tiles). The
 // single wing-only deviation: a slot whose texture lies past the
 // decompressed map-bank end has no data loaded -- draw nothing instead of
 // noise. This per-tile residency check replaces the old per-scene
@@ -1449,30 +1455,30 @@ int32_t wing_slot(uint8_t* rdram, int tile, int addend, uint32_t texture_pool) {
 struct WingContext {
     uint8_t* rdram;
     gpr src;            // game's 7x10 s32 grid (center columns, verbatim)
-    gpr dst;            // 7x20 scratch grid
+    gpr dst;            // 7 x kGridStride scratch grid
     uint32_t texture_pool;
 };
 
-// Repack the 7x10 grid to stride 20. wing(row, col) supplies the s32 slot
-// for camera-relative columns -5..-1 and 10..14; pass nullptr for zeroed
-// wings (unknown caller or wings disabled).
+// Repack the 7x10 grid to stride kGridStride. wing(row, col) supplies the
+// s32 slot for camera-relative columns -6..-1 and 10..15; pass nullptr for
+// zeroed wings (unknown caller or wings disabled).
 template <typename WingFn>
 void repack_grid(const WingContext& wc, WingFn wing, bool wings_on) {
     uint8_t* rdram = wc.rdram;
     for (int row = 0; row < 7; ++row) {
-        for (int wide_col = 0; wide_col < 20; ++wide_col) {
-            const int col = wide_col - 5;
+        for (int wide_col = 0; wide_col < kGridStride; ++wide_col) {
+            const int col = wide_col - kWingCols;
             int32_t value;
             if (col >= 0 && col < 10) {
                 value = MEM_W((row * 10 + col) * 4, wc.src);
             }
-            else if (wings_on) {
+            else if (wings_on && col < 10 + kWingCols) {
                 value = wing(row, col);
             }
             else {
                 value = 0;
             }
-            MEM_W((row * 20 + wide_col) * 4, wc.dst) = value;
+            MEM_W((row * kGridStride + wide_col) * 4, wc.dst) = value;
         }
     }
 }
@@ -1512,15 +1518,15 @@ void trace_layer_once(uint8_t* rdram, const char* layer, gpr grid) {
         ? g_host_bank_end
         : static_cast<uint32_t>(MEM_W(0, rdram_gpr(kBankEnd)));
     for (int row = 0; row < 7; ++row) {
-        for (int col = 0; col < 20; ++col) {
+        for (int col = 0; col < kGridCols; ++col) {
             const uint32_t value = static_cast<uint32_t>(
-                MEM_W((row * 20 + col) * 4, grid));
+                MEM_W((row * kGridStride + col) * 4, grid));
             if (value == 0) {
                 continue;
             }
             min_value = value < min_value ? value : min_value;
             max_value = value > max_value ? value : max_value;
-            if (col >= 5 && col < 15) {
+            if (col >= kWingCols && col < kWingCols + 10) {
                 ++center;
                 if (bank_end > kPoolBase && value + 0x400u > bank_end) {
                     ++center_past_bank;
@@ -1532,7 +1538,7 @@ void trace_layer_once(uint8_t* rdram, const char* layer, gpr grid) {
         }
     }
     std::fprintf(stderr,
-        "[widescreen-layer] scene=%d layer=%s center=%d/70 wings=%d/70 "
+        "[widescreen-layer] scene=%d layer=%s center=%d/70 wings=%d/84 "
         "center_past_bank=%d range=%08x..%08x bank_end=%08x\n",
         scene, layer, center, wings, center_past_bank,
         min_value == 0xFFFFFFFFu ? 0 : min_value, max_value, bank_end);
@@ -1540,8 +1546,8 @@ void trace_layer_once(uint8_t* rdram, const char* layer, gpr grid) {
 
 // The game's six per-layer display-list arenas (double-buffered mid/env/band)
 // are 0x1620 bytes each: exactly 70 tiles x 80 bytes + an 8-byte G_ENDDL,
-// with 0x38 bytes of slack. The widened 7x20 loops can emit up to 140 tiles
-// (0x2BC8 bytes), and the draw loop has NO bounds check — the overrun from
+// with 0x38 bytes of slack. The widened 7x22 loops can emit up to 154 tiles
+// (0x3028 bytes; each relocated arena has 0x4000), and the draw loop has NO bounds check — the overrun from
 // the last arena (D_8017F310) stomps the layer texture-pointer grids at
 // 0x80180930+ and can reach the texture-pool base at 0x80180FC0, which is
 // the intermittent full-frame tile noise. The arena base is parameter-borne

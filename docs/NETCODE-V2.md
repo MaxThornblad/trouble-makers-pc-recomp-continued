@@ -305,6 +305,6 @@ MM_NET_DEBUG=1 (per-rollback lines), MM_NET_LAG=ms,jitter,loss%.
   bars, gem compass) publish once from the real frame and draw in each
   view through split_view.h (view rectangle, scale, camera offset).
 
-Known limits: sound follows the real frame's camera; a thin stale strip
-can show at a view's far left edge (the 8:3 view leaves the tile wings no
-slack); the rank timer and pause hints draw over the whole window.
+Known limits: sound follows the real frame's camera; the rank timer and
+pause hints draw over the whole window. (The thin stale strip at a view's
+edge is fixed: the tile layers now draw 22 columns, docs/README.md 11.1.)

@@ -619,6 +619,14 @@ The original draw is seven rows by ten columns of 32 × 32 CI8 tiles: 320 ×
 224 pixels. Each destination array has 140 `s32` slots, but original code
 fills and walks 70 of them at stride ten.
 
+In widescreen the recomp patches both loops to 22 columns (`-6..15`, 704
+pixels) at a row stride of 24 slots, and the entry hooks repack each layer
+into a scratch grid of that shape (`src/game/widescreen.cpp`, `kWingCols`,
+`kGridStride`). A row's tiles start at a fine scroll offset of `-17..14`
+pixels, so a 640-pixel (8:3) view needs one column beyond 640 on each side;
+20 columns left a sliver at one edge (seen in split screen, whose views are
+8:3).
+
 Both draw loops consume the buffer through a walking pointer. Their column
 counter controls screen X; it does not index the source array. If a widened
 scratch buffer is passed, the argument must point at the scratch **base**.
