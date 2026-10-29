@@ -398,6 +398,10 @@ def run_far(args, name, slot, frames, pad1, pad2, want_apart, extra=None):
             if shadow:
                 env["MM_FAR_SHADOW"] = "1"
             out = run_game(args, env, 40 + frames // 20)
+            if args.keep:   # the log, for a look after a failure
+                keep = Path(args.keep) / name
+                keep.mkdir(parents=True, exist_ok=True)
+                (keep / ("shadow.log" if shadow else "plain.log")).write_text(out)
             h = Path(tmp) / "rec" / "hashes.bin"
             hashes.append(h.read_bytes() if h.exists() else b"")
             rollback_problems = []

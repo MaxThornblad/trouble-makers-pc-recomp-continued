@@ -337,6 +337,16 @@ hook = [
     { func = "func_80009BE8", before_vram = 0x8000A474, text = '{ extern void mm_p2_draw_begin(uint8_t*, recomp_context*); mm_p2_draw_begin(rdram, ctx); }' },
     { func = "func_80009BE8", before_vram = 0x8000DD18, text = '{ extern void mm_p2_draw_end(uint8_t*, recomp_context*); mm_p2_draw_end(rdram, ctx); }' },
     { func = "func_80009BE8", before_vram = 0x8000D388, text = '{ extern void mm_fix_rotation_material(uint8_t*, recomp_context*); mm_fix_rotation_material(rdram, ctx); }' },
+    # Far apart (online, split screen): a sound at an actor is heard from the
+    # nearer player's camera (coop_sound.cpp).
+    { func = "Sound_PlaySfxAtActor", text = '{ extern void mm_sound_listener_begin(uint8_t*, uint32_t); mm_sound_listener_begin(rdram, (uint32_t)ctx->r5); }' },
+    { func = "Sound_PlaySfxAtActor", before_vram = 0x800036C0, text = '{ extern void mm_sound_listener_end(uint8_t*); mm_sound_listener_end(rdram); }' },
+    { func = "Sound_PlaySfxAtActor2", text = '{ extern void mm_sound_listener_begin(uint8_t*, uint32_t); mm_sound_listener_begin(rdram, (uint32_t)ctx->r5); }' },
+    { func = "Sound_PlaySfxAtActor2", before_vram = 0x80003770, text = '{ extern void mm_sound_listener_end(uint8_t*); mm_sound_listener_end(rdram); }' },
+    { func = "Sound_PlaySfxAtActor3", text = '{ extern void mm_sound_listener_begin(uint8_t*, uint32_t); mm_sound_listener_begin(rdram, (uint32_t)ctx->r5); }' },
+    { func = "Sound_PlaySfxAtActor3", before_vram = 0x80003820, text = '{ extern void mm_sound_listener_end(uint8_t*); mm_sound_listener_end(rdram); }' },
+    { func = "Sound_PlaySfxAtActorTimed", text = '{ extern void mm_sound_listener_begin(uint8_t*, uint32_t); mm_sound_listener_begin(rdram, (uint32_t)ctx->r5); }' },
+    { func = "Sound_PlaySfxAtActorTimed", before_vram = 0x80003978, text = '{ extern void mm_sound_listener_end(uint8_t*); mm_sound_listener_end(rdram); }' },
     # The HUD (func_8000F290, PortraitStruct entries 64/65) moves out to the
     # widened picture's corners for its draw (widescreen.cpp).
     { func = "func_8000F290", text = '{ extern void mm_ws_hud_begin(uint8_t*); mm_ws_hud_begin(rdram); }' },

@@ -599,3 +599,11 @@ still grab its parts.
   the person: hits, landings and jets on a person's character go to their
   controller (online, the local one); explosions, shakes and golden gems to
   everyone (rumble.cpp).
+- **Sound far apart (coop_sound.cpp).** The players' own sounds are not
+  positional (Sound_PlaySfx, full volume), but sounds at actors
+  (Sound_PlaySfxAtActor/2/3/Timed: culled beyond 144 px across or 96 px up
+  or down from the camera, panned by func_80003540) followed player 1's
+  camera only. With the far rules on, such a sound is heard from whichever
+  camera is nearer: for that call the actor's position is taken relative to
+  the second camera, then put back. One shared listener, because the sound
+  player's state is game memory both machines keep identical.

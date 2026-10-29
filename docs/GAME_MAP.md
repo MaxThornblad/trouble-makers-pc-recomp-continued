@@ -339,6 +339,11 @@ registered in the state registry instead (src/game/state_registry.h).
 ## Sound effects
 
 All go through `Sound_AddSfx(id, …, volume at 0x10($sp))` at `0x80003020`.
+Marina's own sounds use `Sound_PlaySfx` (no position). Sounds at an actor use
+`Sound_PlaySfxAtActor2` (583 call sites; also `…AtActor`, `…3`, `…Timed`):
+silent when the actor is 144 px or more across or 96 px or more up or down
+from the camera centre, else panned and attenuated by `func_80003540(x, y,
+&pan, &volume)`.
 
 | Id | Sound |
 |---:|---|

@@ -21,6 +21,7 @@
 //   MM_TEST_INSPECT=121                collision view on, that slot highlighted
 //   MM_TEST_SLOPE=dx,dy,41,45          spawn a slope block object (cell codes) on frame 5
 //   MM_TEST_ITEMS=frame                item records near the camera
+//   MM_SOUND_TRACE=1 (2)               positional sounds moved to player 2's camera (every call), coop_sound.cpp
 //   MM_TEST_HUD=1                      print the HUD's display list (widescreen.cpp), first frames
 //   MM_TEST_TERRAIN="x,y;x,y"          terrain bytes around world points (frame 3)
 // With MM_TEST_SCRIPT, "[clock] t<frame> <unix time>" lines every 10 frames
