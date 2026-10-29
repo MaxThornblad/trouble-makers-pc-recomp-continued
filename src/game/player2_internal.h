@@ -32,6 +32,15 @@ void exchange_characters(uint8_t* rdram);
 // Player 2's slot joins slot 0 afresh, next to her (as after a defeat).
 void bring_next_to_lead(uint8_t* rdram);
 
+// A health bar each (player2_health.cpp):
+// - player 2's slot stands where slot 0 stands, still (while it is down);
+void follow_lead(uint8_t* rdram, int slot);
+// - player 2's slot comes back next to slot 0 (health from health::joining);
+void come_back(uint8_t* rdram, int slot);
+// - slot 0's character is down: the two swap characters, as the lead swap
+//   does (player2_lead.cpp).
+void swap_lead_for_down(uint8_t* rdram);
+
 // Trade player 1's and player 2's controller entries (this frame's reads).
 void route_pads(uint8_t* rdram);
 // No buttons or stick on the controller playing player 2's slot this frame.

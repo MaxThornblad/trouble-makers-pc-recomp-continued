@@ -42,6 +42,7 @@ add_executable(troublemakers
     far_coop.cpp
     player2.cpp
     player2_draw.cpp
+    player2_health.cpp
     player2_camera.cpp
     player2_lead.cpp
     player2_mount.cpp

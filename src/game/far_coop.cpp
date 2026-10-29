@@ -796,6 +796,10 @@ extern "C" void mm_far_shadow(uint8_t* rdram, recomp_context* ctx, uint32_t task
     g_shadow = true;
     g_swapped = true;
     swap_roles(rdram);
+    // The HUD's health bar is slot 0's: in this picture, player 2's slot's.
+    if (const int p2 = mm::player2::slot(rdram); p2 > 0) {
+        MEM_H(0xE0, addr(0x800EF510u)) = std::max<int16_t>(0, MEM_H(0xE0, addr(0x800EF510u + static_cast<uint32_t>(p2) * 0x198u)));
+    }
     ctx->r4 = j;
     Graphics_Begin_Frame(rdram, ctx);
     g_swapped = false;

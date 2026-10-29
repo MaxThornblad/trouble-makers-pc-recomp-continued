@@ -278,6 +278,10 @@ netcode, and the owner decides.
   patch 0007. Test with split_screen=1 and widescreen=1 in the test home.
 - 2026-10-29: preview 3 (Windows, commit 448713b) sent: split screen. Waiting
   for the owner's test results.
+- 2026-10-29: a health bar each (player2_health.cpp, NETPLAY.md "A health bar
+  each"), HUD in the corner in widescreen (README.md 12.2b). Owner's choices:
+  a downed player comes back by the partner (3 s, half health), stage restarts
+  only when both are down; pickups heal the picker.
 - Bot tools: coop_bots --keep DIR keeps every scenario's logs, --port picks
   ports (run two suites at once); traces carry frame numbers (rollbacks).
 - Stage 3-12 (CERBERUS): the owner reported trouble there (details not

@@ -2251,3 +2251,62 @@ extern "C" void mm_ws_after_state_load() {
     // fill cache is rebuilt.
     g_layer_fill_state.valid = false;
 }
+
+// The HUD (func_8000F290: the health bar, the portrait and the item counts)
+// is texture rectangles at the 4:3 picture's positions, so in widescreen it
+// sat near the middle, and moving it further left would put rectangles at
+// negative x. RT64's extended GBI aligns rectangles to the widened picture's
+// left edge instead (gEXSetRectAlign, origin left): the HUD keeps its
+// distance from the corner. The commands go into the game's frame list
+// around the HUD's draw; in 4:3 the same number of no-ops does (the list's
+// length must not depend on each player's display settings, see
+// Gfx_DrawBorderRect in the toml).
+namespace {
+constexpr uint32_t kGfxHead = 0x8012A670u;
+constexpr uint32_t kExtOpcode = 0x64;          // RT64_EXTENDED_OPCODE (unused by Fast3D)
+constexpr uint32_t kHookMagic = 0x525464;      // RT64_HOOK_MAGIC_NUMBER, on G_SPNOOP (0x00)
+constexpr uint32_t kOriginLeft = 0x000, kOriginNone = 0x800;
+
+void put(uint8_t* rdram, uint32_t w0, uint32_t w1) {
+    const uint32_t head = static_cast<uint32_t>(MEM_W(0, rdram_gpr(kGfxHead)));
+    MEM_W(0, static_cast<gpr>(static_cast<int32_t>(head))) = static_cast<int32_t>(w0);
+    MEM_W(4, static_cast<gpr>(static_cast<int32_t>(head))) = static_cast<int32_t>(w1);
+    MEM_W(0, rdram_gpr(kGfxHead)) = static_cast<int32_t>(head + 8);
+}
+void rect_align(uint8_t* rdram, bool on, uint32_t origin) {
+    if (!on) {
+        put(rdram, 0, 0);
+        put(rdram, 0, 0);
+        return;
+    }
+    put(rdram, (kExtOpcode << 24) | 0x000006u, origin | (origin << 12));   // G_EX_SETRECTALIGN_V1
+    put(rdram, 0, 0);                                                     // offsets
+}
+bool g_hud_aligned = false;
+uint32_t g_hud_head = 0;
+} // namespace
+
+extern "C" void mm_ws_hud_begin(uint8_t* rdram) {
+    g_hud_aligned = g_gameplay_wide_active != 0 && !env_enabled("MM_TEST_HUD_4X3");
+    g_hud_head = static_cast<uint32_t>(MEM_W(0, rdram_gpr(kGfxHead)));
+    if (g_hud_aligned) put(rdram, kHookMagic, (0x1u << 28) | kExtOpcode);   // gEXEnable
+    else put(rdram, 0, 0);
+    rect_align(rdram, g_hud_aligned, kOriginLeft);
+}
+
+extern "C" void mm_ws_hud_end(uint8_t* rdram) {
+    static int traced = env_enabled("MM_TEST_HUD") ? 3 : 0;
+    if (traced > 0 && g_hud_aligned) {
+        --traced;
+        const uint32_t end = static_cast<uint32_t>(MEM_W(0, rdram_gpr(kGfxHead)));
+        for (uint32_t a = g_hud_head; a < end && a < g_hud_head + 0x800; a += 8) {
+            std::fprintf(stderr, "[hud] %08X %08X\n", static_cast<uint32_t>(MEM_W(0, static_cast<gpr>(static_cast<int32_t>(a)))),
+                         static_cast<uint32_t>(MEM_W(4, static_cast<gpr>(static_cast<int32_t>(a)))));
+        }
+        std::fprintf(stderr, "[hud] ----\n");
+    }
+    rect_align(rdram, g_hud_aligned, kOriginNone);
+    if (g_hud_aligned) put(rdram, kHookMagic, 0x2u << 28);   // gEXDisable
+    else put(rdram, 0, 0);
+    g_hud_aligned = false;
+}

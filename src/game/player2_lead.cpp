@@ -38,6 +38,7 @@
 #include "far_coop.h"
 #include "frame_input.h"
 #include "player2.h"
+#include "player2_health.h"
 #include "player2_internal.h"
 
 extern "C" void GameState_Gameplay(uint8_t* rdram, recomp_context* ctx);
@@ -115,6 +116,15 @@ void swap_lead(uint8_t* rdram, const char* why) {
                      mm::frame_input::number());
     }
 }
+
+} // namespace
+
+// Slot 0's character is down and the other is up (player2_health.cpp).
+void swap_lead_for_down(uint8_t* rdram) {
+    swap_lead(rdram, "slot 0's character is down");
+}
+
+namespace {
 
 // The gameplay frame once more, from a copy: did it start a transition, or a
 // star flight for slot 0? With the characters swapped, as things are, or as
@@ -203,6 +213,7 @@ void lead_frame(uint8_t* rdram, recomp_context* ctx) {
     if (!mm::cheats::coop_enabled()) return;
     const int p2 = slot(rdram);
     if (p2 <= 0) return;
+    health::frame_begin(rdram);   // slot 0's character down: it swaps into player 2's slot
     if (MEM_W(0, addr(kHoldFrames)) > 0) MEM_W(0, addr(kHoldFrames)) = MEM_W(0, addr(kHoldFrames)) - 1;
     const int32_t n = MEM_W(0, addr(kCount)) + 1;
     MEM_W(0, addr(kCount)) = n;

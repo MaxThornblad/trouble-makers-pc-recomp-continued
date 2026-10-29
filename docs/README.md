@@ -744,6 +744,18 @@ In expanded gameplay, drawing the fixed grid produces checker-shaped holes in
 only the center. The recomp lets its controller advance but starts visual
 iteration at entry 64. Original-mode scenes still draw all 66.
 
+### 12.2b HUD
+
+`func_8000F290` draws the HUD: two texture rectangles per PortraitStruct
+entry 64 (health gauge, `0x80106898`) and 65 (portrait, `0x80106938`), at the
+entries' s16 x / y (`+0x84 / +0x88`, centred coordinates). In widescreen the
+recomp wraps the draw in RT64 extended-GBI commands (gEXEnable,
+gEXSetRectAlign with origin left, then back to none and gEXDisable), so the
+HUD keeps its distance from the widened picture's left edge; in 4:3 the same
+number of no-ops goes into the list. RT64's `extAspectRatio` follows the
+aspect setting (Expand), or the alignment has no effect. Rectangles cannot
+simply move left: their x is unsigned.
+
 ### 12.3 Top-layer color grading
 
 Several scenes express a fixed-viewport color-grade rectangle as a top actor

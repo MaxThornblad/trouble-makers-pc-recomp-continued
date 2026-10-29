@@ -551,3 +551,25 @@ still grab its parts.
   player 2 shakes in it, after a lower slot has updated, so the bit came
   and went unseen. update_core notes it (0x807F0634) and held_swap_begin
   gives it to the object's update next frame.
+
+## A health bar each (2026-10-29, src/game/player2_health.cpp)
+
+- **Own health.** Player 2's character keeps its own health (+0xE0 of her
+  record) instead of starting each update with player 1's. She joins a scene
+  with what she had in the stage's previous scene, else full. Player 1's
+  update, when thrown by her, still writes 30 into her health field; hers is
+  put back after it.
+- **Pickups heal the picker.** Her gems still go to player 1's hit box (the
+  game collects them against slot 0 only); the health player 1 gains in the
+  next three frames moves to her (`health::credit_to_p2`).
+- **Down, then back.** At 0 health a character is "down" for 180 frames: not
+  updated, not drawn (+0x80 bits 0x1, 0x80, 0x400 cleared), not hit, glued to
+  the other character (so the shared camera and the far-apart rules see one
+  player), then it comes back next to the other with half health. The downed
+  one is always player 2's slot: when slot 0's character drops to 0 while the
+  other is up, the two swap first (the lead swap, `swap_lead_for_down`), at
+  GameState_Gameplay's entry, before Marina's update could start her defeat.
+  Only both down lets the game's own defeat run. All in player 2's block
+  (0x638..0x647), so states, rollback and the second machine carry it.
+- **Each view's HUD.** The shadow frame (player 2's picture, and the second
+  half in split screen) shows player 2's slot's health in the HUD bar.

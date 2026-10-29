@@ -228,6 +228,9 @@ void apply_config(RT64::Application& app, const ultramodern::renderer::GraphicsC
     app.userConfig.downsampleMultiplier = downsample;
 
     app.userConfig.aspectRatio = to_rt64_aspect(config.ar_option);
+    // Extended-GBI alignment (the HUD's gEXSetRectAlign, widescreen.cpp)
+    // reaches the widened picture's edges only with this at Expand too.
+    app.userConfig.extAspectRatio = app.userConfig.aspectRatio;
     app.userConfig.antialiasing = to_rt64_msaa(config.msaa_option);
     app.userConfig.refreshRate = to_rt64_refresh(config.rr_option);
     app.userConfig.refreshRateTarget = config.rr_manual_value;
