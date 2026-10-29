@@ -24,6 +24,7 @@
 #ifndef HLSL_CPU
 #define HLSL_CPU
 #endif
+#include "hle/rt64_split_screen.h"
 #include "hle/rt64_application.h"
 #include "hle/rt64_present_queue.h"
 #include "hle/rt64_rdp.h"
@@ -591,9 +592,15 @@ public:
                 height = static_cast<uint32_t>(std::max(client_height, 0));
             }
             if (width > 0 && height > 0) {
-                g_widescreen_scale.store(std::max(
-                    (3.0f * width) / (4.0f * height), 1.0f),
-                    std::memory_order_relaxed);
+                float scale = (3.0f * width) / (4.0f * height);
+                // Split screen: each view is half the window's height.
+                const RT64::SplitScreen& split = RT64::splitScreen();
+                if (split.secondAddress.load(std::memory_order_relaxed) != 0) {
+                    scale *= 2.0f;
+                    const float max_aspect = split.maxAspect.load(std::memory_order_relaxed);
+                    if (max_aspect > 0.0f) scale = std::min(scale, max_aspect * 0.75f);
+                }
+                g_widescreen_scale.store(std::max(scale, 1.0f), std::memory_order_relaxed);
             }
         }
         const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -790,6 +797,13 @@ void set_interpolation_suppressed(bool suppressed) {
             suppressed, std::memory_order_acq_rel) != suppressed) {
         ultramodern::trigger_config_action();
     }
+}
+
+void set_split_screen(uint32_t second_fb, bool second_on_top, float max_aspect) {
+    RT64::SplitScreen& split = RT64::splitScreen();
+    split.maxAspect.store(max_aspect, std::memory_order_relaxed);
+    split.secondOnTop.store(second_on_top, std::memory_order_relaxed);
+    split.secondAddress.store(second_fb & 0x00FFFFFFu, std::memory_order_relaxed);
 }
 
 float get_widescreen_scale() {

@@ -274,6 +274,8 @@ netcode, and the owner decides.
   reproduced yet: after the opening dialogue (Z advances it in tests) the
   test state's Clancers dropped no gems for player 1 either. Test slot 8 in
   /tmp/claude-0/t1/home_12 is 1-2 after the dialogue.
+- Phase 5 (local split screen) built: see NETCODE-V2.md "Phase 5". New RT64
+  patch 0007. Test with split_screen=1 and widescreen=1 in the test home.
 - Bot tools: coop_bots --keep DIR keeps every scenario's logs, --port picks
   ports (run two suites at once); traces carry frame numbers (rollbacks).
 - Stage 3-12 (CERBERUS): the owner reported trouble there (details not

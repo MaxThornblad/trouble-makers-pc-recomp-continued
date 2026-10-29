@@ -1,3 +1,4 @@
+#include "split_view.h"
 #include "gem_compass.h"
 
 #include <algorithm>
@@ -140,13 +141,19 @@ void draw_overlay() {
     // into a 288x192 area of it (144 px either side of the camera centre,
     // 100 px above it and 90 below, measured against gem positions); in
     // widescreen the stage also fills the extra width.
-    const float scale = io.DisplaySize.y / 240.0f;
-    const ImVec2 centre(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
-    const float half_w = g_widescreen.load(std::memory_order_relaxed)
-        ? io.DisplaySize.x * 0.5f : 144.0f * scale;
+    // Split screen: in each view, from that view's camera (split_view.h).
+    const int views = mm::split_view::view_count();
+    for (int view = 0; view < views; ++view) {
+    const mm::split_view::Mapping v = mm::split_view::mapping(view, io.DisplaySize.x, io.DisplaySize.y,
+                                                              g_widescreen.load(std::memory_order_relaxed));
+    const float scale = v.scale;
+    const ImVec2 centre(v.cx, v.cy);
+    const float half_w = views > 1 ? v.half_w * scale
+                                   : (g_widescreen.load(std::memory_order_relaxed) ? io.DisplaySize.x * 0.5f : 144.0f * scale);
     const float top = 100.0f * scale, bottom = 90.0f * scale;
-    const float gx = static_cast<float>(g_dx.load(std::memory_order_relaxed)) * scale;
-    const float gy = -static_cast<float>(g_dy.load(std::memory_order_relaxed)) * scale;   // +y is up
+    const float gx = (static_cast<float>(g_dx.load(std::memory_order_relaxed)) - v.dx) * scale;
+    const float gy = -(static_cast<float>(g_dy.load(std::memory_order_relaxed)) - v.dy) * scale;   // +y is up
+    if (views > 1) dl->PushClipRect(ImVec2(v.x0, v.y0), ImVec2(v.x1, v.y1), true);
     const int dist = g_dist.load(std::memory_order_relaxed);
     char text[32];
     std::snprintf(text, sizeof text, "%d", dist);
@@ -162,7 +169,8 @@ void draw_overlay() {
                               tip, kGold);
         dl->AddTriangle(ImVec2(tip.x - s, tip.y - s * 1.4f), ImVec2(tip.x + s, tip.y - s * 1.4f),
                         tip, kShadow, 1.5f * ui);
-        return;
+        if (views > 1) dl->PopClipRect();
+        continue;
     }
 
     // Off screen: an arrow on the screen edge, on the line from the centre.
@@ -184,6 +192,8 @@ void draw_overlay() {
     draw_gem(dl, gem_at, 9.0f * ui, kGoldDim);
     draw_label(dl, font, text_size * 0.85f,
                ImVec2(gem_at.x - ux * s * 1.2f, gem_at.y - uy * s * 1.2f), text);
+    if (views > 1) dl->PopClipRect();
+    }
 }
 #endif
 

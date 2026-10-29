@@ -45,6 +45,14 @@ namespace mm::graphics {
     // renderer for game-thread background layout. Never less than one.
     float get_widescreen_scale();
 
+    // Local split screen: while second_fb (physical address of a 320x240
+    // framebuffer the game draws a second view into) is not zero, each
+    // present shows the VI's framebuffer and that one in the top and bottom
+    // halves of the window (second_on_top swaps them), each expanded to the
+    // half-height window's aspect ratio, at most max_aspect. Thread-safe;
+    // 0 ends split screen.
+    void set_split_screen(uint32_t second_fb, bool second_on_top, float max_aspect);
+
     // Save-state support. The RDP keeps texture memory, tile descriptors,
     // render modes and colours between display lists, and some of the
     // game's lists draw with state an earlier list left behind. A save state

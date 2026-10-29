@@ -152,6 +152,7 @@ mm::cheats::SessionSettings host_settings() {
     mm::cheats::SessionSettings s = mm::cheats::capture_session_settings();
     s.widescreen = 1;
     s.coop = 1;
+    s.split = 0;   // each player has a screen of her own
     return s;
 }
 

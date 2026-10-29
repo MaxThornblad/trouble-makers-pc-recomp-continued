@@ -1,5 +1,6 @@
 // Player 2's look: her own pose (not player 1's) and the "2P" tag over her
 // head. See player2.h.
+#include "split_view.h"
 #include "player2.h"
 
 #include <algorithm>
@@ -137,6 +138,8 @@ extern "C" void mm_p2_draw_end(uint8_t* rdram, recomp_context*) {
 namespace mm::player2 {
 // The "2P" marker and her health, over her head (same canvas mapping as the
 // enemy bars: 320x240 fills the window height, camera-relative px, +y up).
+void draw_tag(ImDrawList* dl, const Marker& m, float hx, float hy, float scale);
+
 void draw_overlay() {
     const Marker m = current_marker();
     if (!m.visible) return;
@@ -171,7 +174,19 @@ void draw_overlay() {
             dl->AddText(f, size, at, IM_COL32(255, 255, 255, 255), label);
         }
     }
-    const ImVec2 head(centre.x + m.x * scale, centre.y - (m.top + 6.0f) * scale);
+    // Her tag, in each view (split screen: both halves, split_view.h).
+    for (int view = 0; view < mm::split_view::view_count(); ++view) {
+        const mm::split_view::Mapping v = mm::split_view::mapping(view, io.DisplaySize.x, io.DisplaySize.y, true);
+        const float rx = m.x - v.dx, ry = m.top - v.dy;
+        if (mm::split_view::view_count() > 1 && (std::abs(rx) > v.half_w || std::abs(ry) > v.half_h)) continue;
+        dl->PushClipRect(ImVec2(v.x0, v.y0), ImVec2(v.x1, v.y1), true);
+        draw_tag(dl, m, v.cx + rx * v.scale, v.cy - (ry + 6.0f) * v.scale, v.scale);
+        dl->PopClipRect();
+    }
+}
+
+void draw_tag(ImDrawList* dl, const Marker& m, float hx, float hy, float scale) {
+    const ImVec2 head(hx, hy);
     const char* text = "2P";
     ImFont* font = ImGui::GetFont();
     const float size = std::max(10.0f, 6.0f * scale);

@@ -9,6 +9,7 @@
 #include "cheats.h"
 #include "far_coop.h"
 #include "player2.h"
+#include "split_view.h"
 
 #ifdef MM_HAS_GRAPHICS
 #include "imgui.h"
@@ -160,13 +161,18 @@ void draw_overlay() {
     if (n == 0) return;
     const ImGuiIO& io = ImGui::GetIO();
     ImDrawList* dl = ImGui::GetForegroundDrawList();
-    // The canvas mapping the enemy bars use: 320x240 fills the window height.
-    const float scale = io.DisplaySize.y / 240.0f;
-    const ImVec2 centre(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
+    // The canvas mapping the enemy bars use: 320x240 fills the window
+    // height; split screen, each view in its half (split_view.h).
+    const int views = mm::split_view::view_count();
+    for (int view = 0; view < views; ++view) {
+    const mm::split_view::Mapping v = mm::split_view::mapping(view, io.DisplaySize.x, io.DisplaySize.y, true);
+    const float scale = v.scale;
+    const ImVec2 centre(v.cx, v.cy);
+    if (views > 1) dl->PushClipRect(ImVec2(v.x0, v.y0), ImVec2(v.x1, v.y1), true);
     const float w = 34.0f * scale, h = std::max(4.0f, 3.5f * scale);
     for (int i = 0; i < n; ++i) {
         const Bar& b = bars[i];
-        const float cx = centre.x + b.x * scale, cy = centre.y - b.y * scale;
+        const float cx = centre.x + (b.x - v.dx) * scale, cy = centre.y - (b.y - v.dy) * scale;
         const ImVec2 p0(cx - w * 0.5f, cy - h * 0.5f), p1(cx + w * 0.5f, cy + h * 0.5f);
         dl->AddRectFilled(ImVec2(p0.x - 1, p0.y - 1), ImVec2(p1.x + 1, p1.y + 1), IM_COL32(0, 0, 0, 210));
         dl->AddRectFilled(p0, p1, IM_COL32(40, 30, 60, 220));
@@ -180,6 +186,8 @@ void draw_overlay() {
             r = 255;
         }
         dl->AddRectFilled(p0, ImVec2(p0.x + w * f, p1.y), IM_COL32(r, g, bl, 255));
+    }
+    if (views > 1) dl->PopClipRect();
     }
 }
 #else

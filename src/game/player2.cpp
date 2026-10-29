@@ -957,7 +957,10 @@ void publish_marker(uint8_t* rdram, int p2) {
         // slot) when it shows that one (far_coop.h).
         int32_t dx = 0, dy = 0;
         const bool far_apart = mm::faraway::p2_camera_offset(rdram, dx, dy);
-        const bool second_view = far_apart && mm::faraway::shows_second_view(rdram);
+        // (Split screen: both views, positions in the game camera's; the
+        // overlay shifts them for the second view, split_view.h.)
+        const bool split = mm::faraway::split_local();
+        const bool second_view = far_apart && mm::faraway::shows_second_view(rdram) && !split;
         const auto view_x = [&](gpr a) { return (MEM_W(0x88, a) - (second_view ? dx : 0)) >> 16; };
         const auto view_y = [&](gpr a) { return (MEM_W(0x8C, a) - (second_view ? dy : 0)) >> 16; };
         m.visible = true;
@@ -966,7 +969,7 @@ void publish_marker(uint8_t* rdram, int p2) {
         m.health = MEM_H(0xE0, hers);
         m.max_health = MEM_H(0, addr(kP2FullHealth));
         g.joined = false;
-        if (far_apart) {
+        if (far_apart && !split) {
             // The other character than the one this machine's camera follows.
             const gpr partner = second_view ? slot0 : other;
             m.partner = true;

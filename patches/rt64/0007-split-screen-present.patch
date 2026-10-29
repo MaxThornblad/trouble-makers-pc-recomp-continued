@@ -1,0 +1,285 @@
+diff --git a/src/hle/rt64_present.h b/src/hle/rt64_present.h
+index e1889e5..042d26c 100644
+--- a/src/hle/rt64_present.h
++++ b/src/hle/rt64_present.h
+@@ -21,6 +21,9 @@ namespace RT64 {
+         std::vector<FramebufferOperation> fbOperations;
+         DebuggerFramebuffer debuggerFramebuffer;
+         bool paused = false;
++        // Split screen (rt64_split_screen.h), latched with the VI.
++        uint32_t splitFbAddress = 0;
++        bool splitSecondOnTop = false;
+         uint64_t presentId = 0;
+         uint64_t workloadId = 0;
+     };
+diff --git a/src/hle/rt64_present_queue.cpp b/src/hle/rt64_present_queue.cpp
+index fcfa6e0..b79153c 100644
+--- a/src/hle/rt64_present_queue.cpp
++++ b/src/hle/rt64_present_queue.cpp
+@@ -254,6 +254,7 @@ namespace RT64 {
+         this->ext = ext;
+ 
+         viRenderer = std::make_unique<VIRenderer>();
++        viRendererSplit = std::make_unique<VIRenderer>();
+ 
+         presentThreadRunning = true;
+         presentThread = new std::thread(&PresentQueue::threadLoop, this);
+@@ -289,6 +290,7 @@ namespace RT64 {
+             std::memory_order_relaxed);
+ 
+         RenderTarget *colorTarget = nullptr;
++        RenderTarget *splitTarget = nullptr;   // split screen: the second view
+         int32_t framesToPresent = 1;
+         bool lockedWorkloadMutex = false;
+         InterpolatedFrameCounters &frameCounters = ext.sharedResources->interpolatedFrames[ext.sharedResources->interpolatedFramesIndex];
+@@ -360,6 +362,12 @@ namespace RT64 {
+                     }
+                 }
+ 
++                // Split screen draws two framebuffers per present; frame
++                // interpolation covers only one, so it stays off.
++                if (present.splitFbAddress != 0) {
++                    presentFb->interpolationEnabled = false;
++                }
++
+                 if (presentFb->interpolationEnabled) {
+                     framesToPresent = frameCounters.count;
+                 }
+@@ -386,6 +394,18 @@ namespace RT64 {
+                     colorTarget = nullptr;
+                 }
+ 
++                // Split screen: the second view's target (same size and format).
++                if ((present.splitFbAddress != 0) && (colorTarget != nullptr)) {
++                    Framebuffer *splitFb = fbManager.find(present.splitFbAddress);
++                    if (splitFb != nullptr) {
++                        RenderTargetKey splitTargetKey(splitFb->addressStart, splitFb->width, splitFb->siz, Framebuffer::Type::Color);
++                        RenderTarget *candidate = &targetManager.get(splitTargetKey, true);
++                        if (!candidate->isEmpty()) {
++                            splitTarget = candidate;
++                        }
++                    }
++                }
++
+                 if (!present.paused && (viHistory.top().vi != present.screenVI)) {
+                     viHistory.pushVI(present.screenVI, viFb->width);
+                 }
+@@ -542,6 +562,37 @@ namespace RT64 {
+                     }
+                 }
+                 
++                // Split screen: the second view, into the other half.
++                VIRenderer::RenderParams splitParams;
++                if ((renderParams.texture != nullptr) && (splitTarget != nullptr)) {
++                    splitParams = renderParams;
++                    splitParams.textureFormat = splitTarget->format;
++                    splitParams.resolutionScale = splitTarget->resolutionScale;
++                    splitParams.downsamplingScale = 1;
++                    if (splitTarget->downsampleMultiplier > 1) {
++                        splitTarget->downsampleTarget(ext.presentGraphicsWorker, ext.shaderLibrary);
++                        splitParams.texture = splitTarget->downsampledTexture.get();
++                        splitParams.textureWidth = splitTarget->width / splitTarget->downsampleMultiplier;
++                        splitParams.textureHeight = splitTarget->height / splitTarget->downsampleMultiplier;
++                        splitParams.downsamplingScale = splitTarget->downsampleMultiplier;
++                    }
++                    else {
++                        splitTarget->resolveTarget(ext.presentGraphicsWorker, ext.shaderLibrary);
++                        splitParams.texture = splitTarget->getResolvedTexture();
++                        splitParams.textureWidth = splitTarget->width;
++                        splitParams.textureHeight = splitTarget->height;
++                    }
++
++                    const uint32_t halfHeight = ext.swapChain->getHeight() / 2;
++                    const bool secondOnTop = present.splitSecondOnTop;
++                    renderParams.destWidth = ext.swapChain->getWidth();
++                    renderParams.destHeight = halfHeight;
++                    renderParams.destY = secondOnTop ? int32_t(halfHeight) : 0;
++                    splitParams.destWidth = ext.swapChain->getWidth();
++                    splitParams.destHeight = ext.swapChain->getHeight() - halfHeight;
++                    splitParams.destY = secondOnTop ? 0 : int32_t(halfHeight);
++                }
++
+                 commandList->setFramebuffer(swapChainFramebuffer);
+                 commandList->clearColor();
+ 
+@@ -550,6 +601,11 @@ namespace RT64 {
+                     viRenderer->render(renderParams);
+                 }
+ 
++                if (splitParams.texture != nullptr) {
++                    commandList->barriers(RenderBarrierStage::GRAPHICS, RenderTextureBarrier(splitParams.texture, RenderTextureLayout::SHADER_READ));
++                    viRendererSplit->render(splitParams);
++                }
++
+                 RenderHookDraw *drawHook = GetRenderHookDraw();
+                 if (drawHook != nullptr) {
+                     drawHook(commandList, swapChainFramebuffer);
+diff --git a/src/hle/rt64_present_queue.h b/src/hle/rt64_present_queue.h
+index c4277bf..bccddf3 100644
+--- a/src/hle/rt64_present_queue.h
++++ b/src/hle/rt64_present_queue.h
+@@ -138,6 +138,7 @@ namespace RT64 {
+         std::unique_ptr<RenderCommandSemaphore> acquiredSemaphore;
+         std::unique_ptr<RenderCommandSemaphore> drawSemaphore;
+         std::unique_ptr<VIRenderer> viRenderer;
++        std::unique_ptr<VIRenderer> viRendererSplit;   // split screen's second view
+         std::unique_ptr<Inspector> inspector;
+         ProfilingTimer presentProfiler = ProfilingTimer(120);
+         Timestamp presentTimestamp;
+diff --git a/src/hle/rt64_split_screen.h b/src/hle/rt64_split_screen.h
+new file mode 100644
+index 0000000..76c132c
+--- /dev/null
++++ b/src/hle/rt64_split_screen.h
+@@ -0,0 +1,26 @@
++//
++// RT64
++//
++
++#pragma once
++
++#include <atomic>
++#include <cstdint>
++
++namespace RT64 {
++    // Two-player split screen, set by the host. While secondAddress is not
++    // zero, each present draws the VI's framebuffer and the framebuffer at
++    // secondAddress into the top and bottom halves of the window (the VI's
++    // on top unless secondOnTop), and Expand derives the aspect ratio from a
++    // half-height window, capped at maxAspect when it is above zero.
++    struct SplitScreen {
++        std::atomic<uint32_t> secondAddress{ 0 };
++        std::atomic<bool> secondOnTop{ false };
++        std::atomic<float> maxAspect{ 0.0f };
++    };
++
++    inline SplitScreen &splitScreen() {
++        static SplitScreen state;
++        return state;
++    }
++};
+diff --git a/src/hle/rt64_state.cpp b/src/hle/rt64_state.cpp
+index 0722486..9123581 100644
+--- a/src/hle/rt64_state.cpp
++++ b/src/hle/rt64_state.cpp
+@@ -3,6 +3,7 @@
+ //
+ 
+ #include "rt64_state.h"
++#include "rt64_split_screen.h"
+ 
+ #include <cassert>
+ #include <cinttypes>
+@@ -1900,6 +1901,8 @@ namespace RT64 {
+         if (fromEarlyPresent || viDifferent || fbChangesMade || screenChangesMade) {
+             // Push a new renderer event to the timeline for presenting this VI.
+             present.screenVI = newVI;
++            present.splitFbAddress = splitScreen().secondAddress.load(std::memory_order_relaxed);
++            present.splitSecondOnTop = splitScreen().secondOnTop.load(std::memory_order_relaxed);
+             advancePresent(present, false);
+             ext.presentQueue->advanceToNextPresent();
+ 
+diff --git a/src/hle/rt64_workload_queue.cpp b/src/hle/rt64_workload_queue.cpp
+index b706578..e2b6643 100644
+--- a/src/hle/rt64_workload_queue.cpp
++++ b/src/hle/rt64_workload_queue.cpp
+@@ -2,6 +2,7 @@
+ // RT64
+ //
+ 
++#include "rt64_split_screen.h"
+ #include "rt64_workload_queue.h"
+ 
+ #include "common/rt64_thread.h"
+@@ -133,7 +134,16 @@ namespace RT64 {
+         switch (ratioMode) {
+         case UserConfiguration::AspectRatio::Expand:
+             if ((ext.sharedResources->swapChainWidth > 0) && (ext.sharedResources->swapChainHeight > 0)) {
+-                const float derivedRatioTarget = float(ext.sharedResources->swapChainWidth) / float(ext.sharedResources->swapChainHeight);
++                float derivedRatioTarget = float(ext.sharedResources->swapChainWidth) / float(ext.sharedResources->swapChainHeight);
++                // Split screen: each view gets half the window's height.
++                if (splitScreen().secondAddress.load(std::memory_order_relaxed) != 0) {
++                    derivedRatioTarget *= 2.0f;
++                    const float maxAspect = splitScreen().maxAspect.load(std::memory_order_relaxed);
++                    if (maxAspect > 0.0f) {
++                        derivedRatioTarget = std::min(derivedRatioTarget, maxAspect);
++                    }
++                }
++
+                 workloadConfig.aspectRatioTarget = std::max(derivedRatioTarget, workloadConfig.aspectRatioSource);
+             }
+             else {
+diff --git a/src/render/rt64_vi_renderer.cpp b/src/render/rt64_vi_renderer.cpp
+index 89d6822..8878b80 100644
+--- a/src/render/rt64_vi_renderer.cpp
++++ b/src/render/rt64_vi_renderer.cpp
+@@ -72,7 +72,7 @@ namespace RT64 {
+         RenderViewport viewport;
+         RenderRect scissor;
+         hlslpp::float2 fbHdRegion;
+-        getViewportAndScissor(p.swapChain, *p.vi, p.resolutionScale, p.downsamplingScale, viewport, scissor, fbHdRegion);
++        getViewportAndScissor(p.swapChain, *p.vi, p.resolutionScale, p.downsamplingScale, viewport, scissor, fbHdRegion, p.destX, p.destY, p.destWidth, p.destHeight);
+         p.commandList->setViewports(viewport);
+         p.commandList->setScissors(scissor);
+ 
+@@ -103,7 +103,8 @@ namespace RT64 {
+         p.commandList->drawInstanced(3, 1, 0, 0);
+     }
+ 
+-    void VIRenderer::getViewportAndScissor(const RenderSwapChain *swapChain, const VI &vi, hlslpp::float2 resolutionScale, uint32_t downsamplingScale, RenderViewport &viewport, RenderRect &scissor, hlslpp::float2 &fbHdRegion) {
++    void VIRenderer::getViewportAndScissor(const RenderSwapChain *swapChain, const VI &vi, hlslpp::float2 resolutionScale, uint32_t downsamplingScale, RenderViewport &viewport, RenderRect &scissor, hlslpp::float2 &fbHdRegion,
++        int32_t destX, int32_t destY, uint32_t destWidth, uint32_t destHeight) {
+         // We define three different coordinate spaces to work with to translate the VI parameters into the Window.
+         //
+         // VideoSD: This corresponds to the SD TV Scanline space, which is what the VI natively works on.
+@@ -119,7 +120,9 @@ namespace RT64 {
+         // specified by the VI.
+         const hlslpp::float2 sdSize = { float(VI::Width), float(VI::Height) };
+         const hlslpp::float2 hdSize = computeHDSize(sdSize, resolutionScale, downsamplingScale);
+-        const hlslpp::float2 windowSize = { float(swapChain->getWidth()), float(swapChain->getHeight()) };
++        const bool destRect = (destWidth > 0) && (destHeight > 0);
++        const hlslpp::float2 windowSize = destRect ? hlslpp::float2(float(destWidth), float(destHeight)) : hlslpp::float2(float(swapChain->getWidth()), float(swapChain->getHeight()));
++        const hlslpp::float2 windowOffset = destRect ? hlslpp::float2(float(destX), float(destY)) : hlslpp::float2(0.0f, 0.0f);
+         const hlslpp::uint2 fbSize = vi.fbSize();
+         const hlslpp::float2 fbSdRegion = { float(fbSize.x), float(fbSize.y) };
+         fbHdRegion = computeHDSize(fbSdRegion, resolutionScale, downsamplingScale);
+@@ -130,13 +133,13 @@ namespace RT64 {
+         RectI viCropRect = vi.cropRectangle();
+         hlslpp::float2 topLeftViewport = fromSDtoHD({ float(viViewRect.x), float(viViewRect.y) }, sdSize, hdSize);
+         hlslpp::float2 bottomRightViewport = fromSDtoHD({ float(viViewRect.x + viViewRect.w), float(viViewRect.y + viViewRect.h) }, sdSize, hdSize);
+-        topLeftViewport = fromHDtoWindow(topLeftViewport, hdSize, windowSize);
+-        bottomRightViewport = fromHDtoWindow(bottomRightViewport, hdSize, windowSize);
++        topLeftViewport = fromHDtoWindow(topLeftViewport, hdSize, windowSize) + windowOffset;
++        bottomRightViewport = fromHDtoWindow(bottomRightViewport, hdSize, windowSize) + windowOffset;
+ 
+         hlslpp::float2 topLeftScissor = fromSDtoHD({ float(viCropRect.x), float(viCropRect.y) }, sdSize, hdSize);
+         hlslpp::float2 bottomRightScissor = fromSDtoHD({ float(viCropRect.x + viCropRect.w), float(viCropRect.y + viCropRect.h) }, sdSize, hdSize);
+-        topLeftScissor = fromHDtoWindow(topLeftScissor, hdSize, windowSize);
+-        bottomRightScissor = fromHDtoWindow(bottomRightScissor, hdSize, windowSize);
++        topLeftScissor = fromHDtoWindow(topLeftScissor, hdSize, windowSize) + windowOffset;
++        bottomRightScissor = fromHDtoWindow(bottomRightScissor, hdSize, windowSize) + windowOffset;
+ 
+         viewport = RenderViewport(topLeftViewport.x, topLeftViewport.y, bottomRightViewport.x - topLeftViewport.x, bottomRightViewport.y - topLeftViewport.y);
+         scissor = RenderRect(lround(topLeftScissor.x), lround(topLeftScissor.y), lround(bottomRightScissor.x), lround(bottomRightScissor.y));
+diff --git a/src/render/rt64_vi_renderer.h b/src/render/rt64_vi_renderer.h
+index c9d8f29..e5260a4 100644
+--- a/src/render/rt64_vi_renderer.h
++++ b/src/render/rt64_vi_renderer.h
+@@ -31,11 +31,15 @@ namespace RT64 {
+             // Extra rows below VI_ORIGIN to hide from the top of the output
+             // (CRT-overscan emulation; see EnhancementConfiguration).
+             uint32_t extraTopCropRows = 0;
++            // Where in the swapchain to draw (split screen); zero size = all of it.
++            int32_t destX = 0, destY = 0;
++            uint32_t destWidth = 0, destHeight = 0;
+         };
+ 
+         VIRenderer();
+         ~VIRenderer();
+         void render(const RenderParams &p);
+-        static void getViewportAndScissor(const RenderSwapChain *swapChain, const VI &vi, hlslpp::float2 resolutionScale, uint32_t downsamplingScale, RenderViewport &viewport, RenderRect &scissor, hlslpp::float2 &fbHdRegion);
++        static void getViewportAndScissor(const RenderSwapChain *swapChain, const VI &vi, hlslpp::float2 resolutionScale, uint32_t downsamplingScale, RenderViewport &viewport, RenderRect &scissor, hlslpp::float2 &fbHdRegion,
++            int32_t destX = 0, int32_t destY = 0, uint32_t destWidth = 0, uint32_t destHeight = 0);
+     };
+ };
+\ No newline at end of file

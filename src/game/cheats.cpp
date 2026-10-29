@@ -87,6 +87,8 @@ std::atomic<bool> g_session_active{false};
 std::atomic<bool> g_session_hold_dash{true};
 std::atomic<bool> g_session_gem_hints{true};
 std::atomic<bool> g_session_coop{false};
+std::atomic<bool> g_split{false};
+std::atomic<bool> g_session_split{false};
 std::atomic<bool> g_session_follow{false};   // this machine is the guest: the host's settings rule
 
 // The guest's menu cannot change what the host decides for the session.
@@ -125,6 +127,7 @@ void save() {
     f << "damage_numbers=" << (g_damage_numbers.load() ? 1 : 0) << '\n';
     f << "hold_dash=" << (g_hold_dash.load() ? 1 : 0) << '\n';
     f << "coop=" << (g_coop.load() ? 1 : 0) << '\n';
+    f << "split_screen=" << (g_split.load() ? 1 : 0) << '\n';
     f << "throw_objects=" << kThrowStrengths[g_throw_strength[0].load()] << '\n';
     f << "throw_players=" << kThrowStrengths[g_throw_strength[1].load()] << '\n';
 }
@@ -596,6 +599,10 @@ void configure(const std::filesystem::path& folder) {
             g_hold_dash.store(on);
             continue;
         }
+        if (key == "split_screen") {
+            g_split.store(on);
+            continue;
+        }
         if (key == "coop") {
             g_coop.store(on);
             mm_audio_input::set_player2_input(on);
@@ -715,6 +722,19 @@ bool coop_enabled() {
     return g_coop.load(std::memory_order_acquire);
 }
 
+bool split_screen_enabled() {
+    const bool on = g_session.load(std::memory_order_acquire) ? g_session_split.load(std::memory_order_relaxed)
+                                                              : g_split.load(std::memory_order_acquire);
+    return on && coop_enabled();
+}
+
+void toggle_split_screen() {
+    const bool now = !g_split.load();
+    g_split.store(now, std::memory_order_release);
+    std::fprintf(stderr, "[cheats] split screen %s\n", now ? "on" : "off");
+    save();
+}
+
 void toggle_coop() {
     const bool now = !g_coop.load();
     g_coop.store(now, std::memory_order_release);
@@ -786,6 +806,7 @@ SessionSettings capture_session_settings() {
     out.hold_dash = g_hold_dash.load() ? 1 : 0;
     out.gem_hints = g_gem_hints.load() ? 1 : 0;
     out.coop = g_coop.load() ? 1 : 0;
+    out.split = g_split.load() ? 1 : 0;
     out.throw_objects = static_cast<uint8_t>(g_throw_strength[0].load() + 1);
     out.throw_players = static_cast<uint8_t>(g_throw_strength[1].load() + 1);
     return out;
@@ -825,6 +846,7 @@ void set_session_settings(const SessionSettings* settings, bool from_host) {
     g_session_hold_dash.store(settings->hold_dash != 0, std::memory_order_relaxed);
     g_session_gem_hints.store(settings->gem_hints != 0, std::memory_order_relaxed);
     g_session_coop.store(settings->coop != 0, std::memory_order_relaxed);
+    g_session_split.store(settings->split != 0, std::memory_order_relaxed);
     // (0 from a build without the sliders: the default.)
     g_session_throw[0].store(settings->throw_objects ? settings->throw_objects - 1 : kThrowStrengthDefault, std::memory_order_relaxed);
     g_session_throw[1].store(settings->throw_players ? settings->throw_players - 1 : kThrowStrengthDefault, std::memory_order_relaxed);

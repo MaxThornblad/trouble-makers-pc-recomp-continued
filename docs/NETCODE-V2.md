@@ -279,3 +279,32 @@ scenario still compares fingerprints and forbids resyncs.
 
 Env: MM_NET_LOCKSTEP=1 (no prediction), MM_NET_SYNC_TEST=1,
 MM_NET_DEBUG=1 (per-rollback lines), MM_NET_LAG=ms,jitter,loss%.
+
+## Phase 5: local split screen (built 2026-10-29)
+
+- A setting on the Cheats page, "Split screen (local co-op)" (cheats.cfg
+  `split_screen`, SessionSettings `split`, forced off online). With co-op
+  on, the far-apart rules apply locally: each player has a camera.
+- Each frame the second view is drawn as online for the joiner (the shadow
+  frame, far_coop.cpp), but into a framebuffer of its own (physical
+  `0x00F40000` + 0x30000 per game framebuffer) and after the real frame:
+  the real list's first command moves to a head in the mirror, a top list
+  calls the head (the real frame) and branches to the copy, and the real
+  frame's full sync becomes a pipe sync so the frame finishes once.
+- RT64 patch 0007 (patches/rt64/0007-split-screen-present.patch): a host-set
+  `RT64::splitScreen()` (second framebuffer, which on top, max aspect),
+  latched into each Present; the present draws both framebuffers into the
+  window's halves (VIRenderer destination rectangle, a second VIRenderer),
+  Expand takes the aspect from a half-height window capped at 8:3 (the
+  game's widened tile grids reach 640 px; 2.5 broke the tile layers), and
+  frame interpolation is off while split. mm::graphics::set_split_screen
+  sets it; the published widescreen scale doubles accordingly.
+- Person 1 is on top: while player 2 leads, the real frame follows her, so
+  the second view goes on top.
+- Overlays (player 2's tag, enemy bars and damage numbers, throw charge
+  bars, gem compass) publish once from the real frame and draw in each
+  view through split_view.h (view rectangle, scale, camera offset).
+
+Known limits: sound follows the real frame's camera; a thin stale strip
+can show at a view's far left edge (the 8:3 view leaves the tile wings no
+slack); the rank timer and pause hints draw over the whole window.

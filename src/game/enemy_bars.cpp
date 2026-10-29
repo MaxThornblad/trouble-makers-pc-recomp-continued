@@ -1,3 +1,4 @@
+#include "split_view.h"
 #include "enemy_bars.h"
 
 #include <algorithm>
@@ -220,13 +221,18 @@ void draw_overlay() {
     // Same canvas mapping as the gem compass: 320x240 fills the window
     // height; the stage view spans 144 px either side of centre (the whole
     // width in widescreen), 100 px above and 90 below.
-    const float scale = io.DisplaySize.y / 240.0f;
-    const ImVec2 centre(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
-    const float half_w = widescreen ? io.DisplaySize.x * 0.5f : 144.0f * scale;
+    // Split screen: each view in its half (split_view.h).
+    const int views = mm::split_view::view_count();
+    for (int view = 0; view < views; ++view) {
+    const mm::split_view::Mapping v = mm::split_view::mapping(view, io.DisplaySize.x, io.DisplaySize.y, widescreen);
+    const float scale = v.scale;
+    const ImVec2 centre(v.cx, v.cy);
+    const float half_w = views > 1 ? v.half_w * scale : (widescreen ? io.DisplaySize.x * 0.5f : 144.0f * scale);
+    if (views > 1) dl->PushClipRect(ImVec2(v.x0, v.y0), ImVec2(v.x1, v.y1), true);
     const float w = 26.0f * scale, h = std::max(3.0f, 2.8f * scale);
     for (const Bar& b : bars) {
-        const float cx = centre.x + b.x * scale;
-        const float cy = centre.y - b.y * scale;
+        const float cx = centre.x + (b.x - v.dx) * scale;
+        const float cy = centre.y - (b.y - v.dy) * scale;
         if (std::abs(cx - centre.x) > half_w + w || cy < centre.y - 100.0f * scale - h ||
             cy > centre.y + 90.0f * scale) {
             continue;
@@ -248,8 +254,8 @@ void draw_overlay() {
     for (const Number& n : numbers) {
         const float age = static_cast<float>(frame - n.born) / kNumberFrames;
         if (age < 0.0f || age > 1.0f) continue;
-        const float rx = n.x - cam_x;
-        const float ry = n.y - cam_y + 20.0f * (1.0f - (1.0f - age) * (1.0f - age));
+        const float rx = n.x - cam_x - v.dx;
+        const float ry = n.y - cam_y - v.dy + 20.0f * (1.0f - (1.0f - age) * (1.0f - age));
         const float cx = centre.x + rx * scale;
         const float cy = centre.y - ry * scale;
         if (std::abs(cx - centre.x) > half_w || cy < centre.y - 100.0f * scale ||
@@ -274,7 +280,10 @@ void draw_overlay() {
                                       : IM_COL32(255, 235, 120, static_cast<int>(255 * alpha));
         dl->AddText(font, size, pos, colour, text);
     }
+    if (views > 1) dl->PopClipRect();
+    }
 }
+
 #endif
 
 } // namespace mm::enemy_bars

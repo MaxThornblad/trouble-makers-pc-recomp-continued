@@ -14,6 +14,9 @@
 #include "cheats.h"
 #include "netplay.h"
 #include "player2.h"
+#ifdef MM_HAS_GRAPHICS
+#include "mm_graphics.h"
+#endif
 
 extern "C" void YellowGem_GetFlag(uint8_t* rdram, recomp_context* ctx);     // a0: stage; nonzero: the save has its golden gem
 extern "C" void func_80012830(uint8_t* rdram, recomp_context* ctx);          // the camera
@@ -207,12 +210,18 @@ int32_t cheb(int32_t dx, int32_t dy) {
 
 } // namespace
 
+// Local split screen (cheats.h): both players at one machine, a camera and
+// half the window each.
+bool split_local() {
+    return mm::cheats::split_screen_enabled() && !mm::netplay::active();
+}
+
 bool active(uint8_t* rdram) {
     static const int force = [] {   // test: MM_FAR=1 on locally too, =0 off online too
         const char* e = std::getenv("MM_FAR");
         return e ? (e[0] == '1' ? 1 : 0) : -1;
     }();
-    if (force == 0 || (force < 0 && !mm::netplay::active())) return false;
+    if (force == 0 || (force < 0 && !mm::netplay::active() && !split_local())) return false;
     if (!mm::cheats::coop_enabled()) return false;
     const uint16_t state = MEM_HU(0, addr(kGameState));
     if (state != 6 && state != 10) return false;
@@ -283,6 +292,7 @@ bool shows_second_view(uint8_t* rdram) {
     }();
     if (force == 0 || !active(rdram) || !store_valid(rdram)) return false;
     if (force == 1) return true;
+    if (split_local()) return true;   // the second half of the window
     // This machine's person plays player 2's slot: the guest, or the host
     // while player 2 leads (player2.h).
     return mm::netplay::active() && (mm::netplay::player() == 2) != mm::player2::lead_swapped(rdram);
@@ -590,6 +600,11 @@ constexpr uint32_t kLayers = 0x00400000u;        // tile layer lists, 0x18000 (w
 constexpr uint32_t kLayersSize = 0x18000u;
 constexpr uint32_t kMirror = 0x00840000u;        // above what save states and fingerprints cover (8 MB + 256 KB), below 16 MB (RT64 masks 0xFFFFFF)
 constexpr uint32_t kMirrorSize = 0x00380000u;    // one per frame buffer
+// Split screen: player 2's view goes to a framebuffer of its own (one per
+// game framebuffer, 320x240 16-bit), after the mirrors, below 16 MB.
+constexpr uint32_t kSplitFb = kMirror + 2u * kMirrorSize;   // 0x00F40000
+constexpr uint32_t kSplitFbStride = 0x30000u;
+constexpr float kSplitMaxAspect = 8.0f / 3.0f;   // the widened tile grids reach 2x the 4:3 width (widescreen.cpp)
 
 std::vector<uint8_t> g_backup;
 std::vector<uint8_t> g_dirty;
@@ -748,6 +763,12 @@ uint32_t g_shadow_frames = 0;
 // was built last time round; this round's frame is next): on player 2's
 // machine, build her picture and point the task's list at it.
 extern "C" void mm_far_shadow(uint8_t* rdram, recomp_context* ctx, uint32_t task) {
+    const bool split = split_local() && shows_second_view(rdram);
+#ifdef MM_HAS_GRAPHICS
+    static bool split_was = false;
+    if (!split && split_was) mm::graphics::set_split_screen(0, false, 0.0f);   // one picture again
+    split_was = split;
+#endif
     if (!shows_second_view(rdram)) return;
     if (task < 0x80000000u || task >= 0x80800000u) return;
     const uint32_t list_va = static_cast<uint32_t>(MEM_W(0x30, addr(task))) | 0x80000000u;
@@ -807,7 +828,10 @@ extern "C" void mm_far_shadow(uint8_t* rdram, recomp_context* ctx, uint32_t task
         }
     }
     b.fb_from = fb_shadow;
-    b.fb_to = fb_real;
+    // Split screen: into its own framebuffer, drawn after the real frame;
+    // otherwise into the real one, instead of it.
+    const uint32_t fb_split = kSplitFb + i * kSplitFbStride;
+    b.fb_to = split ? fb_split : fb_real;
     const uint32_t start = b.list(b.arena + 0x180u, 0);
 
     // Memory back as it was, exactly.
@@ -819,10 +843,49 @@ extern "C" void mm_far_shadow(uint8_t* rdram, recomp_context* ctx, uint32_t task
         std::fprintf(stderr, "[far] shadow frame too big for its mirror; showing the game's camera\n");
         return;
     }
-    // The real list (frame arenas are outside the netplay fingerprint)
-    // jumps to the copy.
-    MEM_W(0, addr(0x80000000u | list)) = 0x06010000;
-    MEM_W(4, addr(0x80000000u | list)) = static_cast<int32_t>(0x80000000u | start);
+    if (split) {
+        // The real frame first, then player 2's into the second buffer: the
+        // list's first command moves to a little head that goes on with the
+        // rest of the list, called from a top list that then branches to the
+        // copy.
+        const uint32_t head = b.alloc(16, 0), top = b.alloc(16, 0);
+        if (head == 0 || top == 0) {
+            std::fprintf(stderr, "[far] split screen: no room for the frame head\n");
+            return;
+        }
+        b.w32(head, b.r32(list));
+        b.w32(head + 4, b.r32(list + 4));
+        b.w32(head + 8, 0x06010000u);
+        b.w32(head + 12, 0x80000000u | (list + 8));
+        b.w32(top, 0x06000000u);
+        b.w32(top + 4, 0x80000000u | head);
+        b.w32(top + 8, 0x06010000u);
+        b.w32(top + 12, 0x80000000u | start);
+        // One full sync per frame: the real frame's turns into a pipe sync,
+        // so the renderer finishes (and signals) the frame once, after the
+        // second view.
+        for (uint32_t pc = list + 8, n = 0; n < 0x4000u; pc += 8, ++n) {
+            const uint32_t w0 = b.r32(pc);
+            if ((w0 >> 24) == 0xB8) break;
+            if ((w0 >> 24) == 0x06 && ((w0 >> 16) & 0xFF) == 1) break;
+            if ((w0 >> 24) == 0xE9) {
+                b.w32(pc, 0xE7000000u);
+                b.w32(pc + 4, 0);
+            }
+        }
+        MEM_W(0, addr(0x80000000u | list)) = 0x06010000;
+        MEM_W(4, addr(0x80000000u | list)) = static_cast<int32_t>(0x80000000u | top);
+#ifdef MM_HAS_GRAPHICS
+        // Person 1 on top: the real frame follows slot 0, which is player 2's
+        // person while she leads (player2.h).
+        mm::graphics::set_split_screen(fb_split, mm::player2::lead_swapped(rdram), kSplitMaxAspect);
+#endif
+    } else {
+        // The real list (frame arenas are outside the netplay fingerprint)
+        // jumps to the copy.
+        MEM_W(0, addr(0x80000000u | list)) = 0x06010000;
+        MEM_W(4, addr(0x80000000u | list)) = static_cast<int32_t>(0x80000000u | start);
+    }
     static const bool dbg = std::getenv("MM_FAR_DEBUG") != nullptr;
     if (dbg && (g_shadow_frames % 60) == 0) {
         size_t dirty = 0;

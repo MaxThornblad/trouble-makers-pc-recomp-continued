@@ -75,6 +75,11 @@ void toggle_damage_numbers();
 // Co-op: player 2 (player2.cpp) joins on controller 2. A setting, saved.
 bool coop_enabled();
 void toggle_coop();
+// Local split screen (src/game/far_coop.cpp, split screen): with co-op on,
+// each player gets a camera and half of the window. A setting, saved; never
+// online (each player has a screen there).
+bool split_screen_enabled();
+void toggle_split_screen();
 bool hold_dash_enabled();
 void toggle_hold_dash();
 void apply_settings(uint8_t* rdram);   // every frame, debug menu or not
@@ -116,7 +121,7 @@ struct SessionSettings {
     uint8_t coop = 0;         // a second player (online: always)
     uint8_t throw_objects = 0;   // throw strength step + 1 (0: the default, 100%)
     uint8_t throw_players = 0;
-    uint8_t pad_[1]{};
+    uint8_t split = 0;        // local split screen (a gameplay rule: the cameras part)
 };
 SessionSettings capture_session_settings();
 // from_host: this machine is the guest, so its menu cannot change these.

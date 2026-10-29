@@ -45,6 +45,10 @@ bool active(uint8_t* rdram);
 // (player2_lead.cpp). Host hooks with state of their own sit it out.
 bool in_shadow();
 
+// Local split screen is on (cheats.h, not online): both cameras, the second
+// view drawn into its own framebuffer for the window's other half.
+bool split_local();
+
 // The stage's item list, before the game handles it (real frames only): a
 // golden gem the save already has is marked gone by its handler only when
 // the game's own camera reaches it (func_800446F0: YellowGem_GetFlag, then

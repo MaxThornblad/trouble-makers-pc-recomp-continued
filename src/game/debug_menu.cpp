@@ -1,3 +1,4 @@
+#include "split_view.h"
 #include "throw_cheats.h"
 #include "debug_menu.h"
 #include "far_coop.h"
@@ -240,7 +241,7 @@ void change_page(int delta) {
 void move_selection(int delta) {
     const int page = g_page.load(std::memory_order_relaxed);
     if (page == kPageCheats) {
-        const int count = mm::cheats::kCheatCount + 11;   // + fast-forward speed, rank timer, gem hints, gem compass, rumble, enemy bars, damage numbers, hold to dash, co-op, two throw strength rows
+        const int count = mm::cheats::kCheatCount + 12;   // + fast-forward speed, rank timer, gem hints, gem compass, rumble, enemy bars, damage numbers, hold to dash, co-op, two throw strength rows, split screen
         int selected = g_selected_cheat.load(std::memory_order_relaxed);
         selected = (selected + delta + count) % count;
         g_selected_cheat.store(selected, std::memory_order_relaxed);
@@ -297,6 +298,8 @@ void activate_selection() {
             mm::cheats::toggle_hold_dash();
         } else if (selected == mm::cheats::kCheatCount + 8) {
             mm::cheats::toggle_coop();
+        } else if (selected == mm::cheats::kCheatCount + 11) {
+            mm::cheats::toggle_split_screen();
         } else if (const int t = throw_row(selected); t >= 0) {
             // Enter/A steps up, wrapping round to the weakest.
             const auto kind = static_cast<mm::cheats::ThrowKind>(t);
@@ -513,8 +516,12 @@ extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
     // Player 2's picture (far_coop.h): only what is drawn over it comes from
     // this frame; everything else here keeps host state.
     if (mm_far_in_shadow()) {
-        mm::enemy_bars::publish(rdram);
-        mm::throw_cheats::publish(rdram);
+        // (Split screen: overlays publish once, from the real frame, and
+        // draw in both views; split_view.h.)
+        if (!mm::faraway::split_local()) {
+            mm::enemy_bars::publish(rdram);
+            mm::throw_cheats::publish(rdram);
+        }
         return;
     }
     const int game_state = MEM_HU(0, rdram_gpr(kGameState));
@@ -531,7 +538,8 @@ extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
     mm::actors::tick(rdram);
     mm::player2::tick(rdram);
     mm::dev_harness::tick(rdram);
-    if (!mm::faraway::shows_second_view(rdram)) {
+    mm::split_view::publish(rdram);
+    if (!mm::faraway::shows_second_view(rdram) || mm::faraway::split_local()) {
         mm::enemy_bars::publish(rdram);
         mm::throw_cheats::publish(rdram);
     }
@@ -934,6 +942,28 @@ void draw_overlay() {
                     : "How hard the players fly when they throw each other, from 25%% to "
                       "1200%%. Left/Right move the slider; Enter/A steps up. A cheat: it "
                       "works while the debug menu is enabled.");
+                ImGui::PopStyleColor();
+                ImGui::Unindent();
+            }
+        }
+        {
+            const bool row_selected = selected == mm::cheats::kCheatCount + 11;
+            const bool on = mm::cheats::split_screen_enabled();
+            char row[96];
+            std::snprintf(row, sizeof row, "%-5s Split screen (local co-op)", on ? "[ON]" : "[  ]");
+            if (on) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.95f, 0.55f, 1.0f));
+            ImGui::Selectable(row, row_selected);
+            if (on) ImGui::PopStyleColor();
+            if (row_selected) {
+                ImGui::SetScrollHereY(0.5f);
+                ImGui::Indent();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::TextWrapped(
+                    "With co-op on, each player gets her own camera and half of the window: "
+                    "player 1 on top, player 2 below. The players can go anywhere in the "
+                    "stage, as online. Turn Widescreen on in the launcher; each half shows "
+                    "a view twice as wide as the original. Not used online (each player "
+                    "has her own screen there).");
                 ImGui::PopStyleColor();
                 ImGui::Unindent();
             }
