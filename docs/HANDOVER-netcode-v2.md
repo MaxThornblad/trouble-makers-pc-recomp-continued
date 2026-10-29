@@ -7,6 +7,11 @@ build next.
 
 ## 1. The owner and the rules
 
+- **Testing (owner, 2026-10-29, overrides older notes):** per change, run
+  only 1 or 2 basic tests relevant to it, then hand over a build; the owner
+  does the testing himself. No full-suite runs before packages unless he
+  asks.
+
 - Owner: Max (GitHub `MaxThornblad`), plays on Windows (Ryzen 9800X3D,
   RX 9070 XT). Plays online co-op with a friend; the joiner plays in 4:3.
   Writes in English; give short status replies, no long recaps.
