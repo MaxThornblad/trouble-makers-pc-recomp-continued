@@ -136,6 +136,10 @@ NETPLAY = [
     # throw (fingerprints), the host logs its strength.
     ("net-throw", 4, 700, "80:,6:r,10:B,20:,10:A,40:,30:r,150:rB,300:", "700:",
      dict(env={"MM_NET_TOGGLE": "6@30"}, host_re=[r"throw at (?!100%)\d+%: slot \d+ \(an object\)"])),
+    # The guest's connection drops at frame 400: it connects again, the host
+    # restarts both from its game, and the session goes on (no resync counted).
+    ("net-reconnect", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r",
+     dict(env={"MM_NET_TEST_DROP": "400"}, host_re=[r"reconnected from the host's game"], guest=["] reconnected (epoch 2"])),
     # Lockstep stays as a fallback (without lag; net-lag is lockstep with lag).
     ("net-lockstep", 1, 900, "60:,400:r,440:l", "60:,400:l,440:r", dict(env={"MM_NET_LOCKSTEP": "1"})),
     ("net-far", 1, 1500, "60:,1440:r", "60:,1440:l"),

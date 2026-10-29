@@ -2,6 +2,8 @@
 // an address and port, one guest at a time.
 #include "net_transport.h"
 
+#include <chrono>
+
 #include <cstdlib>
 
 #include <enet/enet.h>
@@ -29,7 +31,18 @@ public:
         : host_(host), peer_(peer), is_host_(is_host), waiting_(std::move(waiting)) {}
 
     ~Enet() override {
-        if (peer_) enet_peer_disconnect_now(peer_, 0);
+        // Graceful: what is queued (a goodbye) goes out before the disconnect,
+        // for at most a fifth of a second.
+        if (peer_) {
+            enet_peer_disconnect_later(peer_, 0);
+            ENetEvent ev;
+            const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+            while (std::chrono::steady_clock::now() < until && enet_host_service(host_, &ev, 10) >= 0) {
+                if (ev.type == ENET_EVENT_TYPE_DISCONNECT) break;
+                if (ev.type == ENET_EVENT_TYPE_RECEIVE) enet_packet_destroy(ev.packet);
+            }
+            enet_peer_reset(peer_);
+        }
         enet_host_flush(host_);
         enet_host_destroy(host_);
     }

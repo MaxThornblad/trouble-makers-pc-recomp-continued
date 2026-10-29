@@ -737,6 +737,10 @@ std::vector<SteamFriend> steam_friends() {
     return g_friend_list;
 }
 
+uint64_t steam_current_lobby() {
+    return mm::steam::lobby();
+}
+
 bool steam_hosting() {
     return mm::steam::hosting();
 }

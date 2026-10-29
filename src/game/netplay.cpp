@@ -47,7 +47,7 @@ namespace {
 // ---------------------------------------------------------------- protocol
 
 constexpr uint32_t kMagic = 0x504E4D54u;   // "TMNP"
-constexpr uint32_t kProtocol = 3;   // 3: one side's frame_input (pad, settings, commands) per input
+constexpr uint32_t kProtocol = 4;   // 3: one side's frame_input (pad, settings, commands) per input; 4: kBye
 // Channels: 0 control (hello, refuse, desync), 1 start + input + fingerprints + pings.
 constexpr int kHashEvery = 60;             // frames between fingerprint checks
 
@@ -60,6 +60,7 @@ enum Msg : uint8_t {
     kRefuse = 6,   // host -> guest: reason text
     kPing = 7,     // both: sender's clock (us), answered with kPong
     kPong = 8,     // both: the clock from the ping, back to its sender
+    kBye = 9,      // both: this side ends the session (no reconnecting)
 };
 
 struct Writer {
@@ -178,6 +179,16 @@ bool g_is_host = false;
 bool g_peer_ok = false;             // host: hello accepted; guest: connected
 bool g_start_wanted = false;        // host: start (or resync) at this frame point
 long g_start_at = -1;               // host: start once this global frame comes (after the hello)
+// Reconnecting: the connection dropped mid-session. The host waits (the game
+// stalls for the partner's input, as on a slow link) and restarts both sides
+// from its game when the guest is back; the guest connects again to where it
+// joined. Given up after kReconnectWindow (the stall's own limit).
+constexpr auto kReconnectWindow = std::chrono::seconds(60);
+bool g_reconnecting = false;
+std::chrono::steady_clock::time_point g_reconnect_until{};
+bool g_rejoin_steam = false;        // guest: how it joined, to join again
+std::string g_rejoin_address;
+uint64_t g_rejoin_lobby = 0;
 uint32_t g_epoch = 0;
 int g_delay = 4;                    // frames ahead this side sends its input (net_delay.h)
 bool g_delay_fixed = false;         // MM_NET_DELAY: no adapting
@@ -371,9 +382,16 @@ void end_session(const char* why) {
         recomp::end_save_sandbox();
         g_sandboxed = false;
     }
+    if (g_net && g_partner) {   // a goodbye, so the other side does not wait for a reconnect
+        Writer w;
+        w.put<uint8_t>(kBye);
+        send(0, w);
+        flush();
+    }
     g_net.reset();
     g_peer_ok = false;
     g_start_wanted = false;
+    g_reconnecting = false;
     g_waiting.store(false);
     g_status.store(Status::Off);
     g_player.store(0);
@@ -427,7 +445,10 @@ bool host_start(uint8_t* rdram, recomp_context* ctx) {
     flush();
     begin_running();
     std::fprintf(stderr, "[netplay] %s from the host's game (epoch %u, %zu KiB state)\n",
-                 g_epoch == 1 ? "session started" : "resync", g_epoch, state.size() / 1024);
+                 g_epoch == 1 ? "session started" : (g_reconnecting ? "reconnected" : "resync"), g_epoch,
+                 state.size() / 1024);
+    if (g_reconnecting) set_text("Netplay: the other player is back");
+    g_reconnecting = false;
     return true;
 }
 
@@ -464,10 +485,12 @@ void guest_start(uint8_t* rdram, recomp_context* ctx, Reader& r) {
     }
     g_epoch = epoch;
     g_delay = static_cast<int>(std::clamp<uint32_t>(delay, 1, 30));
-    if (epoch > 1 || g_active.load()) ++g_resyncs;
+    if ((epoch > 1 || g_active.load()) && !g_reconnecting) ++g_resyncs;
     begin_running();
-    std::fprintf(stderr, "[netplay] %s (epoch %u, delay %d)\n", epoch == 1 ? "joined the host's game" : "resynced",
-                 epoch, g_delay);
+    std::fprintf(stderr, "[netplay] %s (epoch %u, delay %d)\n",
+                 epoch == 1 ? "joined the host's game" : (g_reconnecting ? "reconnected" : "resynced"), epoch, g_delay);
+    if (g_reconnecting) set_text("Netplay: reconnected");
+    g_reconnecting = false;
 }
 
 void resync(uint8_t* rdram, recomp_context* ctx, const char* why) {
@@ -503,7 +526,11 @@ void on_packet(uint8_t* rdram, recomp_context* ctx, const uint8_t* data, size_t 
                 return;
             }
             g_peer_ok = true;
-            g_start_at = global_frame() + 20;   // a third of a second of round-trip samples first
+            if (g_active.load()) {
+                g_start_wanted = true;               // back after a drop: restart both from here
+            } else {
+                g_start_at = global_frame() + 20;   // a third of a second of round-trip samples first
+            }
             return;
         }
         case kStart:
@@ -532,6 +559,10 @@ void on_packet(uint8_t* rdram, recomp_context* ctx, const uint8_t* data, size_t 
             }
             return;
         }
+        case kBye:
+            g_partner = false;
+            end_session("the other player left");
+            return;
         case kPing: {
             uint64_t t;
             if (!r.get(t)) return;
@@ -578,7 +609,38 @@ void send_hello() {
     send(0, w);
     flush();
     g_peer_ok = true;
-    set_text("Connected, waiting for the host's game...");
+    if (g_rejoin_steam && g_rejoin_lobby == 0) g_rejoin_lobby = steam_current_lobby();
+    set_text(g_reconnecting ? "Reconnected, waiting for the host's game..." : "Connected, waiting for the host's game...");
+}
+
+std::unique_ptr<Transport> connect_again(std::string& error) {
+    return g_rejoin_steam ? steam_join(g_rejoin_lobby, error) : enet_join(g_rejoin_address, error);
+}
+
+// The connection dropped mid-session (why), or a reconnect attempt failed
+// (why null): keep the session and get the partner back.
+void begin_reconnect(const char* why) {
+    if (why) {
+        std::fprintf(stderr, "[netplay] %s: reconnecting\n", why);
+        g_reconnecting = true;
+        g_reconnect_until = std::chrono::steady_clock::now() + kReconnectWindow;
+    }
+    g_peer_ok = false;
+    g_start_at = -1;
+    if (g_is_host) {
+        set_text("The other player dropped out: waiting up to a minute for them to come back...");
+        return;   // the transport keeps listening (ENet port, Steam lobby)
+    }
+    set_text("Connection lost: reconnecting...");
+    g_net.reset();
+    if (!why) std::this_thread::sleep_for(std::chrono::milliseconds(500));   // between attempts
+    std::string error;
+    auto net = connect_again(error);
+    if (!net) {
+        end_session(("could not reconnect: " + error).c_str());
+        return;
+    }
+    g_net = with_test_lag(std::move(net));
 }
 
 // Handles the connection's events, waiting up to timeout_ms for the first;
@@ -602,12 +664,19 @@ bool service(uint8_t* rdram, recomp_context* ctx, uint32_t timeout_ms) {
                     g_peer_ok = false;
                     g_start_at = -1;
                     set_text(g_net->waiting_text());
+                } else if (g_active.load() || g_reconnecting) {
+                    begin_reconnect("the connection dropped");
+                    return g_net != nullptr;
                 } else {
                     end_session("the other player left");
                     return false;
                 }
                 break;
             case NetEvent::Failed:
+                if (g_reconnecting && !g_is_host && std::chrono::steady_clock::now() < g_reconnect_until) {
+                    begin_reconnect(nullptr);   // not there yet: try again
+                    return g_net != nullptr;
+                }
                 end_session(ev.text.c_str());
                 return false;
             case NetEvent::None:
@@ -651,6 +720,8 @@ void start_joining(const std::string& address) {
     auto net = enet_join(address, error);
     begin(std::move(net), error, false);
     if (!g_net) return;
+    g_rejoin_steam = false;
+    g_rejoin_address = address;
     {
         std::lock_guard lock{g_mutex};
         g_last_address = address;
@@ -673,6 +744,8 @@ void start_joining_steam(uint64_t lobby) {
     std::string error;
     auto net = steam_join(lobby, error);
     begin(std::move(net), error, false);
+    g_rejoin_steam = true;
+    g_rejoin_lobby = lobby;   // 0 (find a friend hosting): the lobby once in (send_hello)
 }
 
 // "<value>[@<frame>]"
@@ -929,7 +1002,7 @@ void run_frame(uint8_t* rdram, recomp_context* ctx) {
             run_frame(rdram, ctx);
             return;
         }
-        if (g_is_host && g_start_wanted && g_frame >= 120) return;   // handled by the caller at once
+        if (g_is_host && g_start_wanted && (g_frame >= 120 || g_reconnecting)) return;   // handled by the caller at once
         if (g_rollback_to < f && g_rollback_mode) {   // what came in asks for a rollback first
             if (begin_rollback(rdram, ctx, g_rollback_to, f)) return;
             g_rollback_to = UINT32_MAX;
@@ -937,7 +1010,7 @@ void run_frame(uint8_t* rdram, recomp_context* ctx) {
         const auto waited = std::chrono::steady_clock::now() - started;
         if (waited > std::chrono::milliseconds(300)) g_waiting.store(true);
         if (waited > std::chrono::seconds(60)) {
-            end_session("the other player stopped responding");
+            end_session(g_reconnecting ? "the other player did not come back" : "the other player stopped responding");
             return;
         }
     }
@@ -1177,6 +1250,19 @@ void on_frame(uint8_t* rdram, recomp_context* ctx) {
     if (g_is_host && mm::savestate::load_generation() != g_seen_load_generation) g_start_wanted = true;
     service(rdram, ctx, 0);
     if (!g_active.load()) return;
+    // Test (MM_NET_TEST_DROP=<frame>, guest): the connection drops there once.
+    static const long drop_at = std::getenv("MM_NET_TEST_DROP") ? std::atol(std::getenv("MM_NET_TEST_DROP")) : -1;
+    static bool dropped = false;
+    if (!g_is_host && !dropped && drop_at >= 0 && static_cast<long>(g_frame) >= drop_at && g_epoch == 1) {
+        dropped = true;
+        begin_reconnect("test: dropped the connection");
+        if (!g_net) return;
+    }
+    // The guest is back after a drop: both start again from here.
+    if (g_is_host && g_start_wanted && g_reconnecting && g_peer_ok) {
+        g_start_wanted = false;
+        host_start(rdram, ctx);
+    }
     // At most one resync every two seconds (a state load is always honoured).
     const bool loaded = g_is_host && mm::savestate::load_generation() != g_seen_load_generation;
     if (g_is_host && g_start_wanted && (loaded || g_frame >= 120)) {
@@ -1184,7 +1270,12 @@ void on_frame(uint8_t* rdram, recomp_context* ctx) {
         resync(rdram, ctx, loaded ? "the host loaded a state" : "the games drifted apart");
     }
     run_frame(rdram, ctx);
-    if (g_is_host && g_start_wanted && g_active.load() && g_frame >= 120) {
+    if (g_is_host && g_start_wanted && g_active.load() && g_reconnecting && g_peer_ok) {
+        // The guest is back after a drop: both start again from here.
+        g_start_wanted = false;
+        host_start(rdram, ctx);
+        run_frame(rdram, ctx);
+    } else if (g_is_host && g_start_wanted && g_active.load() && g_frame >= 120) {
         // Requested while waiting: resync now (this frame point) instead.
         g_start_wanted = false;
         resync(rdram, ctx, "the games drifted apart");

@@ -576,3 +576,26 @@ still grab its parts.
   (0x638..0x647), so states, rollback and the second machine carry it.
 - **Each view's HUD.** The shadow frame (player 2's picture, and the second
   half in split screen) shows player 2's slot's health in the HUD bar.
+
+## Reconnecting, Steam invites, controllers (2026-10-29)
+
+- **Reconnecting.** A connection that drops mid-session no longer ends it.
+  The host's game stalls for the partner's input (as on a slow link) and its
+  transport keeps listening (ENet port, Steam lobby); the guest connects
+  again to where it joined (address, or the Steam lobby it was in). When the
+  guest's hello arrives the host restarts both sides from its game (a new
+  epoch, logged "reconnected", not counted as a resync). Given up after a
+  minute (the stall's limit). Ending a session on purpose sends kBye
+  (protocol 4) so the other side does not wait; ENet now closes gracefully
+  so the goodbye goes out first. Test: `MM_NET_TEST_DROP=<frame>` on the
+  guest, scenario net-reconnect.
+- **Steam without the overlay.** The Session page lists friends online once
+  Steam is started; while hosting, picking one sends a lobby invite
+  (InviteUserToLobby, no overlay needed); otherwise picking a friend who is
+  hosting joins them. The invite window opens only when IsOverlayEnabled.
+- **Controllers.** A controller is claimed by pressing a button on it
+  (player 1 first, then player 2 with co-op on; a lone controller is player
+  1 at once). Hotkeys answer to player 1's controller only. Rumble follows
+  the person: hits, landings and jets on a person's character go to their
+  controller (online, the local one); explosions, shakes and golden gems to
+  everyone (rumble.cpp).
