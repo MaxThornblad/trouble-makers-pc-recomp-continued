@@ -19,6 +19,7 @@
 #include "netplay.h"
 #include "player2_internal.h"
 #include "player2_mount.h"
+#include "throw_cheats.h"
 
 
 extern "C" void func_8004ED10(uint8_t* rdram, recomp_context* ctx);   // Marina's update(slot)
@@ -85,6 +86,8 @@ constexpr size_t globals_size() {
 // in her texture buffers (draw), 0x414 grab cooldown, 0x420 frame header,
 // 0x500 the second camera (far_coop.cpp), 0x600 the lead swap
 // (player2_lead.cpp), 0x610 moon jump rises left per player (cheats.cpp),
+// 0x620 throw charge and 0x628 pending throw strength per character
+// and 0x630 aim per character (throw_cheats.cpp), 0x418 player 2's mount (player2_mount.cpp),
 // 0x1000 display lists, 0x2000 textures, 0x4000 packed frame.
 constexpr uint32_t kP2Globals = 0x807F0000u;
 constexpr uint32_t kP2PrevButtons = kP2Globals + 0x400u;
@@ -629,6 +632,7 @@ void clamp_x(uint8_t* rdram, int32_t centre, int32_t half_width) {
 }
 
 bool g_in_own_call = false;   // inside a func_8004ED10 call made here
+int g_marina_character = 0;   // whose update func_8004ED10 runs: 0 slot 0's character, 1 player 2's slot's
 bool g_p1_deferred = false;   // player 1's update was skipped at its usual place this frame
 
 void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
@@ -762,7 +766,9 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
         MEM_W(0, addr(kCameraPrevY)) = MEM_W(0, addr(kCameraY));
     }
     g_in_own_call = true;
+    g_marina_character = 1;
     func_8004ED10(rdram, ctx);
+    g_marina_character = 0;
     g_in_own_call = false;
     if (holding_p1) {
         // Picking player 1 up, Marina's code puts the carrier 55 px behind
@@ -780,7 +786,9 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
                 MEM_W(0, addr(kCameraPrevY)) = MEM_W(0, addr(kCameraY));
             }
             g_in_own_call = true;
+            g_marina_character = 1;
             func_8004ED10(rdram, ctx);
+            g_marina_character = 0;
             g_in_own_call = false;
         }
     }
@@ -1097,11 +1105,17 @@ extern "C" void mm_p2_contacts_end(uint8_t* rdram) {
 // her (update_core).
 extern "C" int mm_marina_update_hook(uint8_t* rdram) {
     using namespace mm::player2;
-    if (g_in_own_call) return 0;
-    const int p2 = slot(rdram);
-    if (p2 <= 0) return 0;
-    const gpr b = addr(kActors + static_cast<uint32_t>(p2) * kStride);
-    if ((static_cast<uint32_t>(MEM_W(0x80, b)) & kHoldingFlag) == 0 || MEM_HU(0xD6, b) != 0) return 0;
-    g_p1_deferred = true;
-    return 1;
+    if (!g_in_own_call) {
+        const int p2 = slot(rdram);
+        const gpr b = addr(kActors + static_cast<uint32_t>(p2 > 0 ? p2 : 0) * kStride);
+        if (p2 > 0 && (static_cast<uint32_t>(MEM_W(0x80, b)) & kHoldingFlag) != 0 && MEM_HU(0xD6, b) == 0) {
+            g_p1_deferred = true;
+            return 1;
+        }
+    }
+    // The update runs: its character's input is in Marina's words now.
+    // (In player 2's picture pass too: all it changes is game memory, which
+    // that pass puts back, and the picture then shows the same throw.)
+    mm::throw_cheats::before_marina_update(rdram, g_marina_character);
+    return 0;
 }

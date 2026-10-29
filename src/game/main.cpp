@@ -37,6 +37,7 @@
 #include <SDL2/SDL_syswm.h> // HWND extraction for WindowHandle
 #endif
 
+#include "throw_cheats.h"
 #include "ultramodern/ultra64.h"
 #include "ultramodern/ultramodern.hpp"
 #include "librecomp/game.hpp"
@@ -562,6 +563,7 @@ static std::vector<recomp::GameEntry> supported_games() {
 static void draw_overlays() {
     mm::player2::draw_overlay();
     mm::enemy_bars::draw_overlay();
+    mm::throw_cheats::draw_overlay();
     mm::gem_compass::draw_overlay();
     mm::rank_timer::draw_overlay();
     mm::gem_hints::draw_overlay();
@@ -572,6 +574,7 @@ static void draw_overlays() {
 static void draw_overlays_with_debug_menu() {
     mm::player2::draw_overlay();
     mm::enemy_bars::draw_overlay();
+    mm::throw_cheats::draw_overlay();
     mm::gem_compass::draw_overlay();
     mm::rank_timer::draw_overlay();
     mm::gem_hints::draw_overlay();

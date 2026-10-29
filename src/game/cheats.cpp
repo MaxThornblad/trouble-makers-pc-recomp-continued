@@ -55,6 +55,11 @@ constexpr std::array<CheatInfo, kCheatCount> kCheats{{
       "Characters the game keeps from dying (the hopping Clancers in 1-2 and "
       "1-3 and others like them) can be beaten like enemies: hits and throws "
       "take their health, and they go down when it runs out." },
+    { "charged_throw", "Charged throw",
+      "While carrying something, hold the throw button (and a direction) to "
+      "charge the throw; let go to throw. The longer you hold, the harder it "
+      "flies, up to absurd strength after about four seconds. A bar over the "
+      "player shows the charge. Works with the throw strength sliders." },
 }};
 
 std::array<std::atomic<bool>, kCheatCount> g_enabled{};
@@ -68,6 +73,8 @@ std::atomic<bool> g_damage_numbers{true};
 std::atomic<bool> g_hold_dash{true};
 std::atomic<bool> g_coop{false};
 std::atomic<bool> g_active{false};
+std::array<std::atomic<int>, 2> g_throw_strength{kThrowStrengthDefault, kThrowStrengthDefault};   // steps
+std::array<std::atomic<int>, 2> g_session_throw{kThrowStrengthDefault, kThrowStrengthDefault};
 std::filesystem::path g_path;
 std::mutex g_file_mutex;
 
@@ -118,6 +125,8 @@ void save() {
     f << "damage_numbers=" << (g_damage_numbers.load() ? 1 : 0) << '\n';
     f << "hold_dash=" << (g_hold_dash.load() ? 1 : 0) << '\n';
     f << "coop=" << (g_coop.load() ? 1 : 0) << '\n';
+    f << "throw_objects=" << kThrowStrengths[g_throw_strength[0].load()] << '\n';
+    f << "throw_players=" << kThrowStrengths[g_throw_strength[1].load()] << '\n';
 }
 
 // --- Endless jet -----------------------------------------------------------
@@ -616,6 +625,13 @@ void configure(const std::filesystem::path& folder) {
             g_rank_timer.store(on);
             continue;
         }
+        if (key == "throw_objects" || key == "throw_players") {
+            const int value = std::atoi(line.substr(eq + 1).c_str());
+            for (int i = 0; i < kThrowStrengthCount; ++i) {
+                if (kThrowStrengths[i] == value) g_throw_strength[key == "throw_players" ? 1 : 0].store(i);
+            }
+            continue;
+        }
         if (key == "fast_forward_speed") {
             const int value = std::atoi(line.substr(eq + 1).c_str());
             for (int speed : kFastForwardSpeeds) {
@@ -770,7 +786,31 @@ SessionSettings capture_session_settings() {
     out.hold_dash = g_hold_dash.load() ? 1 : 0;
     out.gem_hints = g_gem_hints.load() ? 1 : 0;
     out.coop = g_coop.load() ? 1 : 0;
+    out.throw_objects = static_cast<uint8_t>(g_throw_strength[0].load() + 1);
+    out.throw_players = static_cast<uint8_t>(g_throw_strength[1].load() + 1);
     return out;
+}
+
+int throw_strength(ThrowKind kind) {
+    if (!active_now()) return 100;
+    const int k = static_cast<int>(kind);
+    const int step = g_session.load(std::memory_order_acquire) ? g_session_throw[k].load(std::memory_order_relaxed)
+                                                               : g_throw_strength[k].load(std::memory_order_relaxed);
+    return kThrowStrengths[std::clamp(step, 0, kThrowStrengthCount - 1)];
+}
+
+int throw_strength_setting(ThrowKind kind) {
+    return kThrowStrengths[g_throw_strength[static_cast<int>(kind)].load()];
+}
+
+void adjust_throw_strength(ThrowKind kind, int delta) {
+    if (held_by_host("Throw strength")) return;
+    auto& step = g_throw_strength[static_cast<int>(kind)];
+    const int now = std::clamp(step.load() + delta, 0, kThrowStrengthCount - 1);
+    step.store(now);
+    std::fprintf(stderr, "[cheats] throw strength (%s) %d%%\n", kind == ThrowKind::Players ? "players" : "objects",
+                 kThrowStrengths[now]);
+    save();
 }
 
 void set_session_settings(const SessionSettings* settings, bool from_host) {
@@ -785,6 +825,9 @@ void set_session_settings(const SessionSettings* settings, bool from_host) {
     g_session_hold_dash.store(settings->hold_dash != 0, std::memory_order_relaxed);
     g_session_gem_hints.store(settings->gem_hints != 0, std::memory_order_relaxed);
     g_session_coop.store(settings->coop != 0, std::memory_order_relaxed);
+    // (0 from a build without the sliders: the default.)
+    g_session_throw[0].store(settings->throw_objects ? settings->throw_objects - 1 : kThrowStrengthDefault, std::memory_order_relaxed);
+    g_session_throw[1].store(settings->throw_players ? settings->throw_players - 1 : kThrowStrengthDefault, std::memory_order_relaxed);
     g_session.store(true, std::memory_order_release);
 }
 

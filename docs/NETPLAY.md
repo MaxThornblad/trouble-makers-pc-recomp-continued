@@ -522,3 +522,25 @@ still grab its parts.
   thrown-away frame from a copy, so there it was drawn, every frame, and
   never gone. far_coop.cpp hide_collected_golden_gems marks them gone from
   the whole list in the real frame.
+
+## Throw cheats (src/game/throw_cheats.cpp, owner's request)
+
+- Two sliders on the Cheats page, "Throw strength: objects" and "Throw
+  strength: players", 25% to 1200% (Left/Right on the row; Enter steps
+  up). Saved in cheats.cfg (throw_objects / throw_players, percent), sent
+  with the host's settings online (SessionSettings throw_objects /
+  throw_players: step + 1, 0 = default).
+- A "Charged throw" cheat: while carrying, holding the grab button
+  (0x800BE514's mask, B by default) charges instead of throwing; letting go
+  throws, 100% for a tap rising with the square of the charge to 1500% at
+  4 s, the way last aimed if the direction was let go of with the button.
+  A bar over the player shows the charge (both players; on the joiner's
+  screen from player 2's picture pass).
+- How: the throw's velocity comes from a table (func_800554AC(thrower,
+  object), into the object's +0xF8/+0xFC); a generated hook at its return
+  scales it (players slider when the object is slot 0 or player 2's slot).
+  The charge holds the button back from Marina's input words at
+  func_8004ED10's entry (mm_marina_update_hook) and keeps its state per
+  character in player 2's block (0x620 charge, 0x628 pending strength,
+  0x630 aim), so states, rollbacks and both machines agree. Bot scenario
+  net-throw.

@@ -15,6 +15,7 @@ enum class Cheat : int {
     GemMagnet,
     GrabBlocks,
     MortalNpcs,
+    ChargedThrow,
     Count,
 };
 
@@ -24,6 +25,18 @@ const char* name(Cheat cheat);
 const char* description(Cheat cheat);
 bool enabled(Cheat cheat);
 void toggle(Cheat cheat);
+
+// Throw strength sliders (src/game/throw_cheats.cpp): how hard thrown
+// objects and thrown players fly, in percent of the game's own throw. They
+// are cheats (they act only while cheats are live) and online the host's
+// values rule. Left / right on the row in the Cheats page.
+enum class ThrowKind : int { Objects, Players };
+constexpr int kThrowStrengths[] = {25, 50, 75, 100, 150, 200, 300, 500, 800, 1200};
+constexpr int kThrowStrengthCount = static_cast<int>(sizeof kThrowStrengths / sizeof kThrowStrengths[0]);
+constexpr int kThrowStrengthDefault = 3;   // 100%
+int throw_strength(ThrowKind kind);          // percent in force this frame (100 while cheats are not live)
+int throw_strength_setting(ThrowKind kind);  // this player's own choice (the menu), percent
+void adjust_throw_strength(ThrowKind kind, int delta);   // one step along kThrowStrengths; saved
 
 // Fast-forward speed (held fast-forward hotkey), stored alongside the cheats.
 // Not a cheat: it applies whether or not the debug menu is enabled.
@@ -101,7 +114,9 @@ struct SessionSettings {
     uint8_t gem_hints = 1;
     uint8_t widescreen = 0;   // filled by netplay (not a cheats.cfg setting)
     uint8_t coop = 0;         // a second player (online: always)
-    uint8_t pad_[3]{};
+    uint8_t throw_objects = 0;   // throw strength step + 1 (0: the default, 100%)
+    uint8_t throw_players = 0;
+    uint8_t pad_[1]{};
 };
 SessionSettings capture_session_settings();
 // from_host: this machine is the guest, so its menu cannot change these.

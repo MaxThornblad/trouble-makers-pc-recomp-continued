@@ -1,3 +1,4 @@
+#include "throw_cheats.h"
 #include "debug_menu.h"
 #include "far_coop.h"
 #include "cheats.h"
@@ -216,8 +217,22 @@ void toggle_overlay() {
     std::fprintf(stderr, "[debug-menu] opened\n");
 }
 
+// The Cheats page's throw strength rows: 0 objects, 1 players, -1 another row.
+int throw_row(int selected) {
+    if (selected == mm::cheats::kCheatCount + 9) return 0;
+    if (selected == mm::cheats::kCheatCount + 10) return 1;
+    return -1;
+}
+
 void change_page(int delta) {
     int page = g_page.load(std::memory_order_relaxed);
+    // On a throw strength row, left / right move the slider.
+    if (page == kPageCheats) {
+        if (const int t = throw_row(g_selected_cheat.load(std::memory_order_relaxed)); t >= 0) {
+            mm::cheats::adjust_throw_strength(static_cast<mm::cheats::ThrowKind>(t), delta);
+            return;
+        }
+    }
     page = (page + delta + kPageCount) % kPageCount;
     g_page.store(page, std::memory_order_relaxed);
 }
@@ -225,7 +240,7 @@ void change_page(int delta) {
 void move_selection(int delta) {
     const int page = g_page.load(std::memory_order_relaxed);
     if (page == kPageCheats) {
-        const int count = mm::cheats::kCheatCount + 9;   // + fast-forward speed, rank timer, gem hints, gem compass, rumble, enemy bars, damage numbers, hold to dash, co-op rows
+        const int count = mm::cheats::kCheatCount + 11;   // + fast-forward speed, rank timer, gem hints, gem compass, rumble, enemy bars, damage numbers, hold to dash, co-op, two throw strength rows
         int selected = g_selected_cheat.load(std::memory_order_relaxed);
         selected = (selected + delta + count) % count;
         g_selected_cheat.store(selected, std::memory_order_relaxed);
@@ -282,6 +297,11 @@ void activate_selection() {
             mm::cheats::toggle_hold_dash();
         } else if (selected == mm::cheats::kCheatCount + 8) {
             mm::cheats::toggle_coop();
+        } else if (const int t = throw_row(selected); t >= 0) {
+            // Enter/A steps up, wrapping round to the weakest.
+            const auto kind = static_cast<mm::cheats::ThrowKind>(t);
+            const bool top = mm::cheats::throw_strength_setting(kind) == mm::cheats::kThrowStrengths[mm::cheats::kThrowStrengthCount - 1];
+            mm::cheats::adjust_throw_strength(kind, top ? -mm::cheats::kThrowStrengthCount : 1);
         } else {
             mm::cheats::toggle(static_cast<mm::cheats::Cheat>(selected));
         }
@@ -494,6 +514,7 @@ extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
     // this frame; everything else here keeps host state.
     if (mm_far_in_shadow()) {
         mm::enemy_bars::publish(rdram);
+        mm::throw_cheats::publish(rdram);
         return;
     }
     const int game_state = MEM_HU(0, rdram_gpr(kGameState));
@@ -510,7 +531,10 @@ extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
     mm::actors::tick(rdram);
     mm::player2::tick(rdram);
     mm::dev_harness::tick(rdram);
-    if (!mm::faraway::shows_second_view(rdram)) mm::enemy_bars::publish(rdram);
+    if (!mm::faraway::shows_second_view(rdram)) {
+        mm::enemy_bars::publish(rdram);
+        mm::throw_cheats::publish(rdram);
+    }
     mm::cheats::set_active(g_enabled.load(std::memory_order_acquire));
     if (g_enabled.load(std::memory_order_acquire)) mm::inspector::publish(rdram);
 
@@ -877,8 +901,45 @@ void draw_overlay() {
                 ImGui::Unindent();
             }
         }
+        for (int t = 0; t < 2; ++t) {
+            const auto kind = static_cast<mm::cheats::ThrowKind>(t);
+            const bool row_selected = selected == mm::cheats::kCheatCount + 9 + t;
+            const int percent = mm::cheats::throw_strength_setting(kind);
+            char row[96];
+            std::snprintf(row, sizeof row, "%-5s Throw strength: %s", (std::to_string(percent) + "%").c_str(),
+                          t == 0 ? "objects" : "players");
+            const bool changed = percent != 100;
+            if (changed) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.45f, 0.95f, 0.55f, 1.0f));
+            ImGui::Selectable(row, row_selected);
+            if (changed) ImGui::PopStyleColor();
+            // The slider: one notch per step.
+            {
+                int step = 0;
+                for (int i = 0; i < mm::cheats::kThrowStrengthCount; ++i) {
+                    if (mm::cheats::kThrowStrengths[i] == percent) step = i;
+                }
+                const float frac = static_cast<float>(step) / (mm::cheats::kThrowStrengthCount - 1);
+                ImGui::Indent();
+                ImGui::ProgressBar(frac, ImVec2(220.0f, 6.0f), "");
+                ImGui::Unindent();
+            }
+            if (row_selected) {
+                ImGui::SetScrollHereY(0.5f);
+                ImGui::Indent();
+                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::TextWrapped(t == 0
+                    ? "How hard thrown objects fly (blocks, enemies, characters), from 25%% to "
+                      "1200%% of the normal throw. Left/Right move the slider; Enter/A steps "
+                      "up. A cheat: it works while the debug menu is enabled."
+                    : "How hard the players fly when they throw each other, from 25%% to "
+                      "1200%%. Left/Right move the slider; Enter/A steps up. A cheat: it "
+                      "works while the debug menu is enabled.");
+                ImGui::PopStyleColor();
+                ImGui::Unindent();
+            }
+        }
         ImGui::EndChild();
-        ImGui::TextDisabled("Up/Down: select   Enter/A: change   Esc/B: close");
+        ImGui::TextDisabled("Up/Down: select   Enter/A: change   Left/Right: slider or page   Esc/B: close");
     }
     else if (page == kPageSpawn) {
         const bool show_all = g_spawn_show_all.load(std::memory_order_relaxed);

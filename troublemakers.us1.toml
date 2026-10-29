@@ -289,6 +289,7 @@ hook = [
     { func = "func_8001EC1C", text = '{ extern void mm_p2_contacts_begin(uint8_t*); mm_p2_contacts_begin(rdram); }' },
     { func = "func_8001EC1C", before_vram = 0x8001F884, text = '{ extern void mm_p2_contacts_end(uint8_t*); mm_p2_contacts_end(rdram); }' },
     # Co-op: while player 2 carries player 1, player 1's update runs after player 2's (player2.cpp).
+    { func = "func_800554AC", before_vram = 0x80055524, text = '{ extern void mm_throw_velocity_hook(uint8_t*, recomp_context*); mm_throw_velocity_hook(rdram, ctx); }' },
     { func = "func_8004ED10", text = '{ extern int mm_marina_update_hook(uint8_t*); if (mm_marina_update_hook(rdram)) return; }' },
     # Co-op lead swap (src/game/player2_lead.cpp): player 2 can take slot 0
     # (exits, doors and teleporters answer to it). Input_Update, after both

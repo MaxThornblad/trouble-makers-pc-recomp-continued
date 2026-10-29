@@ -131,6 +131,11 @@ NETPLAY = [
     # frame 500: the characters it made mortal are immortal again.
     ("net-mortal-off", 6, 700, "60:,300:r,300:l", "700:",
      dict(env={"MM_NET_TOGGLE": "5@500"}, host_re=[r"mortal NPCs off: \d+ immortal again"])),
+    # Charged throw (cheat 6) on from frame 30: player 1 picks up a block,
+    # charges for 150 frames and throws; both machines see the same strong
+    # throw (fingerprints), the host logs its strength.
+    ("net-throw", 4, 700, "80:,6:r,10:B,20:,10:A,40:,30:r,150:rB,300:", "700:",
+     dict(env={"MM_NET_TOGGLE": "6@30"}, host_re=[r"throw at (?!100%)\d+%: slot \d+ \(an object\)"])),
     # Lockstep stays as a fallback (without lag; net-lag is lockstep with lag).
     ("net-lockstep", 1, 900, "60:,400:r,440:l", "60:,400:l,440:r", dict(env={"MM_NET_LOCKSTEP": "1"})),
     ("net-far", 1, 1500, "60:,1440:r", "60:,1440:l"),
@@ -235,7 +240,7 @@ def check_trace(text, allowed_rejoins, far=False):
         apart = max(apart, abs(p1[0] - p2[0]))
         if not far:
             for k, who, rel in ((0, "p1", int(m.group(4))), (1, "p2", int(m.group(10)))):
-                edge = 250 if riding else 181
+                edge = 275 if riding else 181   # (a rider at ~240 holds the other ahead of her)
                 if abs(rel) > edge and joined_recently == 0:
                     problems.append("%s off the shared screen at frame %d (x %d)" % (who, n, rel))
         if prev and joined_recently == 0:
