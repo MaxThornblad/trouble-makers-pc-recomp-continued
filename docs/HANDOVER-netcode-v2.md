@@ -259,6 +259,18 @@ netcode, and the owner decides.
   partner's pad, keeps a snapshot per frame, and re-runs frames unpaced
   with presentation off when a late input differs. New scenarios
   net-rollback, net-synctest, net-lockstep. Next: phase 5, split screen.
+- Owner's fourth-session reports (2026-10-28/29), all in docs/NETPLAY.md:
+  3-12 cats (player2_mount.cpp, "invisible host" = edge clamp), lead swap
+  misplacing player 2 (lap-wrap mirror removed), slow carry of player 1,
+  gem magnet for both, mortal NPCs undo, golden gems in player 2's picture,
+  throw sliders + charged throw (throw_cheats.cpp, new toml hook at
+  func_800554AC: regenerate RecompiledFuncs). Open: player 2 cannot shake
+  NPCs for gems (1-2's lying Clancer; shake = pick up + spam Down). Not
+  reproduced yet: after the opening dialogue (Z advances it in tests) the
+  test state's Clancers dropped no gems for player 1 either. Test slot 8 in
+  /tmp/claude-0/t1/home_12 is 1-2 after the dialogue.
+- Bot tools: coop_bots --keep DIR keeps every scenario's logs, --port picks
+  ports (run two suites at once); traces carry frame numbers (rollbacks).
 - Stage 3-12 (CERBERUS): the owner reported trouble there (details not
   given yet). It is a looping auto-scrolling arena (about 785 px round,
   10 px a frame). Save slot 9 in the test home is now a state at its start
