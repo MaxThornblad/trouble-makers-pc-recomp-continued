@@ -280,10 +280,12 @@ scripted characters that are held at 10000 health (the 1-1 cast and the
 like) go down after about three throws, and the 3-11 cats, which the game
 puts back to full health after every hit, go down after one throw.
 **Co-op: player 2** (Cheats page) adds a second Marina, tinted blue with a
-"2P" tag and her own health over her head, for a second controller or the
-keyboard (T F G H or the numpad to move, Y jump, U grab). She joins a moment
-into every scene, the camera frames you both, and if she is defeated or left
-far behind she comes back next to player 1. That is local co-op on one screen.
+"2P" tag and her own health over her head, for the second controller
+connected or the keyboard (by default T F G H or the numpad to move, Y jump,
+U grab). Her controls are on the launcher's Controls page, **Player 2** tab;
+her controller starts with player 1's layout. She joins a moment into every
+scene, the camera frames you both, and if she goes down or is left far
+behind she comes back next to player 1. That is local co-op on one screen.
 **Online co-op**: one player hosts (`--host`, or the Session page's
 **Host a game**) and plays Marina; the other joins with the host's address
 (`--join 100.64.1.2`, or type it on the Session page and pick **Join**) and

@@ -62,6 +62,27 @@ int main() {
     result |= check(binding_is_assigned(ControlDevice::Controller, custom),
                     "reloaded Back binding is assigned");
 
+    // Player 2 (co-op): her own bindings, saved apart from player 1's.
+    result |= check(get_binding(ControlDevice::Controller, N64Input::B, 0, 1) ==
+                        get_binding(ControlDevice::Controller, N64Input::B, 0, 0),
+                    "player 2's controller starts as player 1's");
+    result |= check(get_binding(ControlDevice::Keyboard, N64Input::A, 0, 1) ==
+                        InputBinding{BindingType::Keyboard, SDL_SCANCODE_Y},
+                    "player 2's keyboard A is Y");
+    result |= check(!set_binding(ControlDevice::Keyboard, N64Input::SaveState, 0,
+                                 {BindingType::Keyboard, SDL_SCANCODE_F1}, 1),
+                    "player 2 has no hotkeys");
+    const InputBinding p2_custom{BindingType::ControllerButton, SDL_CONTROLLER_BUTTON_Y};
+    result |= check(set_binding(ControlDevice::Controller, N64Input::A, 0, p2_custom, 1),
+                    "set player 2 binding");
+    result |= check(save_control_config(), "save player 2 binding");
+    reset_all_bindings(ControlDevice::Controller, 1);
+    result |= check(load_control_config(root), "reload player 2 binding");
+    result |= check(get_binding(ControlDevice::Controller, N64Input::A, 0, 1) == p2_custom,
+                    "player 2 binding round-trip");
+    result |= check(get_binding(ControlDevice::Controller, N64Input::A, 1) == custom,
+                    "player 1 binding untouched by player 2's");
+
     SDL_Event event{};
     event.type = SDL_CONTROLLERAXISMOTION;
     event.caxis.axis = SDL_CONTROLLER_AXIS_RIGHTX;

@@ -100,7 +100,10 @@ save-state range), so states, replays and netplay carry them.
   adds a cool blue (00 30 5A) while she is not hit-flashing; an overlay tag
   "2P" with her health sits over her head.
 - Input: controller 2 is reported to the game only with co-op on (second game
-  controller, or T F G H / numpad, Y jump, U grab).
+  controller, or T F G H / numpad, Y jump, U grab); since 2026-10-29 through
+  player 2's own bindings (controls.json "player2", launcher Controls page,
+  Player 2 tab; her controller defaults to player 1's layout, her stick also
+  drives the D-pad bits since only her buttons reach the game).
 - Verified: 3000-frame co-op sessions with random input for both players
   replay identically, including joins and leash rejoins.
 

@@ -507,14 +507,32 @@ void save_controls_with_status(std::string& status) {
     }
 }
 
-void draw_controls_tab(mm_audio_input::ControlDevice& selected_device,
+void draw_controls_tab(int& selected_player,
+                       mm_audio_input::ControlDevice& selected_device,
                        bool& capture_active,
+                       int& capture_player,
                        mm_audio_input::ControlDevice& capture_device,
                        mm_audio_input::N64Input& capture_input,
                        size_t& capture_slot,
                        std::array<bool, SDL_CONTROLLER_AXIS_MAX>& axis_neutral,
                        std::string& status) {
     using namespace mm_audio_input;
+
+    // Player 2 (co-op): her keys and the second game controller.
+    if (ImGui::BeginTabBar("##control_player")) {
+        if (ImGui::BeginTabItem("Player 1")) {
+            selected_player = 0;
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Player 2")) {
+            selected_player = 1;
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+    if (selected_player == 1) {
+        ImGui::TextDisabled("Co-op: the second controller connected, and these keys.");
+    }
 
     if (ImGui::RadioButton("Controller",
             selected_device == ControlDevice::Controller)) {
@@ -546,6 +564,7 @@ void draw_controls_tab(mm_audio_input::ControlDevice& selected_device,
 
         for (size_t index = 0; index < kN64InputCount; ++index) {
             const auto input = static_cast<N64Input>(index);
+            if (selected_player != 0 && is_host_action(input)) break;   // hotkeys: player 1's
             if (input == kFirstHostAction) {
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
@@ -562,9 +581,10 @@ void draw_controls_tab(mm_audio_input::ControlDevice& selected_device,
                 ImGui::TableSetColumnIndex(static_cast<int>(slot + 1));
                 ImGui::PushID(static_cast<int>(slot));
                 const std::string label = binding_name(
-                    get_binding(selected_device, input, slot));
+                    get_binding(selected_device, input, slot, selected_player));
                 if (ImGui::Button(label.c_str(), ImVec2(-FLT_MIN, 0.0f))) {
                     capture_active = true;
+                    capture_player = selected_player;
                     capture_device = selected_device;
                     capture_input = input;
                     capture_slot = slot;
@@ -576,12 +596,12 @@ void draw_controls_tab(mm_audio_input::ControlDevice& selected_device,
 
             ImGui::TableSetColumnIndex(3);
             if (ImGui::SmallButton("Clear")) {
-                clear_bindings(selected_device, input);
+                clear_bindings(selected_device, input, selected_player);
                 save_controls_with_status(status);
             }
             ImGui::TableSetColumnIndex(4);
             if (ImGui::SmallButton("Reset")) {
-                reset_bindings(selected_device, input);
+                reset_bindings(selected_device, input, selected_player);
                 save_controls_with_status(status);
             }
             ImGui::PopID();
@@ -590,7 +610,7 @@ void draw_controls_tab(mm_audio_input::ControlDevice& selected_device,
     }
 
     if (ImGui::Button("Reset all")) {
-        reset_all_bindings(selected_device);
+        reset_all_bindings(selected_device, selected_player);
         save_controls_with_status(status);
     }
     ImGui::SameLine();
@@ -972,6 +992,8 @@ Outcome run(std::u8string game_id, const std::string& version_string,
     mm_audio_input::ControlDevice controls_device =
         mm_audio_input::ControlDevice::Controller;
     mm_audio_input::ControlDevice capture_device = controls_device;
+    int controls_player = 0;
+    int capture_player = 0;
     mm_audio_input::N64Input capture_input = mm_audio_input::N64Input::A;
     size_t capture_slot = 0;
     bool capture_active = false;
@@ -1046,7 +1068,7 @@ Outcome run(std::u8string game_id, const std::string& version_string,
 
             if (accepted) {
                 if (mm_audio_input::set_binding(
-                        capture_device, capture_input, capture_slot, binding)) {
+                        capture_device, capture_input, capture_slot, binding, capture_player)) {
                     save_controls_with_status(controls_status);
                 } else {
                     controls_status = "That input cannot be used for this binding.";
@@ -1310,8 +1332,8 @@ Outcome run(std::u8string game_id, const std::string& version_string,
                 draw_graphics_page(settings, have_desktop, desktop,
                     preset_index, custom_label);
             } else if (page == LauncherPage::Controls) {
-                draw_controls_tab(controls_device, capture_active,
-                    capture_device, capture_input, capture_slot,
+                draw_controls_tab(controls_player, controls_device, capture_active,
+                    capture_player, capture_device, capture_input, capture_slot,
                     axis_neutral, controls_status);
             } else if (page == LauncherPage::Support) {
                 draw_support_tab(support_status);

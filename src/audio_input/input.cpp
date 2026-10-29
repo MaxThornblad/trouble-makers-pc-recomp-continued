@@ -1,6 +1,8 @@
 // Input backend for ultramodern's input::callbacks_t, backed by SDL2 and the
-// persistent two-slot mappings in controls.cpp. The game is single-player, so
-// keyboard and the first SDL game controller are combined into N64 port 0.
+// persistent two-slot mappings in controls.cpp. Keyboard and the first SDL
+// game controller are combined into N64 port 0; with co-op on, player 2's
+// keys and the second game controller, through player 2's bindings, into
+// port 1.
 #include <SDL2/SDL.h>
 
 #include <algorithm>
@@ -118,72 +120,87 @@ void refresh_controller_internal() {
     if (g_player2_input.load(std::memory_order_relaxed)) open_second_controller();
 }
 
-// Controller 2's buttons (N64 bits). The game reads only buttons (never the
-// stick), so the left stick also drives the D-pad bits.
-uint16_t player2_buttons() {
-    uint16_t b = 0;
-    if (SDL_GameController* c = g_controller2) {
-        auto button = [c](SDL_GameControllerButton x) { return SDL_GameControllerGetButton(c, x) != 0; };
-        const float lx = axis_norm(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTX));
-        const float ly = axis_norm(SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTY));
-        if (button(SDL_CONTROLLER_BUTTON_A)) b |= BTN_A;
-        if (button(SDL_CONTROLLER_BUTTON_B) || button(SDL_CONTROLLER_BUTTON_X)) b |= BTN_B;
-        if (button(SDL_CONTROLLER_BUTTON_Y)) b |= BTN_CU;
-        if (button(SDL_CONTROLLER_BUTTON_START)) b |= BTN_START;
-        if (button(SDL_CONTROLLER_BUTTON_LEFTSHOULDER)) b |= BTN_L;
-        if (button(SDL_CONTROLLER_BUTTON_RIGHTSHOULDER)) b |= BTN_R;
-        if (SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > 16000 ||
-            SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) > 16000) b |= BTN_Z;
-        if (button(SDL_CONTROLLER_BUTTON_DPAD_UP) || ly < -kDigitalAxisThreshold) b |= BTN_UP;
-        if (button(SDL_CONTROLLER_BUTTON_DPAD_DOWN) || ly > kDigitalAxisThreshold) b |= BTN_DOWN;
-        if (button(SDL_CONTROLLER_BUTTON_DPAD_LEFT) || lx < -kDigitalAxisThreshold) b |= BTN_LEFT;
-        if (button(SDL_CONTROLLER_BUTTON_DPAD_RIGHT) || lx > kDigitalAxisThreshold) b |= BTN_RIGHT;
-    }
-    // Keyboard: T F G H or the numpad to move, Y / numpad 0 jump (A),
-    // U / numpad . grab (B), numpad Enter start.
-    if (key(SDL_SCANCODE_T) || key(SDL_SCANCODE_KP_8)) b |= BTN_UP;
-    if (key(SDL_SCANCODE_G) || key(SDL_SCANCODE_KP_5) || key(SDL_SCANCODE_KP_2)) b |= BTN_DOWN;
-    if (key(SDL_SCANCODE_F) || key(SDL_SCANCODE_KP_4)) b |= BTN_LEFT;
-    if (key(SDL_SCANCODE_H) || key(SDL_SCANCODE_KP_6)) b |= BTN_RIGHT;
-    if (key(SDL_SCANCODE_Y) || key(SDL_SCANCODE_KP_0)) b |= BTN_A;
-    if (key(SDL_SCANCODE_U) || key(SDL_SCANCODE_KP_PERIOD)) b |= BTN_B;
-    if (key(SDL_SCANCODE_KP_ENTER)) b |= BTN_START;
-    return b;
-}
-
-float binding_strength(InputBinding binding) {
+float binding_strength(InputBinding binding, SDL_GameController* controller) {
     switch (binding.type) {
         case BindingType::None:
             return 0.0f;
         case BindingType::Keyboard:
             return key(static_cast<SDL_Scancode>(binding.id)) ? 1.0f : 0.0f;
         case BindingType::ControllerButton:
-            if (g_controller == nullptr) return 0.0f;
+            if (controller == nullptr) return 0.0f;
             return SDL_GameControllerGetButton(
-                       g_controller, static_cast<SDL_GameControllerButton>(binding.id))
+                       controller, static_cast<SDL_GameControllerButton>(binding.id))
                 ? 1.0f : 0.0f;
         case BindingType::ControllerAxis: {
-            if (g_controller == nullptr || binding.id == 0) return 0.0f;
+            if (controller == nullptr || binding.id == 0) return 0.0f;
             const int encoded_axis = std::abs(binding.id);
             const auto axis = static_cast<SDL_GameControllerAxis>(encoded_axis - 1);
             const float direction = binding.id < 0 ? -1.0f : 1.0f;
             return std::max(0.0f,
-                axis_norm(SDL_GameControllerGetAxis(g_controller, axis)) * direction);
+                axis_norm(SDL_GameControllerGetAxis(controller, axis)) * direction);
         }
     }
     return 0.0f;
 }
 
-float input_strength(N64Input input) {
+// player 0: the keyboard and the first controller; player 1: the keyboard
+// and the second controller, each through that player's bindings.
+float input_strength(N64Input input, int player = 0) {
+    SDL_GameController* const controller = player == 0 ? g_controller : g_controller2;
     float result = 0.0f;
     constexpr std::array devices{
         ControlDevice::Keyboard, ControlDevice::Controller};
     for (ControlDevice device : devices) {
         for (size_t slot = 0; slot < kBindingsPerInput; ++slot) {
-            result = std::max(result, binding_strength(get_binding(device, input, slot)));
+            result = std::max(result, binding_strength(get_binding(device, input, slot, player), controller));
         }
     }
     return result;
+}
+
+struct DigitalInput {
+    N64Input input;
+    uint16_t mask;
+};
+constexpr std::array kDigitalInputs{
+    DigitalInput{N64Input::A, BTN_A},
+    DigitalInput{N64Input::B, BTN_B},
+    DigitalInput{N64Input::Z, BTN_Z},
+    DigitalInput{N64Input::Start, BTN_START},
+    DigitalInput{N64Input::DpadUp, BTN_UP},
+    DigitalInput{N64Input::DpadDown, BTN_DOWN},
+    DigitalInput{N64Input::DpadLeft, BTN_LEFT},
+    DigitalInput{N64Input::DpadRight, BTN_RIGHT},
+    DigitalInput{N64Input::L, BTN_L},
+    DigitalInput{N64Input::R, BTN_R},
+    DigitalInput{N64Input::CUp, BTN_CU},
+    DigitalInput{N64Input::CDown, BTN_CD},
+    DigitalInput{N64Input::CLeft, BTN_CL},
+    DigitalInput{N64Input::CRight, BTN_CR},
+};
+
+// One player's N64 buttons and stick from their bindings.
+uint16_t player_input(int player, float& x, float& y) {
+    uint16_t b = 0;
+    for (const DigitalInput& input : kDigitalInputs) {
+        if (input_strength(input.input, player) >= kDigitalAxisThreshold) b |= input.mask;
+    }
+    x = std::clamp(input_strength(N64Input::AnalogRight, player) - input_strength(N64Input::AnalogLeft, player), -1.0f, 1.0f);
+    y = std::clamp(input_strength(N64Input::AnalogUp, player) - input_strength(N64Input::AnalogDown, player), -1.0f, 1.0f);
+    return b;
+}
+
+// Player 2's buttons. Her pad goes to the game (and netplay) as buttons
+// only, so her stick also drives the D-pad bits, as Marina's own
+// controller handling does for player 1's.
+uint16_t player2_buttons() {
+    float x = 0.0f, y = 0.0f;
+    uint16_t b = player_input(1, x, y);
+    if (y > kDigitalAxisThreshold) b |= BTN_UP;
+    if (y < -kDigitalAxisThreshold) b |= BTN_DOWN;
+    if (x < -kDigitalAxisThreshold) b |= BTN_LEFT;
+    if (x > kDigitalAxisThreshold) b |= BTN_RIGHT;
+    return b;
 }
 
 void poll_input() {
@@ -239,36 +256,8 @@ bool live_input(int controller_num, uint16_t* buttons, float* x, float* y) {
         return true;
     }
 
-    struct DigitalInput {
-        N64Input input;
-        uint16_t mask;
-    };
-    constexpr std::array digital_inputs{
-        DigitalInput{N64Input::A, BTN_A},
-        DigitalInput{N64Input::B, BTN_B},
-        DigitalInput{N64Input::Z, BTN_Z},
-        DigitalInput{N64Input::Start, BTN_START},
-        DigitalInput{N64Input::DpadUp, BTN_UP},
-        DigitalInput{N64Input::DpadDown, BTN_DOWN},
-        DigitalInput{N64Input::DpadLeft, BTN_LEFT},
-        DigitalInput{N64Input::DpadRight, BTN_RIGHT},
-        DigitalInput{N64Input::L, BTN_L},
-        DigitalInput{N64Input::R, BTN_R},
-        DigitalInput{N64Input::CUp, BTN_CU},
-        DigitalInput{N64Input::CDown, BTN_CD},
-        DigitalInput{N64Input::CLeft, BTN_CL},
-        DigitalInput{N64Input::CRight, BTN_CR},
-    };
-
-    uint16_t b = 0;
-    for (const DigitalInput& input : digital_inputs) {
-        if (input_strength(input.input) >= kDigitalAxisThreshold) b |= input.mask;
-    }
-
-    const float sx = input_strength(N64Input::AnalogRight) -
-                     input_strength(N64Input::AnalogLeft);
-    const float sy = input_strength(N64Input::AnalogUp) -
-                     input_strength(N64Input::AnalogDown);
+    float sx = 0.0f, sy = 0.0f;
+    const uint16_t b = player_input(0, sx, sy);
 
     if (b != 0 || std::fabs(sx) > 0.3f || std::fabs(sy) > 0.3f) {
         g_last_activity.store(SDL_GetTicks64(), std::memory_order_relaxed);

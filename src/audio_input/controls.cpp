@@ -1,5 +1,5 @@
 // Persistent keyboard/controller bindings shared by the SDL input backend and
-// the Dear ImGui launcher. The data model follows the established N64 recomp
+// the Dear ImGui launcher, for player 1 and (co-op) player 2. The data model follows the established N64 recomp
 // convention: two typed bindings per logical N64 input, with signed SDL axes.
 
 #include "mm_audio_input.hpp"
@@ -112,10 +112,46 @@ ControlMap make_controller_defaults() {
     return map;
 }
 
-const ControlMap kKeyboardDefaults = make_keyboard_defaults();
-const ControlMap kControllerDefaults = make_controller_defaults();
-ControlMap g_keyboard = kKeyboardDefaults;
-ControlMap g_controller = kControllerDefaults;
+// Player 2 (co-op): keys that don't clash with player 1's defaults (T F G H
+// for the stick, the numpad for the D-pad, Y / U for A / B). No hotkeys.
+ControlMap make_keyboard2_defaults() {
+    ControlMap map{};
+    auto bind = [&](N64Input input, SDL_Scancode scancode, size_t slot = 0) {
+        map[index_of(input)][slot] = {
+            BindingType::Keyboard, static_cast<int>(scancode)};
+    };
+    bind(N64Input::AnalogUp, SDL_SCANCODE_T);
+    bind(N64Input::AnalogDown, SDL_SCANCODE_G);
+    bind(N64Input::AnalogLeft, SDL_SCANCODE_F);
+    bind(N64Input::AnalogRight, SDL_SCANCODE_H);
+    bind(N64Input::DpadUp, SDL_SCANCODE_KP_8);
+    bind(N64Input::DpadDown, SDL_SCANCODE_KP_5);
+    bind(N64Input::DpadDown, SDL_SCANCODE_KP_2, 1);
+    bind(N64Input::DpadLeft, SDL_SCANCODE_KP_4);
+    bind(N64Input::DpadRight, SDL_SCANCODE_KP_6);
+    bind(N64Input::A, SDL_SCANCODE_Y);
+    bind(N64Input::A, SDL_SCANCODE_KP_0, 1);
+    bind(N64Input::B, SDL_SCANCODE_U);
+    bind(N64Input::B, SDL_SCANCODE_KP_PERIOD, 1);
+    bind(N64Input::Start, SDL_SCANCODE_KP_ENTER);
+    return map;
+}
+
+// Player 2's controller: the same layout as player 1's (hotkeys are player
+// 1's alone, and the controller defaults bind none).
+ControlMap make_controller2_defaults() {
+    ControlMap map = make_controller_defaults();
+    for (size_t i = index_of(kFirstHostAction); i < kN64InputCount; ++i) map[i] = {};
+    return map;
+}
+
+constexpr int kPlayers = 2;
+// [player][device], device as ControlDevice.
+const std::array<std::array<ControlMap, 2>, kPlayers> kDefaults = {{
+    {make_keyboard_defaults(), make_controller_defaults()},
+    {make_keyboard2_defaults(), make_controller2_defaults()},
+}};
+std::array<std::array<ControlMap, 2>, kPlayers> g_maps = kDefaults;
 std::filesystem::path g_config_path;
 
 constexpr std::array<const char*, kN64InputCount> kInputNames = {
@@ -136,12 +172,16 @@ constexpr std::array<const char*, kN64InputCount> kConfigNames = {
     "fast_forward",
 };
 
-ControlMap& map_for(ControlDevice device) {
-    return device == ControlDevice::Keyboard ? g_keyboard : g_controller;
+int clamp_player(int player) {
+    return player == 1 ? 1 : 0;
 }
 
-const ControlMap& defaults_for(ControlDevice device) {
-    return device == ControlDevice::Keyboard ? kKeyboardDefaults : kControllerDefaults;
+ControlMap& map_for(ControlDevice device, int player = 0) {
+    return g_maps[clamp_player(player)][device == ControlDevice::Keyboard ? 0 : 1];
+}
+
+const ControlMap& defaults_for(ControlDevice device, int player = 0) {
+    return kDefaults[clamp_player(player)][device == ControlDevice::Keyboard ? 0 : 1];
 }
 
 const char* binding_type_name(BindingType type) {
@@ -209,7 +249,7 @@ bool parse_binding(const nlohmann::json& value, ControlDevice device,
 }
 
 bool load_section(const nlohmann::json& root, const char* section_name,
-                  ControlDevice device) {
+                  ControlDevice device, int player = 0) {
     const auto section_it = root.find(section_name);
     if (section_it == root.end()) return true; // missing section keeps defaults
     if (!section_it->is_object()) {
@@ -218,8 +258,9 @@ bool load_section(const nlohmann::json& root, const char* section_name,
         return false;
     }
 
-    ControlMap& map = map_for(device);
+    ControlMap& map = map_for(device, player);
     for (size_t input_index = 0; input_index < kN64InputCount; ++input_index) {
+        if (player != 0 && input_index >= index_of(kFirstHostAction)) break;   // hotkeys: player 1's
         const auto input_it = section_it->find(kConfigNames[input_index]);
         if (input_it == section_it->end()) continue;
         if (!input_it->is_array()) {
@@ -257,6 +298,11 @@ bool load_file(const std::filesystem::path& path) {
         }
         load_section(root, "keyboard", ControlDevice::Keyboard);
         load_section(root, "controller", ControlDevice::Controller);
+        // Player 2 (co-op), optional: older files keep player 2's defaults.
+        if (const auto p2 = root.find("player2"); p2 != root.end() && p2->is_object()) {
+            load_section(*p2, "keyboard", ControlDevice::Keyboard, 1);
+            load_section(*p2, "controller", ControlDevice::Controller, 1);
+        }
         return true;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "[controls] Could not load %s: %s\n",
@@ -269,9 +315,10 @@ nlohmann::json binding_json(InputBinding binding) {
     return nlohmann::json{{"type", binding_type_name(binding.type)}, {"id", binding.id}};
 }
 
-nlohmann::json section_json(const ControlMap& map) {
+nlohmann::json section_json(const ControlMap& map, bool game_inputs_only = false) {
     nlohmann::json section = nlohmann::json::object();
     for (size_t input_index = 0; input_index < kN64InputCount; ++input_index) {
+        if (game_inputs_only && input_index >= index_of(kFirstHostAction)) break;
         nlohmann::json slots = nlohmann::json::array();
         for (InputBinding binding : map[input_index]) {
             slots.push_back(binding_json(binding));
@@ -321,47 +368,47 @@ const char* input_name(N64Input input) {
     return index < kN64InputCount ? kInputNames[index] : "Unknown";
 }
 
-InputBinding get_binding(ControlDevice device, N64Input input, size_t slot) {
+InputBinding get_binding(ControlDevice device, N64Input input, size_t slot, int player) {
     const size_t index = index_of(input);
     if (index >= kN64InputCount || slot >= kBindingsPerInput) return {};
-    return map_for(device)[index][slot];
+    return map_for(device, player)[index][slot];
 }
 
 bool set_binding(ControlDevice device, N64Input input, size_t slot,
-                 InputBinding binding) {
+                 InputBinding binding, int player) {
     const size_t index = index_of(input);
     if (index >= kN64InputCount || slot >= kBindingsPerInput ||
-        !valid_binding(device, binding)) {
+        !valid_binding(device, binding) || (player != 0 && is_host_action(input))) {
         return false;
     }
-    map_for(device)[index][slot] = binding;
+    map_for(device, player)[index][slot] = binding;
     return true;
 }
 
-bool binding_is_assigned(ControlDevice device, InputBinding binding) {
+bool binding_is_assigned(ControlDevice device, InputBinding binding, int player) {
     if (binding.type == BindingType::None || !valid_binding(device, binding)) {
         return false;
     }
-    const ControlMap& map = map_for(device);
+    const ControlMap& map = map_for(device, player);
     return std::any_of(map.begin(), map.end(), [&](const BindingSlots& slots) {
         return std::find(slots.begin(), slots.end(), binding) != slots.end();
     });
 }
 
-void clear_bindings(ControlDevice device, N64Input input) {
+void clear_bindings(ControlDevice device, N64Input input, int player) {
     const size_t index = index_of(input);
-    if (index < kN64InputCount) map_for(device)[index] = {};
+    if (index < kN64InputCount) map_for(device, player)[index] = {};
 }
 
-void reset_bindings(ControlDevice device, N64Input input) {
+void reset_bindings(ControlDevice device, N64Input input, int player) {
     const size_t index = index_of(input);
     if (index < kN64InputCount) {
-        map_for(device)[index] = defaults_for(device)[index];
+        map_for(device, player)[index] = defaults_for(device, player)[index];
     }
 }
 
-void reset_all_bindings(ControlDevice device) {
-    map_for(device) = defaults_for(device);
+void reset_all_bindings(ControlDevice device, int player) {
+    map_for(device, player) = defaults_for(device, player);
 }
 
 std::string binding_name(InputBinding binding) {
@@ -392,8 +439,7 @@ std::string binding_name(InputBinding binding) {
 
 bool load_control_config(const std::filesystem::path& config_path) {
     g_config_path = config_path / "controls.json";
-    g_keyboard = kKeyboardDefaults;
-    g_controller = kControllerDefaults;
+    g_maps = kDefaults;
 
     std::error_code ec;
     const bool primary_exists = std::filesystem::exists(g_config_path, ec);
@@ -433,8 +479,12 @@ bool save_control_config() {
 
     nlohmann::json root{
         {"version", kConfigVersion},
-        {"keyboard", section_json(g_keyboard)},
-        {"controller", section_json(g_controller)},
+        {"keyboard", section_json(map_for(ControlDevice::Keyboard))},
+        {"controller", section_json(map_for(ControlDevice::Controller))},
+        {"player2", {
+            {"keyboard", section_json(map_for(ControlDevice::Keyboard, 1), true)},
+            {"controller", section_json(map_for(ControlDevice::Controller, 1), true)},
+        }},
     };
 
     std::filesystem::path temporary = g_config_path;

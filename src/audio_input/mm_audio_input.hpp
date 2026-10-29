@@ -33,9 +33,9 @@ void set_input_filter(InputFilter filter);
 // zero while a menu holds input), whatever the filter does. Netplay samples
 // it once per frame on the game thread.
 bool sample_local_input(int controller, uint16_t* buttons, float* x, float* y);   // 0 or 1 (co-op)
-// Co-op: report controller 2 to the game (second game controller, or the
-// keyboard's T F G H / numpad, Y jump, U grab). Off = only controller 1, as
-// the game always had.
+// Co-op: report controller 2 to the game: the second game controller and
+// player 2's keyboard keys, through player 2's bindings (Controls page,
+// Player 2). Off = only controller 1, as the game always had.
 void set_player2_input(bool on);
 
 // The same typed, two-slot binding model used by the modern N64 recomp
@@ -101,14 +101,16 @@ constexpr size_t kBindingsPerInput = 2;
 constexpr size_t kN64InputCount = static_cast<size_t>(N64Input::Count);
 
 const char* input_name(N64Input input);
-InputBinding get_binding(ControlDevice device, N64Input input, size_t slot);
-bool set_binding(ControlDevice device, N64Input input, size_t slot, InputBinding binding);
+// player: 0 = player 1, 1 = player 2 (co-op: her keyboard keys and the
+// second game controller). Hotkeys (host actions) are player 1's alone.
+InputBinding get_binding(ControlDevice device, N64Input input, size_t slot, int player = 0);
+bool set_binding(ControlDevice device, N64Input input, size_t slot, InputBinding binding, int player = 0);
 // Whether an exact, non-empty binding is currently assigned to any N64 input.
 // Host shortcuts use this to yield buttons that the player chose for gameplay.
-bool binding_is_assigned(ControlDevice device, InputBinding binding);
-void clear_bindings(ControlDevice device, N64Input input);
-void reset_bindings(ControlDevice device, N64Input input);
-void reset_all_bindings(ControlDevice device);
+bool binding_is_assigned(ControlDevice device, InputBinding binding, int player = 0);
+void clear_bindings(ControlDevice device, N64Input input, int player = 0);
+void reset_bindings(ControlDevice device, N64Input input, int player = 0);
+void reset_all_bindings(ControlDevice device, int player = 0);
 std::string binding_name(InputBinding binding);
 
 // Load/save <config_path>/controls.json. Loading starts from defaults and only
