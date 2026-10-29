@@ -332,7 +332,9 @@ health, `0x410` frames in her texture buffers, `0x414` grab cooldown,
 `0x418`/`0x41C` her mount (slot, type), `0x420` frame header, `0x500` the
 second camera, `0x600` the lead swap, `0x610` moon jump rises per player,
 `0x620`/`0x628`/`0x630` throw charge, pending strength and aim per character,
-`0x634` what she shook last frame, `0x1000` display lists, `0x2000` textures,
+`0x63C` what she shook last frame, `0x638`-`0x647` and `0x650`-`0x66F`
+health (down timer, saved health, gem actors she touched), `0x648` thrown
+strength per character, `0x1000` display lists, `0x2000` textures,
 `0x4000` packed frame. Host-side state that cannot be game memory is
 registered in the state registry instead (src/game/state_registry.h).
 

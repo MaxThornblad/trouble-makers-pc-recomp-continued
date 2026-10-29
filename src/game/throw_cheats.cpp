@@ -36,6 +36,15 @@ constexpr uint32_t kGrabButton = 0x800BE514u;    // the action button's mask (B 
 constexpr uint32_t kCharge = 0x807F0620u;
 constexpr uint32_t kPending = 0x807F0628u;
 constexpr uint32_t kAim = 0x807F0630u;           // the direction last held while charging
+// Per character: the strength (percent) of the throw that has it in the air
+// now (0: none, or a 100% throw). Marina's thrown state (func_80057C98)
+// keeps her down when she lands for 5 frames per px/frame of the throw's
+// speed, plus 20 (45 for a plain throw), and against a wall for 1 per px/
+// frame, plus 2: at 1200% several seconds. Those times are worked out from
+// the speed she had at this strength's 100%, so the sliders change how far a
+// player flies, not how long she lies.
+constexpr uint32_t kThrownStrength = 0x807F0648u;
+constexpr uint8_t kCarriedState = 0x2F, kThrownState = 0x31;
 constexpr uint16_t kDirections = 0x0F00u;        // d-pad bits (the stick maps onto them)
 
 constexpr int kFullCharge = 240;                 // frames to the top of the bar (4 s)
@@ -87,10 +96,18 @@ std::array<Bar, 2> g_bars{};
 int g_bar_count = 0;
 bool g_widescreen = false;
 
+// The thrown character's strength, or 0 when it is a plain throw.
+gpr thrown_strength(int character) {
+    return addr(kThrownStrength + 4u * static_cast<uint32_t>(character));
+}
+
 } // namespace
 
 void before_marina_update(uint8_t* rdram, int character) {
     g_character = character;
+    // Not carried or thrown any more: no throw of hers is in the air.
+    const uint8_t state = static_cast<uint8_t>(MEM_HU(0xD0, slot_addr(0)) & 0xFF);
+    if (state != kCarriedState && state != kThrownState) MEM_W(0, thrown_strength(character)) = 0;
     const gpr charge = addr(kCharge + 4u * static_cast<uint32_t>(character));
     if (!charging_on() || !gameplay(rdram) || MEM_HU(0, addr(kGamePaused)) != 0) {
         MEM_W(0, charge) = 0;
@@ -211,6 +228,9 @@ extern "C" void mm_throw_velocity_hook(uint8_t* rdram, recomp_context* ctx) {
         percent = static_cast<int>(static_cast<int64_t>(percent) * MEM_W(0, pending) / 100);
         MEM_W(0, pending) = 0;
     }
+    // The thrower is in slot 0 (Marina's update), the player she throws is
+    // the other character.
+    if (player) MEM_W(0, thrown_strength(1 - g_character)) = percent == 100 ? 0 : percent;
     if (percent == 100) return;
     const gpr a = slot_addr(object);
     const int32_t vx = MEM_W(0xF8, a), vy = MEM_W(0xFC, a);
@@ -220,4 +240,30 @@ extern "C" void mm_throw_velocity_hook(uint8_t* rdram, recomp_context* ctx) {
     }
     if (log) std::fprintf(stderr, "[cheats] throw at %d%%: slot %d (%s), velocity %.1f,%.1f -> %.1f,%.1f px/frame\n", percent, object,
                  player ? "a player" : "an object", vx / 65536.0, vy / 65536.0, MEM_W(0xF8, a) / 65536.0, MEM_W(0xFC, a) / 65536.0);
+}
+
+namespace {
+// Back to the time a throw at 100% gives (see kThrownStrength).
+int32_t plain_speed(uint8_t* rdram, int32_t speed) {
+    using namespace mm::throw_cheats;
+    const int percent = MEM_W(0, thrown_strength(g_character));
+    if (percent <= 0) return speed;
+    return static_cast<int32_t>(static_cast<int64_t>(speed) * 100 / percent);
+}
+int32_t px(int32_t v) { return std::abs(v) >> 16; }
+} // namespace
+
+// func_80057C98 (Marina thrown), landing: s0 her record, +0x150 the frames
+// she stays down (0 when out of health), +0x104/+0x108 the throw's speed.
+extern "C" void mm_thrown_down_time(uint8_t* rdram, recomp_context* ctx) {
+    const gpr me = ctx->r16;
+    if (MEM_W(0x150, me) == 0) return;
+    const int32_t speed = plain_speed(rdram, std::abs(MEM_W(0x104, me)) + std::abs(MEM_W(0x108, me)));
+    MEM_W(0x150, me) = 5 * px(speed) + 20;
+}
+
+// ... hitting a wall: she stays against it for |speed x| + 2 frames.
+extern "C" void mm_thrown_wall_time(uint8_t* rdram, recomp_context* ctx) {
+    const gpr me = ctx->r16;
+    MEM_W(0x150, me) = px(plain_speed(rdram, MEM_W(0xF8, me))) + 2;
 }

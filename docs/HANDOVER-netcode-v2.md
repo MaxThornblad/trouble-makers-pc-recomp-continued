@@ -288,6 +288,13 @@ netcode, and the owner decides.
   co-op sound at the nearer camera). Owner to test. Open: nightly builds
   (owner to choose: self-hosted runner on his PC, or keep sending zips; no
   ROM uploads).
+- 2026-10-29 (owner's split-screen report on preview 6): player 2 carrying
+  player 1 is full speed far apart; player 2's gems heal her own bar (also
+  with player 1 full); a thrown player lies as long as at 100% at any throw
+  strength; player 2's charged throw aims again (her aim shared a word with
+  "what she shook": she put player 1 down instead of throwing). New
+  scenarios far-p2-carries-p1-walk, p2-throws-p1. Open: the owner's 1-2
+  split-screen save state "glitching out" (file and description asked for).
 - Bot tools: coop_bots --keep DIR keeps every scenario's logs, --port picks
   ports (run two suites at once); traces carry frame numbers (rollbacks).
 - Stage 3-12 (CERBERUS): the owner reported trouble there (details not

@@ -61,6 +61,11 @@ SCENARIOS = [
     ("both-grab", 1, 400, "80:,6:l,10:B,100:,10:B,200:", "80:,6:r,10:B,100:,10:B,200:", 0),
     ("carry-jump-throw", 4, 500, "80:,6:r,10:B,20:,10:A,40:,30:r,10:B,300:", "500:", 0),
     ("p2-carry-jump", 4, 500, "500:", "80:,6:l,10:B,20:,10:A,40:,30:l,10:B,300:", 0),
+    # Player 2 throws player 1 with the charged throw (on in the test home's
+    # cheats.cfg): her aim used to be wiped (it shared a word with what she
+    # shook) and she put player 1 down instead.
+    ("p2-throws-p1", 1, 600, "600:", "80:,6:r,10:B,20:,60:l,30:,60:r,20:,10:lB,390:", 0,
+     dict(expect=["(a player), velocity"])),
     # A health bar each (player2_health.cpp): player 2 at 0 health goes down
     # and comes back next to player 1 three seconds later, with no defeat.
     ("p2-down", 1, 600, "60:,300:r,240:", "60:,300:l,240:", 1,

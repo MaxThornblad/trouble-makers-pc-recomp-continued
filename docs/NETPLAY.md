@@ -552,8 +552,17 @@ still grab its parts.
   object's update reads it (func_8006E4EC drops a gem) and the end of the
   frame clears it (func_8001FF50). Marina shakes before the actor loop;
   player 2 shakes in it, after a lower slot has updated, so the bit came
-  and went unseen. update_core notes it (0x807F0634) and held_swap_begin
+  and went unseen. update_core notes it (0x807F063C; it was 0x634, which is player 2's throw aim, until 2026-10-29) and held_swap_begin
   gives it to the object's update next frame.
+
+## Thrown players lie down as long as at 100% (2026-10-29, throw_cheats.cpp)
+
+Marina's thrown state (func_80057C98) keeps her down after landing for
+`5 * ((|vx0| + |vy0|) >> 16) + 20` frames (+0x150; +0x104/+0x108 the throw's
+speed) and against a wall for `(|vx| >> 16) + 2`. A throw at 1200% kept her
+down over 6 s. The throw hook records the strength per thrown character
+(0x807F0648) and two hooks (0x800584BC, 0x80058180) work both times out from
+the 100% speed: strength changes how far she flies, not how long she lies.
 
 ## A health bar each (2026-10-29, src/game/player2_health.cpp)
 
@@ -563,8 +572,14 @@ still grab its parts.
   update, when thrown by her, still writes 30 into her health field; hers is
   put back after it.
 - **Pickups heal the picker.** Her gems still go to player 1's hit box (the
-  game collects them against slot 0 only); the health player 1 gains in the
-  next three frames moves to her (`health::credit_to_p2`).
+  game collects them against slot 0 only), and for that collection slot 0
+  carries her health, so the game heals her (up to its cap, also when
+  player 1's bar is full; crediting player 1's gain did nothing then).
+  Stage gems: from her pickup pass to func_800451E4's return. Gem actors
+  (knocked out of enemies, caught a few frames after the touch): marked in
+  her block (0x650, one bit per slot) until collected, and swapped around
+  the gem's own update, where the game heals (func_800303A8 > func_8002F93C
+  > func_80057320).
 - **Down, then back.** At 0 health a character is "down" for 180 frames: not
   updated, not drawn (+0x80 bits 0x1, 0x80, 0x400 cleared), not hit, glued to
   the other character (so the shared camera and the far-apart rules see one

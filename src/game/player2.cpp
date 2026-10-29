@@ -88,7 +88,7 @@ constexpr size_t globals_size() {
 // 0x500 the second camera (far_coop.cpp), 0x600 the lead swap
 // (player2_lead.cpp), 0x610 moon jump rises left per player (cheats.cpp),
 // 0x620 throw charge and 0x628 pending throw strength per character
-// and 0x630 aim per character (throw_cheats.cpp), 0x634 what she shook, 0x638..0x66F health (player2_health.cpp),
+// and 0x630 aim per character (throw_cheats.cpp), 0x63C what she shook, 0x638 and 0x640..0x647 and 0x650..0x66F health (player2_health.cpp), 0x648 thrown strength per character (throw_cheats.cpp),
 // 0x418 player 2's mount (player2_mount.cpp),
 // 0x1000 display lists, 0x2000 textures, 0x4000 packed frame.
 constexpr uint32_t kP2Globals = 0x807F0000u;
@@ -97,7 +97,7 @@ constexpr uint32_t kP2JoinTimer = kP2Globals + 0x404u;     // frames P1 has been
 constexpr uint32_t kP2AwayTimer = kP2Globals + 0x408u;     // frames P2 has been too far from P1
 constexpr uint32_t kP2FullHealth = kP2Globals + 0x40Cu;    // the most health either player has had (s16)
 constexpr uint32_t kP2GrabCooldown = kP2Globals + 0x414u;  // frames until the players may grab each other again
-constexpr uint32_t kP2Shaken = kP2Globals + 0x634u;   // slot + 1 of what she shook last frame (0: none)
+constexpr uint32_t kP2Shaken = kP2Globals + 0x63Cu;   // slot + 1 of what she shook last frame (0: none)
 constexpr uint32_t kShakenBit = 0x00020000u;          // +0x98: being shaken this frame
 
 constexpr uint32_t kGameState = 0x800BE4F0u;   // 6 and 10 = stage gameplay
