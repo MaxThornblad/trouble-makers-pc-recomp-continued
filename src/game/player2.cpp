@@ -87,7 +87,7 @@ constexpr size_t globals_size() {
 // 0x500 the second camera (far_coop.cpp), 0x600 the lead swap
 // (player2_lead.cpp), 0x610 moon jump rises left per player (cheats.cpp),
 // 0x620 throw charge and 0x628 pending throw strength per character
-// and 0x630 aim per character (throw_cheats.cpp), 0x418 player 2's mount (player2_mount.cpp),
+// and 0x630 aim per character (throw_cheats.cpp), 0x634 what she shook, 0x418 player 2's mount (player2_mount.cpp),
 // 0x1000 display lists, 0x2000 textures, 0x4000 packed frame.
 constexpr uint32_t kP2Globals = 0x807F0000u;
 constexpr uint32_t kP2PrevButtons = kP2Globals + 0x400u;
@@ -95,6 +95,8 @@ constexpr uint32_t kP2JoinTimer = kP2Globals + 0x404u;     // frames P1 has been
 constexpr uint32_t kP2AwayTimer = kP2Globals + 0x408u;     // frames P2 has been too far from P1
 constexpr uint32_t kP2FullHealth = kP2Globals + 0x40Cu;    // the most health either player has had (s16)
 constexpr uint32_t kP2GrabCooldown = kP2Globals + 0x414u;  // frames until the players may grab each other again
+constexpr uint32_t kP2Shaken = kP2Globals + 0x634u;   // slot + 1 of what she shook last frame (0: none)
+constexpr uint32_t kShakenBit = 0x00020000u;          // +0x98: being shaken this frame
 
 constexpr uint32_t kGameState = 0x800BE4F0u;   // 6 and 10 = stage gameplay
 constexpr uint32_t kCameraX = 0x800BE558u, kCameraY = 0x800BE55Cu;
@@ -516,6 +518,12 @@ void held_swap_end(uint8_t* rdram) {
 void held_swap_begin(uint8_t* rdram, int actor) {
     held_swap_end(rdram);
     if (!mm::cheats::coop_enabled()) return;
+    // Shaken by player 2 last frame (update_core): the object sees it now.
+    if (MEM_W(0, addr(kP2Shaken)) == actor + 1) {
+        const gpr o = addr(kActors + static_cast<uint32_t>(actor) * kStride);
+        MEM_W(0x98, o) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0x98, o)) | kShakenBit);
+        MEM_W(0, addr(kP2Shaken)) = 0;
+    }
     const int p2 = slot(rdram);
     if (p2 <= 0 || actor == p2 || actor == 0) return;
     const gpr b = addr(kActors + static_cast<uint32_t>(p2) * kStride);
@@ -830,6 +838,20 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
                 std::memcpy(p1_record.data() + 0x8C, &hy, 4);
             }
         }
+    }
+
+    // Shaking what she holds (func_8004FDF8) sets its +0x98 bit 0x20000,
+    // which its own update reads (a Clancer drops a gem, func_8006E4EC) and
+    // the end of the frame clears (func_8001FF50). Marina shakes before the
+    // actor loop; player 2 shakes in it, after anything in a lower slot has
+    // updated, so for that the bit came and went unseen. It is kept for the
+    // object's update next frame (held_swap_begin).
+    {
+        const int held = MEM_HU(0xD6, addr(kActors));
+        const bool holding = (static_cast<uint32_t>(MEM_W(0x80, addr(kActors))) & kHoldingFlag) != 0;
+        const bool shaken = holding && held > 0 && held < slot && held < 0xD0 &&
+                            (static_cast<uint32_t>(MEM_W(0x98, addr(kActors + static_cast<uint32_t>(held) * kStride))) & kShakenBit) != 0;
+        MEM_W(0, addr(kP2Shaken)) = shaken ? held + 1 : 0;
     }
 
     // Player 2 out, player 1 back.

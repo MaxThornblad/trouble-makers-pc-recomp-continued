@@ -544,3 +544,10 @@ still grab its parts.
   character in player 2's block (0x620 charge, 0x628 pending strength,
   0x630 aim), so states, rollbacks and both machines agree. Bot scenario
   net-throw.
+- Player 2 shaking a character dropped no gems (1-2's lying Clancer).
+  Shaking sets the held object's +0x98 bit 0x20000 (func_8004FDF8); the
+  object's update reads it (func_8006E4EC drops a gem) and the end of the
+  frame clears it (func_8001FF50). Marina shakes before the actor loop;
+  player 2 shakes in it, after a lower slot has updated, so the bit came
+  and went unseen. update_core notes it (0x807F0634) and held_swap_begin
+  gives it to the object's update next frame.
