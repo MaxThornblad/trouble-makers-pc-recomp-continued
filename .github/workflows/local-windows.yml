@@ -1,0 +1,121 @@
+# Windows builds on the owner's own PC (a self-hosted GitHub Actions runner),
+# so the ROM never leaves that machine and builds stay private: each build
+# goes to a folder on that PC, nothing is uploaded. Setup and safety notes:
+# docs/LOCAL_BUILDS.md.
+#
+# The runner machine provides (in the runner folder's .env file):
+#   TM_ROM_PATH      the US 1.1 ROM (checked by SHA-256)
+#   TM_STEAM_DLL     steam_api64.dll from Steamworks.NET Standalone 2025.164.1
+#                    (checked by SHA-256; optional, without it no Steam netplay)
+#   TM_BUILDS_DIR    where finished zips go (default %USERPROFILE%\TroubleMakersBuilds)
+#
+# Triggers: pushes to the fork's own branches, a nightly run, and by hand.
+# Never pull requests: code from someone else's pull request must not run on
+# this PC.
+name: local-windows
+
+on:
+  push:
+    branches: [ main, netcode-v2 ]
+  schedule:
+    - cron: '17 1 * * *'   # 01:17 UTC nightly (only builds when there is something new)
+  workflow_dispatch:
+
+concurrency:
+  group: local-windows
+  cancel-in-progress: true
+
+env:
+  RT64_REPO: https://github.com/rt64/rt64.git
+  RT64_COMMIT: 23cab603
+  ROM_SHA256: e00ab74c3dee79efaafe8e10f2a6b67784d7327ab588d8ef90ad8945427da627
+  STEAM_DLL_SHA256: eb17909a76668cf9ae0b92a618a34a50f6c73d3a6787cb4dd8ce36a8b10bfb75
+
+jobs:
+  build:
+    # Only in the owner's repository, only on the runner labelled for it.
+    if: github.repository == 'MaxThornblad/trouble-makers-pc-recomp-continued'
+    runs-on: [ self-hosted, Windows, X64, troublemakers ]
+    timeout-minutes: 120
+    steps:
+      - name: Force LF checkouts
+        run: git config --global core.autocrlf false
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          clean: true
+      - name: Skip if this commit was built already
+        id: seen
+        shell: pwsh
+        run: |
+          $dir = if ($env:TM_BUILDS_DIR) { $env:TM_BUILDS_DIR } else { Join-Path $env:USERPROFILE 'TroubleMakersBuilds' }
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $short = "${{ github.sha }}".Substring(0, 7)
+          $found = Get-ChildItem -Path $dir -Filter "*-$short.zip" -ErrorAction SilentlyContinue
+          "dir=$dir" >> $env:GITHUB_OUTPUT
+          "short=$short" >> $env:GITHUB_OUTPUT
+          if ($found -and "${{ github.event_name }}" -eq 'schedule') { "skip=1" >> $env:GITHUB_OUTPUT } else { "skip=0" >> $env:GITHUB_OUTPUT }
+      - name: Configure Developer Command Prompt
+        if: steps.seen.outputs.skip == '0'
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: ROM from this PC
+        if: steps.seen.outputs.skip == '0'
+        shell: pwsh
+        run: |
+          if (-not $env:TM_ROM_PATH -or -not (Test-Path $env:TM_ROM_PATH)) { throw "TM_ROM_PATH is not set to the ROM (see docs/LOCAL_BUILDS.md)" }
+          $hash = (Get-FileHash $env:TM_ROM_PATH -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne $env:ROM_SHA256) { throw "TM_ROM_PATH is not the US 1.1 ROM (SHA-256 $hash)" }
+          New-Item -ItemType Directory -Force -Path input | Out-Null
+          Copy-Item $env:TM_ROM_PATH input/troublemakers.us1.z64
+      - name: Apply N64ModernRuntime patches (tm-fixes)
+        if: steps.seen.outputs.skip == '0'
+        shell: bash
+        run: |
+          cd lib/N64ModernRuntime
+          git apply ../../patches/N64ModernRuntime/*.patch
+      - name: Clone + patch RT64
+        if: steps.seen.outputs.skip == '0'
+        shell: bash
+        run: |
+          rm -rf lib/rt64
+          git clone -c core.autocrlf=false "$RT64_REPO" lib/rt64
+          cd lib/rt64
+          git checkout "$RT64_COMMIT"
+          git submodule update --init --recursive
+          git apply ../../patches/rt64/*.patch
+      - name: Build recompilers and generate game code
+        if: steps.seen.outputs.skip == '0'
+        shell: bash
+        run: |
+          cmake -S tools/N64Recomp -B tools/N64Recomp/build -DCMAKE_BUILD_TYPE=Release -G Ninja
+          cmake --build tools/N64Recomp/build --target N64RecompCLI RSPRecomp -j
+          ./tools/N64Recomp/build/N64Recomp.exe troublemakers.us1.toml
+          ./tools/N64Recomp/build/RSPRecomp.exe aspMain.us1.rsp.toml
+      - name: Build troublemakers (clang-cl)
+        if: steps.seen.outputs.skip == '0'
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
+          cmake --build build --target troublemakers mm_controls_tests -j
+          ctest --test-dir build --output-on-failure -R "mm_controls"
+      - name: Package into the builds folder (not uploaded)
+        if: steps.seen.outputs.skip == '0'
+        shell: pwsh
+        run: |
+          $name = "TroubleMakers-$(Get-Date -Format 'yyyy-MM-dd')-${{ github.ref_name }}-${{ steps.seen.outputs.short }}"
+          Remove-Item -Recurse -Force dist -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path "dist/$name" | Out-Null
+          Copy-Item build/src/game/troublemakers.exe "dist/$name/"
+          Copy-Item build/src/game/*.dll "dist/$name/"
+          Copy-Item assets "dist/$name/assets" -Recurse
+          if ($env:TM_STEAM_DLL -and (Test-Path $env:TM_STEAM_DLL)) {
+            $hash = (Get-FileHash $env:TM_STEAM_DLL -Algorithm SHA256).Hash.ToLower()
+            if ($hash -ne $env:STEAM_DLL_SHA256) { throw "TM_STEAM_DLL is not the expected steam_api64.dll (SHA-256 $hash)" }
+            Copy-Item $env:TM_STEAM_DLL "dist/$name/steam_api64.dll"
+            Set-Content -Path "dist/$name/steam_appid.txt" -Value '480' -NoNewline
+          }
+          git log -1 --format='%H%n%ad%n%s' > "dist/$name/BUILD-INFO.txt"
+          $zip = Join-Path "${{ steps.seen.outputs.dir }}" "$name.zip"
+          Compress-Archive -Path "dist/$name" -DestinationPath $zip -Force
+          Write-Host "Build: $zip"
