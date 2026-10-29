@@ -282,6 +282,12 @@ netcode, and the owner decides.
   each"), HUD in the corner in widescreen (README.md 12.2b). Owner's choices:
   a downed player comes back by the partner (3 s, half health), stage restarts
   only when both are down; pickups heal the picker.
+- 2026-10-29: preview 5 (controller 2 bindings, Player 2 tab), bot test kit
+  for Windows (coop_bots portable mode), preview 6 (press a button to join,
+  player 2 rumble, Steam invites without the overlay, reconnect + kBye,
+  co-op sound at the nearer camera). Owner to test. Open: nightly builds
+  (owner to choose: self-hosted runner on his PC, or keep sending zips; no
+  ROM uploads).
 - Bot tools: coop_bots --keep DIR keeps every scenario's logs, --port picks
   ports (run two suites at once); traces carry frame numbers (rollbacks).
 - Stage 3-12 (CERBERUS): the owner reported trouble there (details not
