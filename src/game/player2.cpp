@@ -88,7 +88,7 @@ constexpr size_t globals_size() {
 // 0x500 the second camera (far_coop.cpp), 0x600 the lead swap
 // (player2_lead.cpp), 0x610 moon jump rises left per player (cheats.cpp),
 // 0x620 throw charge and 0x628 pending throw strength per character
-// and 0x630 aim per character (throw_cheats.cpp), 0x63C what she shook, 0x638 and 0x640..0x647 and 0x650..0x66F health (player2_health.cpp), 0x648 thrown strength per character (throw_cheats.cpp),
+// and 0x630 aim per character (throw_cheats.cpp), 0x63C what she shook, 0x638 and 0x640..0x647 and 0x650..0x66F health (player2_health.cpp), 0x648 thrown strength per character (throw_cheats.cpp), 0x670 her cat's globals and 0x678 the missile it rides (player2_mount.cpp),
 // 0x418 player 2's mount (player2_mount.cpp),
 // 0x1000 display lists, 0x2000 textures, 0x4000 packed frame.
 constexpr uint32_t kP2Globals = 0x807F0000u;
@@ -520,6 +520,7 @@ HeldSwap g_held;
 
 void held_swap_end(uint8_t* rdram) {
     health::pickup_end(rdram);   // a gem actor's update is over
+    mm::player2_mount::missile_end(rdram);
     if (!g_held.on) return;
     g_held.on = false;
     const int p2 = g_held.p2;
@@ -541,6 +542,7 @@ void held_swap_end(uint8_t* rdram) {
 void held_swap_begin(uint8_t* rdram, int actor) {
     held_swap_end(rdram);
     health::actor_begin(rdram, actor);   // a gem actor she touched: her health in slot 0 for its update
+    mm::player2_mount::missile_begin(rdram, actor);   // a missile her cat rides or lands on
     if (!mm::cheats::coop_enabled()) return;
     // Shaken by player 2 last frame (update_core): the object sees it now.
     if (MEM_W(0, addr(kP2Shaken)) == actor + 1) {
@@ -639,6 +641,11 @@ void collect_pickups(uint8_t* rdram, uint32_t list) {
         health::gem_actor_touched(rdram, s);
         if (trace_on()) std::fprintf(stderr, "[p2trace] gem actor %d goes to player 1\n", s);
     }
+}
+
+uint32_t requested(uint8_t* rdram) {
+    if (slot(rdram) <= 0) return 0;
+    return static_cast<uint32_t>(MEM_W(0, addr(kP2Globals + global_offset(kRequest))));
 }
 
 void request(uint8_t* rdram, uint32_t word) {

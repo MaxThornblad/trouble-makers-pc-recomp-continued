@@ -33,6 +33,11 @@ void update(uint8_t* rdram, recomp_context* ctx, int slot);
 // clamp must leave the riders alone, or it pulls them off their mounts).
 bool riding(uint8_t* rdram);
 
+// Around each actor's update (player2.cpp held_swap_begin / _end): a
+// missile of 3-12 talks to player 2's cat (see kMissileMessage in the .cpp).
+void missile_begin(uint8_t* rdram, int actor);
+void missile_end(uint8_t* rdram);
+
 // Once a frame from player2::tick: gives player 2 a mount when the stage
 // has one for Marina and she has none; takes hers away when she is gone.
 void tick(uint8_t* rdram);

@@ -503,6 +503,30 @@ memory, so states, rollbacks, replays and resyncs carry it. Cerberus still
 aims at the stage's cat (it reads slot 96 directly); both players can
 still grab its parts.
 
+### Riding Lunar's missiles, put down, down (2026-10-29)
+
+The owner's report: nobody could ride a missile in co-op, and player 2 got
+stuck in an animation after being put down. The cat keeps state outside
+its record, in the stage overlay's globals 0x801A80E6..0x801A80EB; the last
+one (0x801A80EA) is a one-frame message from the missiles (type 0x0F09,
+func_801A1178): a flying missile checks the cat in slot 96 (falling, state
+0x21/0x22, box against box) and writes its slot there; a ridden one writes it
+every frame; the cat (func_801A23C4) rides while it reads one and clears it
+at the end of its update. Player 2's cat ran that code after the missiles:
+it took player 1's message and cleared it, so neither cat could ride.
+
+- Her cat has its own copy of those globals (player 2's block 0x670),
+  swapped in for its update (player2_mount.cpp).
+- Missiles talk to her copy for her (missile_begin / missile_end around each
+  actor's update, from held_swap_begin / _end): a missile she rides
+  (0x678) writes her message; a flying one that player 1's cat is not
+  landing on sees her cat in slot 96's place for its update when hers is.
+- Put down after a carry she was in Marina's fall state, which ends only on
+  ground the loop does not have: seconds unable to jump. While she has a
+  cat and falls, she is asked to get on again (request 5, as at the start).
+- Down, her riderless cat flew off the top of the screen carrying her body;
+  it now goes when she goes down, and she gets a new one when she is back.
+
 ## Fixes from the fourth session (owner's reports, 2026-10-28)
 
 - Player 2 carrying player 1 walked and slid at half speed once the camera

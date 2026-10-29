@@ -61,6 +61,8 @@ void collect_pickups(uint8_t* rdram, uint32_t list);
 // request word (0x800BE5F4; her update takes it up): the stage asked
 // Marina alone, so what it asked at its start is asked of player 2 here.
 void request(uint8_t* rdram, uint32_t word);
+// Her request word as it stands (0 = none pending).
+uint32_t requested(uint8_t* rdram);
 
 // Test: put player 2 at a world position (Q16.16).
 void place_test(uint8_t* rdram, int32_t x, int32_t y);

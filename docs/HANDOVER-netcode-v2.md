@@ -300,6 +300,13 @@ netcode, and the owner decides.
   copied to the test home as slot 26 (player 2 carries player 1, 1-2,
   stage 3 scene 68); headless it runs normally, so his description of the
   glitch is needed.
+- 2026-10-29: 3-12 cat/missile fixes (NETPLAY.md "Riding Lunar's missiles").
+  His states copied to the test home: slot 28 (co-op, before a missile),
+  29 (single player). States made at normal speed must be replayed at
+  MM_REPLAY_SPEED=1 (4x hangs/crashes the audio after the load).
+- Open: on Windows 10 of 16 boss states crash right after loading (in
+  alLoadParam from Sound_Update, a bad sample address) while they pass on
+  Linux; logs in his C:\TroubleMakersTest\bot-tests\logs\boss-*.
 - The owner's PC is linked through the desktop app (file tools + screen
   control, no shell yet). His real install and saves are in the connected
   folders: read only. Tests go to C:\TroubleMakersTest (he creates it).
