@@ -147,6 +147,31 @@ NETPLAY = [
 
 BASE_ENV = {"MM_HEADLESS_GFX": "1", "SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"}
 
+# On Windows the game keeps its config and saves in %LOCALAPPDATA% whatever
+# HOME says, so there each run goes in portable mode: started in the test
+# home's config folder, with a portable.txt there. The player's own saves are
+# never touched.
+# (MM_BOTS_PORTABLE=1 forces it elsewhere: the Windows build under Wine.)
+PORTABLE = os.name == "nt" or os.environ.get("MM_BOTS_PORTABLE") == "1"
+
+
+def game_cwd(env):
+    if not PORTABLE:
+        return None
+    d = Path(env["HOME"]) / ".config" / "troublemakers-recomp"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "portable.txt").touch()
+    return str(d)
+
+
+def run_game(args, env, timeout):
+    """The game once with env, to the end or timeout: its output."""
+    try:
+        return subprocess.run([args.bin, args.rom], env=env, cwd=game_cwd(env), stdout=subprocess.PIPE,
+                              stderr=subprocess.STDOUT, timeout=timeout).stdout.decode(errors="replace")
+    except subprocess.TimeoutExpired as e:
+        return (e.stdout or b"").decode(errors="replace")
+
 
 # States in which a player's position is the carry's to set: being carried
 # (0x16 grabbed, 0x2F; she snaps to the carrier's hands, and to the other side when the
@@ -313,11 +338,7 @@ def play_with_rollback(args, rec_dir, frames, extra_env=None):
     needs of every piece of state (docs/NETCODE-V2.md)."""
     env = dict(os.environ, **BASE_ENV, HOME=args.home, MM_REPLAY_PLAY="%s@200" % rec_dir,
                MM_REPLAY_SPEED="1000", MM_TEST_ROLLBACK=args.rollback, **(extra_env or {}))
-    try:
-        out = subprocess.run([args.bin, args.rom], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                             timeout=60 + frames // 10).stdout.decode(errors="replace")
-    except subprocess.TimeoutExpired as e:
-        out = (e.stdout or b"").decode(errors="replace")
+    out = run_game(args, env, 60 + frames // 10)
     problems = []
     if "memory matched every frame" not in out:
         m = re.search(r"memory (?:first )?differ(?:s|ed) (?:from the recording )?at frame (\d+)", out)
@@ -340,12 +361,7 @@ def run_local(args, name, slot, frames, pad1, pad2, allowed, extra_env=None, far
                    MM_REPLAY_RECORD="%s/rec@200" % tmp, MM_REPLAY_LENGTH=str(frames),
                    MM_REPLAY_SPEED="4", MM_REPLAY_PAD=pad1, MM_REPLAY_PAD2=pad2,
                    MM_TEST_SAVESTATE_SLOT=str(slot), MM_TEST_SAVESTATE="load@150", **(extra_env or {}))
-        timeout = 30 + frames // 40
-        try:
-            out = subprocess.run([args.bin, args.rom], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                 timeout=timeout).stdout.decode(errors="replace")
-        except subprocess.TimeoutExpired as e:
-            out = (e.stdout or b"").decode(errors="replace")
+        out = run_game(args, env, 30 + frames // 40)
         rollback_problems = play_with_rollback(args, "%s/rec" % tmp, frames, extra_env) if args.rollback else []
     if args.keep:   # the log, for a look after a failure
         keep = Path(args.keep) / name
@@ -377,11 +393,7 @@ def run_far(args, name, slot, frames, pad1, pad2, want_apart, extra=None):
                        MM_TEST_SAVESTATE_SLOT=str(slot), MM_TEST_SAVESTATE="load@150", **extra.get("env", {}))
             if shadow:
                 env["MM_FAR_SHADOW"] = "1"
-            try:
-                out = subprocess.run([args.bin, args.rom], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                     timeout=40 + frames // 20).stdout.decode(errors="replace")
-            except subprocess.TimeoutExpired as e:
-                out = (e.stdout or b"").decode(errors="replace")
+            out = run_game(args, env, 40 + frames // 20)
             h = Path(tmp) / "rec" / "hashes.bin"
             hashes.append(h.read_bytes() if h.exists() else b"")
             rollback_problems = []
@@ -434,13 +446,10 @@ def run_netplay(args, name, slot, frames, pad1, pad2, port, extra=None):
             genv.update(mock, MM_NET_JOIN="steam@300", MOCK_STEAM_ID=guest_id, MOCK_STEAM_FRIENDS=host_id)
         timeout = 60 + frames // 30
         hfile = open(Path(tmp) / "host.log", "wb")   # a file, not a pipe: nobody reads it while the game runs
-        host = subprocess.Popen([args.bin, args.rom], env=henv, stdout=hfile, stderr=subprocess.STDOUT)
+        host = subprocess.Popen([args.bin, args.rom], env=henv, cwd=game_cwd(henv), stdout=hfile,
+                                stderr=subprocess.STDOUT)
         time.sleep(1)
-        try:
-            gout = subprocess.run([args.bin, args.rom], env=genv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                  timeout=timeout).stdout.decode(errors="replace")
-        except subprocess.TimeoutExpired as e:
-            gout = (e.stdout or b"").decode(errors="replace")
+        gout = run_game(args, genv, timeout)
         try:
             host.wait(timeout=20)
         except subprocess.TimeoutExpired:
@@ -507,6 +516,8 @@ def main():
     ap.add_argument("--port", type=int, default=7900, help="first port for the netplay scenarios")
     ap.add_argument("--keep", default="", metavar="DIR", help="keep each scenario's logs under DIR/<name>/")
     args = ap.parse_args()
+    # Absolute: on Windows each run starts in the test home's config folder.
+    args.bin, args.rom, args.home = (str(Path(p).resolve()) for p in (args.bin, args.rom, args.home))
     failed = 0
     port = args.port
     for name, slot, frames, p1, p2, allowed, *extra in SCENARIOS:
