@@ -121,13 +121,27 @@ SCENARIOS += [
     # falls to the ground, follows the player and stops near her, can be
     # picked up and thrown, and comes back; a spawned block in his way he
     # jumps onto.
-    ("pet-clancer", 1, 700, "60:,90:r,80:,12:l,100:,6:B,60:,6:rB,286:", "700:", 0,
+    # (Player 2 is in this state too, and he follows whoever is nearest:
+    # she walks off to the left edge first.)
+    ("pet-clancer", 1, 700, "60:,90:r,80:,12:l,100:,6:B,60:,6:rB,286:", "20:,120:l,560:", 1,
      dict(env={"MM_TEST_SPAWN": "2801@20@80@0"},
           expect=["[pet] Cat Clancer lands", "[pet] Cat Clancer caught up", "[pet] Cat Clancer is picked up",
                   "[pet] Cat Clancer is thrown", "[pet] Cat Clancer lands after a throw"])),
     ("pet-clancer-wall", 1, 400, "400:", "400:", 0,
      dict(env={"MM_TEST_SPAWN": "7F01@20@40@0;2801@22@150@0"},
           expect=["[pet] Cat Clancer jumps at a wall", "[pet] Cat Clancer caught up"])),
+    # The owner's states (test-home slots 62 and 64, see the handover): the
+    # pet at the foot of 1-1's step pyramid with the player on top (he
+    # climbs it in sized jumps), and Marina holding a block next to 1-1's
+    # campfire (stepping in, she drops it; the fire's hit knocks it out,
+    # and it can be picked up again).
+    ("pet-pyramid", 62, 400, "400:", "400:", 0,
+     dict(expect=["[pet] Cat Clancer jumps at a wall", "[pet] Cat Clancer caught up"])),
+    ("block-fire", 64, 200, "10:,20:r,60:,6:B,104:", "200:", 0,
+     dict(expect=["[blocks] block 121 knocked out of a hit"])),
+    # Z on the cat with no missile about: it calls one of its own.
+    ("cat-missile-call", 1, 420, "60:,4:Z,80:,60:r,40:,4:Z,172:", "420:", 0,
+     dict(env=CAT, expect=["player 1's cat calls missile", "player 1's cat boards missile", "player 1's cat lands on missile", "player 1's cat gets off missile"])),
     # 3-11's Cat Clancer spawned anywhere builds his parts in a free run
     # (he wrote over player 2's slot).
     ("clancer", 1, 900, fuzz(1201), fuzz(1202), 0,

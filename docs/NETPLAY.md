@@ -629,6 +629,35 @@ too, and to spawn 3-11's Cat Clancer anywhere.
   both machines online. Bot scenarios pet-clancer (lands, follows, is
   picked up, thrown, comes back) and pet-clancer-wall (jumps onto a
   spawned block in his way).
+- Pet, second pass (2026-10-30, owner's tests): he runs 2.34 px a frame
+  (half as fast again) and measures what bars him (obstacle_height: the
+  solid column 12 px ahead followed up from his feet to the first gap his
+  body fits in; what is further up does not count): up to 6 px he steps
+  up, higher he jumps just over it (his gravity 0.21875 px/frame²; rise =
+  sqrt(2 g h), at most 56 px), higher still he waits instead of jumping
+  for ever; the same sized jump up to a player over him. He sets off at
+  56 px and stops at 40 (no flapping at the line). He follows whichever
+  player is nearest (pet-clancer's player 2 walks away first). Owner's
+  states as bot scenarios: pet-pyramid (test-home slot 62: 1-1's 32 px
+  step pyramid, three jumps) and block-fire (slot 64).
+- Z on the cat with no flying missile near calls one of its own
+  (player2_mount.cpp make_missile: spawn_now of 0x0F09 24 px over the
+  cat, its launcher wait at +0x114 set below zero so its first update
+  launches it where it is; boarding_tick boards it the frame after). Made
+  at the cat's feet it was in the ground: the cat "landed" on the floor
+  as the missile landed under it, and the missile blew up or flew off
+  ridden by nobody. Bot scenario cat-missile-call.
+- The ridden cat rose through roofs (3-12 has nothing over its loop): in
+  CatOnLoop::leave, rising (+0xF0 > 0) into terrain between the body's
+  top and the rider's head (44 px over the feet) it is put just under it
+  and its rise ends. Owner's state: 1-1's block house roof.
+- The cheat's blocks and 1-1's campfire (type 0x2604): the fire hits
+  whatever overlaps it every frame and the game grabs nothing that is
+  being hit, so a block that touched the fire sat in it ungrabbable, and
+  Marina stepping into it dropped hers there. block_update now takes the
+  hit as the game's objects do: knocked out with the velocity the hit left
+  (+0xF8 / +0xFC, capped to a hop of 2 x 4 px a frame), the hit's type
+  (+0xDC) and damage (+0xE2) cleared; it lands grabbable.
 - Save states loaded under fast-forward (and the bot tests' 4x) crashed the
   audio: a state taken at normal speed carries a stale virtual-clock
   "drained" count, so AI_LEN read seconds of queued audio, the game mixed a

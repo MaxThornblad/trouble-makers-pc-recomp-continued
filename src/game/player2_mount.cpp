@@ -77,6 +77,7 @@ constexpr uint16_t kMountButton = 0x2000;
 constexpr uint32_t kMarinaPress = 0x800BE4FCu;      // u16: the buttons slot 0's character presses this frame
 constexpr int kBoardReach = 96;                     // px from the cat to the missile
 constexpr int kBoardFrames = 12;                    // frames the missile is kept from blowing up meanwhile
+constexpr int kCallAbove = 24;                      // px over the cat a called missile appears (made at its feet, the cat landed on the ground instead and the missile flew off alone, or blew up on the ground)
 constexpr int kBoardAbove = 8;                      // px: the cat this far above the missile (its test: -4..+19)
 constexpr uint32_t kRiderStruck = 0x2E;             // a rider's +0x98: what a missile touching her sets
 constexpr uint32_t kMissileHitBits = 0x201;         // +0x98 in flight: hit (0x1), about to blow up (0x200)
@@ -518,7 +519,7 @@ void board(uint8_t* rdram, const Rider& r, const Mount& m, int first, int ms) {
     if (!mm::faraway::in_shadow()) std::fprintf(stderr, "[mount] %s's cat boards missile %d\n", rider_name(r), ms);
 }
 
-// A missile of the cat's own, under it (Lunar's, 3-12's code brought in
+// A missile of the cat's own, over it (Lunar's, 3-12's code brought in
 // as the Spawn page does): made waiting on its launcher with the wait
 // already over (its +0x114 timer below zero), so its first update launches
 // it (dispatch keeps it where it was made); the cat boards it the frame
@@ -527,7 +528,7 @@ int make_missile(uint8_t* rdram, const Rider& r, int first) {
     const gpr cat = slot_addr(first);
     const gpr marina = slot_addr(0);
     const int dx = MEM_H(0x88, cat) - MEM_H(0x88, marina);
-    const int dy = MEM_H(0x8C, cat) - MEM_H(0x8C, marina) - kBoardAbove;
+    const int dy = MEM_H(0x8C, cat) - MEM_H(0x8C, marina) + kCallAbove;
     const int ms = mm::actors::spawn_now(rdram, kMissile, dx, dy);
     if (ms <= 0) return 0;
     MEM_W(0x114, slot_addr(ms)) = static_cast<int32_t>(0xBF800000u);   // -1.0f

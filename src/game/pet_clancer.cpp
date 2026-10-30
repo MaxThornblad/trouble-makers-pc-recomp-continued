@@ -41,6 +41,7 @@ constexpr uint32_t kSolidBox = 0x40000;    // another actor's solid box
 constexpr int32_t kRunSpeed = 0x25800;     // 2.34 px a frame (his run is 1.5625; half as fast again)
 constexpr int32_t kJumpSpeed = 0x1E000;    // across, while he jumps (his own is 0.625)
 constexpr int kStopNear = 40;              // px from the player he stops at
+constexpr int kStartFar = 56;              // px from the player he sets off at (standing; no flapping at the line)
 constexpr int kJumpUpNear = 56;            // px: a player this close and above him is worth a jump
 constexpr int kJumpUpHeight = 20;          // px above his feet
 constexpr int kWallAhead = 12;             // px ahead of his middle probed for a wall
@@ -118,14 +119,16 @@ bool wall_ahead(uint8_t* rdram, int self, int x, int feet, int dir) {
 constexpr int kTooHigh = 0x7FFF;
 int obstacle_height(uint8_t* rdram, int self, int x, int feet, int dir) {
     const int px = x + dir * kWallAhead;
-    int top = -1, clear = 0;
+    int top = 0, clear = 0;
+    bool found = false;
     for (int py = feet + 1; py <= feet + kJumpMax + kBodyTop + 2; py += 2) {
         if (solid_at(rdram, self, px, py)) {
             top = py + 1;
+            found = true;
             clear = 0;
         } else {
             clear += 2;
-            if (top >= 0 && clear > kBodyTop) return top - feet;
+            if (found && clear > kBodyTop) return top - feet;
         }
     }
     return kTooHigh;
@@ -158,6 +161,7 @@ struct Frame {
     int32_t rise = 0;       // the jump asked for, 16.16 px a frame (0: his own)
 };
 Frame g_frame;
+Want g_last_want = kHisOwn;   // (last frame's; for the log only)
 
 void face(uint8_t* rdram, gpr a, int dir) {
     if (dir == 0) return;
@@ -216,7 +220,8 @@ void before(uint8_t* rdram, int slot) {
         set_state(rdram, a, kFallEnter);
         return;
     }
-    if (std::abs(dx) > kStopNear) {
+    const bool running = state == kRun || state == kRunEnter;
+    if (std::abs(dx) > (running ? kStopNear : kStartFar)) {
         face(rdram, a, dir);
         if (wall_ahead(rdram, slot, x, feet, dir)) {
             const int height = obstacle_height(rdram, slot, x, feet, dir);
@@ -256,7 +261,6 @@ void before(uint8_t* rdram, int slot) {
         return;
     }
     g_frame.want = kWantIdle;
-    if (state == kRun || state == kRunEnter) say("caught up");
     if (!idling(state)) set_state(rdram, a, kIdleEnter);
 }
 
@@ -265,6 +269,8 @@ void after(uint8_t* rdram, int slot) {
     const gpr a = slot_addr(slot);
     const uint16_t state = MEM_HU(0xD0, a);
     if (state < kIdleEnter) return;
+    if (g_frame.want == kWantIdle && g_last_want != kWantIdle && g_frame.near) say("caught up");
+    g_last_want = g_frame.want;
     // His match decisions undone (they only set the state word; the state's
     // own code would run next frame): a turn at an arena mark while he
     // runs, a run, jump or catch for a "ball" while he stands.
@@ -282,7 +288,6 @@ void after(uint8_t* rdram, int slot) {
     const uint16_t now = MEM_HU(0xD0, a);
     if (now != g_frame.before) {
         if (now == kLand || (now == kIdleEnter && g_frame.before == kJumpDown)) say("lands");
-        if (now == kIdleEnter && !on_feet(g_frame.before) && g_frame.near) say("caught up");
         else if (now == kHurtLand) say("lands after a throw");
         else if (now == kHeld) say("is picked up");
         else if (now == kThrownEnter) say("is thrown");

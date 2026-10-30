@@ -1,4 +1,5 @@
 #include "custom_actors.h"
+#include "far_coop.h"
 #include "foreign_actors.h"
 #include "player2.h"
 #include "player2_mount.h"
@@ -6,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 
 #include "terrain.h"
@@ -246,6 +248,27 @@ void block_update(uint8_t* rdram, recomp_context* /*ctx*/, int slot) {
     // a bit still standing on her next check as "let go", so the held actor
     // clears it each frame to stay held. Marina (slot 0) updates before us.
     const bool holder_set = (MEM_W(0x98, a) & 0x200) != 0;
+    // Hurt by something (1-1's campfire: it hits whatever overlaps it, every
+    // frame, and the game will not grab what is being hit): knocked out of
+    // it with the velocity the hit left at +0xF8/+0xFC, as the game's
+    // objects are, else the block sat in the flames for good, ungrabbable.
+    // What the hit left (its type at +0xDC, the damage at +0xE2) is cleared.
+    const bool struck = (MEM_W(0x98, a) & 0x2) != 0;
+    if (struck) {
+        MEM_W(0x98, a) = MEM_W(0x98, a) & ~0x2;
+        MEM_W(0xDC, a) = MEM_W(0xDC, a) & 0x0000FFFF;
+        MEM_H(0xE2, a) = 0;
+        if (state != 0x61) {
+            const int32_t vx = std::clamp(MEM_W(0xF8, a), -0x20000, 0x20000);   // (the fire gives 6.5 px up: a hop will do)
+            const int32_t vy = std::clamp(MEM_W(0xFC, a), 0x20000, 0x40000);
+            lift_slope(rdram, slot);
+            MEM_W(0xEC, a) = vx;
+            MEM_W(0xF0, a) = vy;
+            MEM_H(0xD0, a) = 0x0171;
+            MEM_W(0x80, a) = static_cast<int32_t>(kFlyingFlags);
+            if (!mm::faraway::in_shadow()) std::fprintf(stderr, "[blocks] block %d knocked out of a hit\n", slot);
+        }
+    }
     if (holder_set) {
         MEM_W(0x98, a) = MEM_W(0x98, a) & ~0x200;
         if (state != 0x61) {
