@@ -190,7 +190,7 @@ struct WsMode {
     int previous_active = -1;
     int candidate_active = -1;
     int candidate_frames = 0;
-    bool was_paused = false;
+    int32_t was_paused = 0;   // (a bool would leave padding, state_registry.h)
 };
 mm::state::Pod<WsMode> g_ws_mode{"widescreen-mode", 1};
 float g_backdrop_stretch = 0.0f;
@@ -703,7 +703,7 @@ extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
     int& previous_active = g_ws_mode->previous_active;
     int& candidate_active = g_ws_mode->candidate_active;
     int& candidate_frames = g_ws_mode->candidate_frames;
-    bool& was_paused = g_ws_mode->was_paused;
+    int32_t& was_paused = g_ws_mode->was_paused;
     bool mode_changed = false;
     const int scene = static_cast<int16_t>(MEM_HU(
         0, static_cast<gpr>(static_cast<int32_t>(kCurrentScene))));
@@ -787,7 +787,7 @@ extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
             mode_changed = true;
         }
     }
-    was_paused = paused;
+    was_paused = paused ? 1 : 0;
     g_gameplay_wide_active = previous_active;
 
     // Reassert the presentation on stable frames too. Runtime display changes

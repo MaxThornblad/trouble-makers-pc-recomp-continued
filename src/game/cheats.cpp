@@ -467,8 +467,9 @@ struct Shadow {
     uint16_t type = 0;
     int16_t last = 0;                            // health seen last frame
     int16_t full = 0;                            // the health it is held at (0: not known yet)
-    int pending = 0;                             // drop seen last frame, not yet classed
-    int health = 0;
+    int16_t pad_ = 0;                            // (no padding: state_registry.h)
+    int32_t pending = 0;                         // drop seen last frame, not yet classed
+    int32_t health = 0;
 };
 // Registered: a save state, a joiner and a rollback all carry how hurt each
 // NPC is (state_registry.h); it used to reset on every load.

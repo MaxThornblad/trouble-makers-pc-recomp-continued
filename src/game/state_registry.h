@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -48,6 +49,9 @@ class Pod {
 public:
     Pod(const char* name, uint32_t version) {
         static_assert(std::is_trivially_copyable_v<T>, "a registered state is plain data");
+        // Hashed and compared as raw bytes: padding would make two builds (or
+        // two compilers) hash the same state differently.
+        static_assert(std::has_unique_object_representations_v<T>, "a registered state must have no padding");
         register_module(Module{name, version, sizeof(T), &value_, [](void* p) { *static_cast<T*>(p) = T{}; }});
     }
     T* operator->() { return &value_; }
