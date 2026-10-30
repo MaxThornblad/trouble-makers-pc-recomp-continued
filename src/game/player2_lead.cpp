@@ -69,10 +69,17 @@ constexpr uint32_t kWatched[] = {kGameState, 0x800BE5D0u, 0x800D28E8u, 0x800D28F
 constexpr int kWatchedCount = static_cast<int>(sizeof kWatched / sizeof kWatched[0]);
 
 // What a gameplay frame can write: the game's memory (expansion memory above
-// 0x80480000 is unused by it, docs/README.md 14.1) and player 2's block.
+// 0x80480000 is unused by it, docs/README.md 14.1), and from 0x807A0000 the
+// foreign package stores (foreign_actors.cpp: each foreign object's update
+// writes its package's state back there) and player 2's block.
 struct Span { uint32_t start, size; };
-constexpr Span kSpans[] = {{0x000000u, 0x480000u}, {0x7F0000u, 0x10000u}};
+constexpr Span kSpans[] = {{0x000000u, 0x480000u}, {0x7A0000u, 0x60000u}};
 constexpr uint32_t kPage = 0x1000u;
+constexpr size_t kBackupSize = [] {
+    size_t n = 0;
+    for (const Span& sp : kSpans) n += sp.size;
+    return n;
+}();
 
 gpr addr(uint32_t vaddr) {
     return static_cast<gpr>(static_cast<int32_t>(vaddr));
@@ -138,7 +145,7 @@ bool probe(uint8_t* rdram, recomp_context* ctx, Probe how) {
     static long total_us = 0, count = 0;
     const auto t0 = std::chrono::steady_clock::now();
     const bool swapped = how == Probe::Swapped;
-    g_backup.resize(0x490000u);
+    g_backup.resize(kBackupSize);
     {
         size_t at = 0;
         for (const Span& sp : kSpans) {
