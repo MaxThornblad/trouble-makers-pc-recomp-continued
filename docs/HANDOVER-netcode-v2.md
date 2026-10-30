@@ -106,6 +106,37 @@ build next.
 
 Known limitation: sounds are judged by the lead's camera on both machines.
 
+### Intentional design decisions (owner, 2026-10-30, after the code review)
+
+Things a reader may take for bugs that are deliberate; don't "fix" them:
+
+- Online saves go to a sandbox (`netplay.cpp`, `begin_save_sandbox`), never
+  the real save file, and a save is written from game memory, so a frame
+  run again after a rollback normally writes the same bytes. EEPROM is not
+  part of a snapshot; a write on a frame that is then rolled back is a
+  real but low-priority gap.
+- Online always runs under the far rules (a camera each), so the bots'
+  shared-screen check is meaningless online. Lockstep plus the fingerprint
+  comparison means the guest's trace equals the host's: the netplay
+  scenarios check only the host's trace by design.
+- The bots' state exemptions are deliberate: 0x16 is the state a put-down
+  player is placed in after a carry, 0x401 is the lava/hazard reset to safe
+  ground (a real teleport), and the 275 px edge is how far 3-12's cats keep
+  riders from the camera (since 2026-10-30 that edge, and the camera-relative
+  step rule, apply only on 3-12, save slot 9).
+- Cheats are live only while the debug menu is on. Mortal NPCs stay mortal
+  after the menu goes off until it comes back: by design.
+- The `MM_TEST_*` environment checks in the game code are the documented
+  dev harness the bot suite depends on, not leftovers.
+- `foreign_actors.cpp`'s `Swap` runs once per foreign actor update, not
+  once per part slot.
+- Whether a Linux machine may play online against a Windows one is not
+  decided; byte-exact registered state across compilers (the padding
+  assert in `state_registry.h`) matters only if it is allowed.
+- Every `*_end` return hook in the toml sits on its function's only
+  `jr ra` (checked against the generated code), and `func_800554AC`'s two
+  velocity stores both precede its hook (the delay slot is a nop).
+
 ## 3. Working environment (rebuild it in a new container)
 
 Nothing from the old container survives. The owner provides a "session kit"
@@ -168,6 +199,24 @@ Gotchas from this project:
 - The pad scripts: d-pad `r`/`l` moves characters (the stick does not), Z
   advances dialog.
 - Regenerating RecompiledFuncs can add files: re-run cmake configure.
+- The `lib/N64ModernRuntime` gitlink on `netcode-v2` and `save-states` points
+  at the old container's local `tm-fixes` commit, which no remote has
+  (`main`'s gitlink is the real upstream pin, ae1ffbb). To rebuild: check
+  out ae1ffbb in lib/N64ModernRuntime, `git am` the 18 patches (they apply
+  cleanly), and don't commit the gitlink (CLAUDE.md).
+- The system CMake 3.28 refuses `src/game/CMakeLists.txt`'s
+  `WHOLE_ARCHIVE` link of `librecomp`/`ultramodern` next to their plain
+  propagation from `mm_audio_input` ("has already occurred with the feature
+  WHOLE_ARCHIVE"); CMake >= 3.29 dedups it (the CI runner's does). A pip
+  CMake (`pip install --target <scratch> cmake`, binary at
+  `<scratch>/cmake/data/bin/cmake`) works without touching the repo.
+- Without the session kit, test states can be made from warps: slots 10-25
+  and 32-44 with `coop_bots.py --make-boss-states`, and any stage into any
+  slot with `MM_TEST_WARP=<label> MM_TEST_AUTO_ADVANCE=1
+  MM_TEST_SAVESTATE_SLOT=<n> MM_TEST_SAVESTATE=save@ready MM_REPLAY_SPEED=4
+  MM_TEST_EXIT_AFTER_SAVE=1` (a few seconds each). The lead-star scenario
+  wants the kit's slot 0 (1-1 inside the red block pyramid), which a warp
+  does not give.
 
 ## 4. The approved plan
 
