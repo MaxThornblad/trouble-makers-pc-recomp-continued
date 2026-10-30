@@ -613,7 +613,11 @@ too, and to spawn 3-11's Cat Clancer anywhere.
   player 1: the "carried by the loop" bit the cat sets on its rider
   (player state 0x80137458 bit 0x10000) made her own update push her world
   position on by 10 px a frame, her camera followed that and its walls
-  held her. Outside 3-12, with far rules on, the bit is cleared after
+  held her; and whether the screen is shared was asked while her cat ran
+  in the slots it borrows (hers among them: far_coop did not find her and
+  said shared, so she was held at the shared screen's edge, -140 px). Now
+  it is asked before the update, and outside 3-12, with far rules on, the
+  bit is cleared after
   each cat update (far-cat, far-cat-fuzz). Not on a shared screen: there
   the rider's own code needs it, or she jitters on and off her seat
   (cat-3/4/5 failed with the bit always cleared).
