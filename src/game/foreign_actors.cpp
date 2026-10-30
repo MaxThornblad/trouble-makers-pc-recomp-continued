@@ -9,6 +9,7 @@
 
 extern "C" void func_80016E70(uint8_t* rdram, recomp_context* ctx);   // banked actor update, $a0 = slot
 extern "C" void load_overlays(uint32_t rom, int32_t ram_addr, uint32_t size);
+extern "C" void Sound_StopSfx(uint8_t* rdram, recomp_context* ctx);   // $a0 = sound id: stops the channel playing it
 
 namespace mm::foreign_actors {
 namespace {
@@ -132,6 +133,59 @@ private:
 
 } // namespace
 
+// Cat Clancer away from 3-11 is a cat, not a boss: what his stage has him
+// do to the game around him is put back after his update. The camera
+// (0x800BE544..0x800BE5B7: he zoomed it, 0x800BE5B0 448 -> 353, to frame
+// him with Marina), his talk (func_8005DF5C queues a message at
+// 0x80178418, 16 halfwords with their states at 0x801783F8, and resets
+// the text box at 0x800D5820 / 30 / 34: "Hey" with his picture, in 1-1)
+// and his stage's crowd (sound 0x12D, from his update; the 4 sound
+// channels' active bytes are at 0x800EF4F0, their ids at 0x800EF508).
+class Quiet {
+public:
+    Quiet(uint8_t* rdram, uint16_t type) : rdram_(rdram), on_(type == kCatClancer) {
+        if (!on_) return;
+        for (int i = 0; i < kSpans; ++i) {
+            std::memcpy(saved_[i], host(rdram, kSpan[i].start), kSpan[i].size);
+        }
+        for (int c = 0; c < kChannels; ++c) {
+            ids_[c] = MEM_HU(2 * c, addr(kSfxIds));
+            active_[c] = MEM_BU(c, addr(kSfxActive));
+        }
+    }
+    void end() {
+        if (!on_) return;
+        on_ = false;
+        uint8_t* rdram = rdram_;
+        for (int i = 0; i < kSpans; ++i) {
+            std::memcpy(host(rdram_, kSpan[i].start), saved_[i], kSpan[i].size);
+        }
+        for (int c = 0; c < kChannels; ++c) {
+            const uint16_t id = MEM_HU(2 * c, addr(kSfxIds));
+            const bool started = MEM_BU(c, addr(kSfxActive)) != 0 && (active_[c] == 0 || id != ids_[c]);
+            if (!started || id != kCrowd) continue;
+            recomp_context ctx{};
+            ctx.r29 = addr(kScratchStack);
+            ctx.r4 = id;
+            Sound_StopSfx(rdram, &ctx);
+        }
+    }
+
+private:
+    struct Span { uint32_t start, size; };
+    static constexpr int kSpans = 3;
+    static constexpr Span kSpan[kSpans] = {{0x800BE544u, 0x74u}, {0x801783F8u, 0x40u}, {0x800D5820u, 0x18u}};
+    static constexpr uint32_t kSfxActive = 0x800EF4F0u, kSfxIds = 0x800EF508u;
+    static constexpr int kChannels = 4;
+    static constexpr uint16_t kCrowd = 0x12D;
+    static constexpr uint32_t kScratchStack = 0x8045FF00u;   // the host's scratch stack (custom_actors.cpp)
+    uint8_t* rdram_;
+    bool on_;
+    uint8_t saved_[kSpans][0x74];
+    uint16_t ids_[kChannels];
+    uint8_t active_[kChannels];
+};
+
 bool known(uint16_t type) {
     const Package* p = package_of(type);
     return p != nullptr && rom_ready(*p);
@@ -209,7 +263,9 @@ bool dispatch(uint8_t* rdram, recomp_context* ctx, int slot) {
     const int32_t x = MEM_W(0x88, a), y = MEM_W(0x8C, a);
     const gpr a0 = ctx->r4;
     ctx->r4 = static_cast<gpr>(slot);
+    Quiet quiet(rdram, type);
     func_80016E70(rdram, ctx);
+    quiet.end();
     ctx->r4 = a0;
     if (MEM_HU(0xD2, a) == type) {
         MEM_W(0xEC, a) -= p->scroll;

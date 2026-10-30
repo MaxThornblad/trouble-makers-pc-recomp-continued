@@ -138,11 +138,13 @@ for slot, label in STAGES:
 
 # "Ride the cat" anywhere: random play on cats in every boss and special
 # stage (rides, rafts, free falls, arenas), and Cat Clancer spawned in a few
-# of them. 3-11 has its own cat machine; there the cheat must stay out of
-# its way (no expectation).
+# of them. 3-11 has its own cat machine and 5-3 its bee (each player
+# rides the stage's mount there, no cheat cat), and 5-6 is a free fall (a
+# cat is made only over ground): no expectation.
+OWN_MOUNTS = ("3-11", "5-3", "5-6")
 for slot, label in BOSSES + STAGES:
     SCENARIOS.append(("catx-%s" % label, slot, 1500, fuzz(1500 + slot), fuzz(1550 + slot), BOSS_REJOINS.get(label, 3) + 2,
-                      dict(env=CAT, expect=["[mount] player 1's own cat"] if label != "3-11" else [])))
+                      dict(env=CAT, expect=["[mount] player 1's own cat"] if label not in OWN_MOUNTS else [])))
 for slot, label in ((4, "t4"), (32, "2-7"), (14, "3-8"), (42, "4-7")):
     SCENARIOS.append(("clancer-%s" % label, slot, 900, fuzz(1601 + slot), fuzz(1651 + slot), 3,
                       dict(env={"MM_TEST_SPAWN": "2801@120@80@0"}, expect=["spawned 2801"])))

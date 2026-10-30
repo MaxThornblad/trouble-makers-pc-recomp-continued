@@ -333,6 +333,13 @@ netcode, and the owner decides.
   after its update only under far rules: on a shared screen the rider
   needs it). New bot scenarios: catx-<stage> (cat cheat in every boss and
   special stage), clancer-<stage>, far-cat-*, far-catx-<stage>.
+- 2026-10-30 morning (owner awake): preview 12, then 13 (moon jump while
+  carrying). catx-* found: cats falling through object floors (2-11),
+  snapping down when made mid-air (4-11), stage objects overwriting the
+  cat's low slots (3-6); fixed (NETPLAY.md). Open: 2-11 lava with the
+  cheat, 3-6 tug-of-war jitter, net-cat flaky. Lead probes
+  (player2_lead.cpp) run the gameplay frame on a copy with the characters
+  swapped: debug prints inside actor code show up twice on those frames.
 - The owner's PC is linked through the desktop app (file tools + screen
   control, no shell yet). His real install and saves are in the connected
   folders: read only. Tests go to C:\TroubleMakersTest (he creates it).

@@ -577,8 +577,16 @@ too, and to spawn 3-11's Cat Clancer anywhere.
 - Cat Clancer (0x2801) builds 13 part sprites (type 0x21) in the slots
   after its own, over whatever is there (spawned in a busy part of the table
   it wrote over player 2). Spawned objects with parts get a free run
-  (foreign_actors::span; below 0x90 first, as stage spawners do). He starts
-  his boss talk ("I was expecting you...").
+  (foreign_actors::span; below 0x90 first, as stage spawners do).
+- Away from 3-11 he is quiet (foreign_actors.cpp, Quiet): what his update
+  does to the game around him is put back after it. The camera block
+  0x800BE544..0x800BE5B7 (he zoomed it, 0x800BE5B0 448 -> 353, to frame
+  himself with Marina), his talk (func_8005DF5C queues a message at
+  0x80178418, 16 halfwords with states at 0x801783F8, and resets the text
+  box at 0x800D5820/30/34: "Hey" with his picture when Marina came near,
+  in 1-1), and his stage's crowd, sound 0x12D (started by his update, found
+  with a gdb breakpoint on Sound_AddSfx: stopped with Sound_StopSfx; the 4
+  sound channels' active bytes are at 0x800EF4F0, their ids at 0x800EF508).
 - Save states loaded under fast-forward (and the bot tests' 4x) crashed the
   audio: a state taken at normal speed carries a stale virtual-clock
   "drained" count, so AI_LEN read seconds of queued audio, the game mixed a
@@ -623,9 +631,38 @@ too, and to spawn 3-11's Cat Clancer anywhere.
   (cat-3/4/5 failed with the bit always cleared).
 - Getting on a cat mid-throw: the rider's speed is cleared when her cat is
   made.
+- Ground under a cat: terrain, and the tops of objects players stand on
+  (solid / platform boxes of slots 0x00-0x8F, not the cats' own records):
+  2-11's arena floor is such an object and the cats fell through it.
+- A new cat's floor starts where it is made (its lift from the rider's
+  height), and drops from there: made under a player in the air it
+  snapped her down to the ground at once (86 px, 4-11).
+- A cat fallen far below the screen (y < -300) goes and its rider falls as
+  herself; a cat is made only over ground (no cats in 5-6's free fall; in
+  the air over a pit she gets one once over ground again).
+- Where the stage puts its own objects into the cat's low slot run (3-6:
+  her cat was overwritten every few seconds and a new one jolted her), the
+  rider's next cats go above 0x8F (player 2 block 0x698 / 0x69C).
+- Open: 2-11 (lava arena) with the cheat on: the floating rock sinks under
+  the riders and a player who falls in is never put back on safe ground
+  (without the cheat the lava bounces her back). Not understood yet.
+- Open: in 3-6 two players each holding a part of the same many-part
+  creature (types 0x0300 / 0x0021) tug it between them: the second
+  holder jitters by up to ~35 px a frame (not cat related).
+- Open: net-cat fails now and then (p2 shown next to player 1 for four
+  frames right after the cheat goes on, while player 1 threw her); it
+  depends on the inputs' timing online, not reproduced locally.
 - Bot scenarios: cat-1..9 (random play with the cheat on in each test
-  stage), cat-off, cat-missile, clancer (tools/coop_bots.py; cheats for a
-  run come from MM_TEST_CHEATS, never written to the test home).
+  stage), cat-off, cat-on, cat-on-fuzz, cat-missile, clancer, catx-<stage>
+  (every boss and special stage), clancer-<stage>, far-cat* and
+  far-catx-<stage> (tools/coop_bots.py; cheats for a run come from
+  MM_TEST_CHEATS, never written to the test home).
+
+## Moon jump while carrying (2026-10-30)
+
+Carrying something Marina's jump is states 0x011A (rise) / 0x021A (fall)
+instead of 0x0116 / 0x0216 (read off the carry-jump-throw bot trace:
+0x0115, 0x001A, 0x011A, 0x021A). Moon jump now takes both pairs.
 
 ## Fixes from the fourth session (owner's reports, 2026-10-28)
 

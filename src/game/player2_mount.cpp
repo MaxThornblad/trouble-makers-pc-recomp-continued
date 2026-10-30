@@ -95,9 +95,10 @@ struct Rider {
     uint32_t missile;      // s32: the missile her cat rides (player 2 only)
     uint32_t lift;         // s32: the cat's floor outside 3-12 (see kCatRest)
     uint32_t facing;       // s32: 1 while the cat outside 3-12 faces left (see mirror_cat)
+    uint32_t high;         // s32: 1 once the stage took her mount's slots (spawn)
 };
-constexpr Rider kP1{false, kPlayer1CustomIndex, 0x807F0680u, 0x807F0684u, 0, 0, 0x807F0688u, 0x807F0690u};
-constexpr Rider kP2{true, kCustomIndex, 0x807F0418u, 0x807F041Cu, 0x807F0670u, 0x807F0678u, 0x807F068Cu, 0x807F0694u};
+constexpr Rider kP1{false, kPlayer1CustomIndex, 0x807F0680u, 0x807F0684u, 0, 0, 0x807F0688u, 0x807F0690u, 0x807F0698u};
+constexpr Rider kP2{true, kCustomIndex, 0x807F0418u, 0x807F041Cu, 0x807F0670u, 0x807F0678u, 0x807F068Cu, 0x807F0694u, 0x807F069Cu};
 
 // Outside 3-12 the cat is on ground it does not know: its code keeps it on
 // the loop's flat floor, at a fixed height on the screen (the controller
@@ -111,6 +112,7 @@ constexpr int kCatRest = -36 - 10;    // the loop's floor, under the controller 
 constexpr int kCatFeet = 10;          // feet below the controller
 constexpr int kCatFall = 8;           // px a frame the floor may drop
 constexpr int kGroundSearch = 240;    // px searched below the feet
+constexpr int kPitY = -300;           // camera-relative: far below the screen (it shows about -120..120)
 // Across, 3-12's camera scrolls by 10 px a frame and the cat runs at 10 px
 // (13 holding right, 7 left), so it stays on the screen. Elsewhere the
 // camera follows its rider: the cat ran off to the right with it. So
@@ -267,8 +269,12 @@ void spawn(uint8_t* rdram, const Rider& r, const Mount& m) {
             last = first + m.span - 2;   // the next run down
         }
     };
-    int first = run_below(0x8F);
-    if (first < 0) first = run_below(0xBF);
+    // Once the stage took the low run for its own objects (3-6: they
+    // overwrote her cat every few seconds, and a new one each time jolted
+    // her about), above it.
+    const bool high = MEM_W(0, addr(r.high)) != 0;
+    int first = run_below(high ? 0xBF : 0x8F);
+    if (first < 0) first = run_below(high ? 0x8F : 0xBF);
     if (first < 0) return;
     // A new one at the rider's feet; its first update (state 0, run as the
     // stage's slot) builds the parts after it and takes the rider up, as
@@ -284,7 +290,10 @@ void spawn(uint8_t* rdram, const Rider& r, const Mount& m) {
     MEM_H(0xD2, slot_addr(first)) = static_cast<int16_t>(mm::custom_actors::type_id(r.custom));
     MEM_W(0, addr(r.mount)) = first;
     MEM_W(0, addr(r.type)) = m.type;
-    MEM_W(0, addr(r.lift)) = 0;
+    // Its floor starts where it is made, under her (not on the loop's: a
+    // cat made under a player in the air snapped down to the ground at once,
+    // 86 px in 4-11), and drops from there (CatOnLoop::enter).
+    MEM_W(0, addr(r.lift)) = (MEM_H(0x8C, slot_addr(c)) - kCatFeet) - kCatRest;
     MEM_W(0, addr(r.facing)) = 0;
     if (m.request != 0) request(rdram, r, m.request);   // and she gets on (her riding state), as Marina was told to
     if (!mm::faraway::in_shadow()) {
@@ -302,9 +311,22 @@ bool terrain_solid(uint8_t* rdram, int x, int y) {
 }
 
 // The top of the ground under a point (camera-relative px, +y up), or
-// kNoGround.
+// kNoGround: terrain, or the top of an object players stand on (solid or
+// platform boxes of slots 0x00-0x8F, as func_8001F88C lists them; 2-11's
+// arena floor is one, and the cats fell through it). Not the cats' own
+// records: the one updating (in the slots it borrows) and each rider's.
 constexpr int kNoGround = -100000;
-int ground_under(uint8_t* rdram, int x, int y) {
+constexpr uint32_t kSolidBox = 0x00040000u, kPlatformBox = 0x00002000u;
+bool cats_record(uint8_t* rdram, int s, const Mount& m) {
+    if (s >= m.slot && s < m.slot + m.span) return true;
+    for (const Rider* r : kRiders) {
+        const int first = MEM_W(0, addr(r->mount));
+        if (first > 0 && s >= first && s < first + m.span) return true;
+    }
+    return false;
+}
+
+int ground_under(uint8_t* rdram, int x, int y, const Mount& m) {
     int best = kNoGround;
     for (int px : {x - 12, x, x + 12}) {
         for (int py = y + 8; py >= y - kGroundSearch; --py) {
@@ -313,6 +335,13 @@ int ground_under(uint8_t* rdram, int x, int y) {
                 break;
             }
         }
+    }
+    for (int s = 1; s < 0x90; ++s) {
+        const gpr o = slot_addr(s);
+        if ((static_cast<uint32_t>(MEM_W(0x80, o)) & (kSolidBox | kPlatformBox)) == 0 || cats_record(rdram, s, m)) continue;
+        const int ox = MEM_H(0x88, o), top = MEM_H(0x8C, o) + MEM_H(0xAE, o);
+        if (x + 12 < ox + MEM_H(0xAA, o) || x - 12 > ox + MEM_H(0xAC, o)) continue;
+        if (top <= y + 8 && top >= y - kGroundSearch) best = std::max(best, top);
     }
     return best;
 }
@@ -481,7 +510,7 @@ struct CatOnLoop {
         const bool on_missile = state == kCatLanding || state == kCatRiding;   // (the missile carries it, in the same terms)
         if (!on_missile) {
             const int32_t prev = MEM_W(0, addr(r.lift));
-            const int ground = ground_under(rdram, MEM_H(0x88, cat), MEM_H(0x8C, cat) - kCatFeet);
+            const int ground = ground_under(rdram, MEM_H(0x88, cat), MEM_H(0x8C, cat) - kCatFeet, m);
             const int32_t want = ground == kNoGround ? prev - kCatFall : ground - kCatRest;
             lift = std::max(want, prev - kCatFall);
             // Left behind by the camera (it follows the other player) past
@@ -636,11 +665,21 @@ void tick(uint8_t* rdram) {
             const bool still = MEM_W(0x80, slot_addr(have)) != 0 &&
                                MEM_HU(0xD2, slot_addr(have)) == mm::custom_actors::type_id(r->custom);
             if (!still) {
+                if (have < 0x90 && MEM_W(0x80, slot_addr(have)) != 0) MEM_W(0, addr(r->high)) = 1;   // (an object of the stage's there now)
                 dismount(rdram, *r);
                 continue;
             }
             if (want != m) {   // its update takes it away; when it does not run (paused), here
                 if (m != nullptr) remove(rdram, *r, have, m->span);
+                continue;
+            }
+            // Fallen far below the screen (no ground under it: 2-11's lava,
+            // where the stage puts a player back on safe ground but the
+            // cat fell on for ever with its rider): it goes, and she falls
+            // as herself, to whatever the stage does with a fall. A new one
+            // when she is back on the screen.
+            if (m != nullptr && MEM_H(0x8C, slot_addr(have)) < kPitY) {
+                remove(rdram, *r, have, m->span);
                 continue;
             }
             // Put down after a carry the rider is in the fall state, which
@@ -653,7 +692,14 @@ void tick(uint8_t* rdram) {
             }
             continue;
         }
-        if (want != nullptr) spawn(rdram, *r, *want);
+        // (Not over nothing: a cat made there fell away again at once, and
+        // a new one was made under her each frame.)
+        if (want != nullptr) {
+            const gpr c = slot_addr(character_slot(rdram, *r));
+            const bool over_ground = want->type != kCat || mm::foreign_actors::native(rdram, kCat) ||
+                                     ground_under(rdram, MEM_H(0x88, c), MEM_H(0x8C, c), *want) != kNoGround;
+            if (MEM_H(0x8C, c) >= kPitY && over_ground) spawn(rdram, *r, *want);
+        }
     }
 }
 
