@@ -63,6 +63,9 @@ void collect_pickups(uint8_t* rdram, uint32_t list);
 void request(uint8_t* rdram, uint32_t word);
 // Her request word as it stands (0 = none pending).
 uint32_t requested(uint8_t* rdram);
+// The buttons player 2 presses this frame (her controller, before her
+// update: new since her last one). 0 without player 2.
+uint16_t pressed_now(uint8_t* rdram);
 
 // Test: put player 2 at a world position (Q16.16).
 void place_test(uint8_t* rdram, int32_t x, int32_t y);

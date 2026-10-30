@@ -16,6 +16,7 @@
 #include <vector>
 
 
+#include "actors.h"
 #include "cheats.h"
 #include "frame_input.h"
 #include "net_delay.h"
@@ -961,6 +962,17 @@ void run_frame(uint8_t* rdram, recomp_context* ctx) {
         if (g_frame == at && cheat >= 0 && cheat < mm::cheats::kCheatCount)
             mm::cheats::toggle(static_cast<mm::cheats::Cheat>(cheat));
     }
+    // Test: MM_NET_SPAWN=<type, hex>@<frame> requests a spawn as the Spawn
+    // page does, at that session frame: from the host it travels as a
+    // command and spawns on both machines (the guest's own is refused).
+    static const std::pair<int, long> net_spawn = [] {
+        const char* v = std::getenv("MM_NET_SPAWN");
+        if (!v) return std::pair<int, long>{-1, -1};
+        char* end;
+        const int type = static_cast<int>(std::strtol(v, &end, 16));
+        return std::pair<int, long>{type, *end == '@' ? std::strtol(end + 1, nullptr, 10) : -1};
+    }();
+    if (net_spawn.first > 0 && g_frame == net_spawn.second) mm::actors::request_spawn(static_cast<uint16_t>(net_spawn.first));
 
     // Test: MM_NET_POKE=<frame> makes this side differ there (resync check).
     static const long poke_at = std::getenv("MM_NET_POKE") ? std::atol(std::getenv("MM_NET_POKE")) : -1;

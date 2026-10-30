@@ -108,6 +108,15 @@ SCENARIOS += [
      dict(env=CAT, final=lambda s0, s2: s0[0] < -200)),
     ("cat-house-roof", 53, 300, "20:,12:lA,268:l", "300:", 0,
      dict(env=CAT, final=lambda s0, s2: s0[0] < -150)),
+    # The mount button (Z, player2_mount.cpp): a missile spawned ahead flies
+    # back past the riders; Z with it in reach puts the cat onto it (its own
+    # landing then), the rider steers right, Z again gets off.
+    ("cat-missile-board", 1, 420, "142:,4:Z,60:r,54:,4:Z,156:", "420:", 0,
+     dict(env=dict(CAT, MM_TEST_SPAWN="F09@80@200@8"),
+          expect=["player 1's cat boards missile", "player 1's cat lands on missile", "player 1's cat gets off missile"])),
+    ("p2-cat-missile-board", 1, 420, "420:", "142:,4:Z,60:r,54:,4:Z,156:", 0,
+     dict(env=dict(CAT, MM_TEST_SPAWN="F09@80@200@8"),
+          expect=["player 2's cat boards missile", "her cat lands on missile", "player 2's cat gets off missile"])),
     # 3-11's Cat Clancer spawned anywhere builds his parts in a free run
     # (he wrote over player 2's slot).
     ("clancer", 1, 900, fuzz(1201), fuzz(1202), 0,
@@ -260,6 +269,14 @@ NETPLAY = [
     # "Ride the cat" (cheat 7) turned on by the host: both machines build the
     # same cats from 3-12's package and stay identical.
     ("net-cat", 1, 1500, fuzz(905), fuzz(906), dict(env={"MM_NET_TOGGLE": "7@100"})),
+    # The mount button online: the host spawns a missile (a command, as the
+    # Spawn page sends it), the guest's cat boards it and gets off it; both
+    # machines stay identical. (Here she touches the missile landing on it:
+    # boarding must not let that hurt her or throw her off.)
+    ("net-cat-missile", 1, 600, "600:", "188:,4:Z,60:r,54:,4:Z,290:",
+     dict(env=dict(CAT, MM_NET_SPAWN="F09@120"),
+          host_re=[r"player 2's cat boards missile", r"player 2's cat gets off missile"],
+          guest=["player 2's cat boards missile", "player 2's cat gets off missile"])),
     # 5-3: player 2's own bee online.
     ("net-bee", 20, 1500, fuzz(907, grab_bias=True), fuzz(908, grab_bias=True)),
 ]
@@ -371,7 +388,9 @@ def check_trace(text, allowed_rejoins, far=False, loop=False):
             continue
         # (Going down: the hidden character moves to the other at once,
         # player2_health.cpp; not a jump.)
-        if "joined in slot" in line or "rejoining" in line or "[test] player" in line or "[player2] down" in line:
+        # (Boarding a missile with the mount button puts the cat onto it.)
+        if ("joined in slot" in line or "rejoining" in line or "[test] player" in line or "[player2] down" in line
+                or "boards missile" in line):
             joined_recently = 3
             continue
         m = HELD.match(line)

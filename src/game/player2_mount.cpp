@@ -65,6 +65,21 @@ constexpr uint16_t kMissileFlying = 1, kMissileRidden = 4;
 constexpr uint32_t kMissileHit = 0x200;             // +0x98: hit, about to blow up
 constexpr uint32_t kMissileLetGo = 0x1;             // +0x98: its rider is gone (what the cat sets when hit while riding)
 constexpr uint16_t kCatLanding = 0x58, kCatRiding = 0x59;
+constexpr uint16_t kCatFalling = 0x22;              // what the missile's landing test wants (0x21 / 0x22)
+// The mount button (cheat cats outside 3-12): N64 Z, which does nothing in
+// play (the game reads it only to skip cutscenes; Marina's own input strips
+// it). Pressed with a flying missile within kBoardReach of the cat, the cat
+// is put just above it, falling, as 3-12's loop brings it there: the
+// missile's own landing test (func_801A1178, flying state) then lands it,
+// and the cat's code rides it as in 3-12. Pressed while riding, the missile
+// is told its rider is gone (let_go), as the cat's own code does when hit.
+constexpr uint16_t kMountButton = 0x2000;
+constexpr uint32_t kMarinaPress = 0x800BE4FCu;      // u16: the buttons slot 0's character presses this frame
+constexpr int kBoardReach = 96;                     // px from the cat to the missile
+constexpr int kBoardFrames = 12;                    // frames the missile is kept from blowing up meanwhile
+constexpr int kBoardAbove = 8;                      // px: the cat this far above the missile (its test: -4..+19)
+constexpr uint32_t kRiderStruck = 0x2E;             // a rider's +0x98: what a missile touching her sets
+constexpr uint32_t kMissileHitBits = 0x201;         // +0x98 in flight: hit (0x1), about to blow up (0x200)
 constexpr int kRideReach = 64;                      // px: a cat this far from its missile is not on it
 
 // A mount: the stage's type, the slot its code answers to, and how many
@@ -98,9 +113,14 @@ struct Rider {
     uint32_t facing;       // s32: 1 while the cat outside 3-12 faces left (see mirror_cat)
     uint32_t high;         // s32: 1 once the stage took her mount's slots (spawn)
     uint32_t pace;         // s32: the cat's speed outside 3-12 (16.16), kept through a frame a wall stops it
+    uint32_t boarding;     // s32: the missile the mount button put the cat onto (slot), 0 = none
+    uint32_t boarding_left;// s32: frames that boarding still waits for the missile's landing
+    uint32_t boarding_health; // s32: the rider's health when she pressed (the missile does not hurt her getting on)
 };
-constexpr Rider kP1{false, kPlayer1CustomIndex, 0x807F0680u, 0x807F0684u, 0, 0, 0x807F0688u, 0x807F0690u, 0x807F0698u, 0x807F06A0u};
-constexpr Rider kP2{true, kCustomIndex, 0x807F0418u, 0x807F041Cu, 0x807F0670u, 0x807F0678u, 0x807F068Cu, 0x807F0694u, 0x807F069Cu, 0x807F06A4u};
+constexpr Rider kP1{false, kPlayer1CustomIndex, 0x807F0680u, 0x807F0684u, 0, 0, 0x807F0688u, 0x807F0690u, 0x807F0698u,
+                    0x807F06A0u, 0x807F06A8u, 0x807F06B0u, 0x807F06B8u};
+constexpr Rider kP2{true, kCustomIndex, 0x807F0418u, 0x807F041Cu, 0x807F0670u, 0x807F0678u, 0x807F068Cu, 0x807F0694u, 0x807F069Cu,
+                    0x807F06A4u, 0x807F06ACu, 0x807F06B4u, 0x807F06BCu};
 
 // Outside 3-12 the cat is on ground it does not know: its code keeps it on
 // the loop's flat floor, at a fixed height on the screen (the controller
@@ -442,8 +462,97 @@ struct MissileCall {
     uint16_t p1_message = 0;
     uint16_t cat_state = 0;     // slot 96's, put back after
     int32_t cat_x = 0, cat_y = 0;
+    int boarded = 0;            // the missile being boarded (the mount button)
+    int rider = 0;              // and its rider's slot
 };
 MissileCall g_call;
+
+// --- The mount button (kMountButton) ---------------------------------
+
+uint16_t rider_press(uint8_t* rdram, const Rider& r) {
+    return r.p2 ? mm::player2::pressed_now(rdram) : MEM_HU(0, addr(kMarinaPress));
+}
+
+// The missile in `state` nearest to a point (camera-relative px) within
+// kBoardReach, or 0. A flying one about to blow up does not count.
+int nearest_missile(uint8_t* rdram, int x, int y, uint16_t state) {
+    int best = 0, best_d = kBoardReach + 1;
+    for (int s = 1; s < 0xD0; ++s) {
+        const gpr m = slot_addr(s);
+        if (MEM_W(0x80, m) == 0 || MEM_HU(0xD2, m) != kMissile || MEM_HU(0xD0, m) != state) continue;
+        if (state == kMissileFlying && (static_cast<uint32_t>(MEM_W(0x98, m)) & kMissileHit) != 0) continue;
+        const int d = std::max(std::abs(MEM_H(0x88, m) - x), std::abs(MEM_H(0x8C, m) - y));
+        if (d < best_d) {
+            best = s;
+            best_d = d;
+        }
+    }
+    return best;
+}
+
+const char* rider_name(const Rider& r) { return r.p2 ? "player 2" : "player 1"; }
+
+// Pressed with the rider's cat (a copy outside 3-12) in its slots from
+// `first`: onto the nearest flying missile, or off the one it rides.
+void mount_button(uint8_t* rdram, const Rider& r, const Mount& m, int first) {
+    const gpr cat = slot_addr(first);
+    const uint16_t state = MEM_HU(0xD0, cat);
+    const int cx = MEM_H(0x88, cat), cy = MEM_H(0x8C, cat);
+    if (state == kCatLanding || state == kCatRiding) {
+        // Off: the missile is told its rider is gone, as the cat's own
+        // code tells it when hit while riding; the cat drops off it.
+        const int ms = nearest_missile(rdram, cx, cy, kMissileRidden);
+        if (ms > 0) {
+            MEM_W(0x98, slot_addr(ms)) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0x98, slot_addr(ms))) | kMissileLetGo);
+            if (!mm::faraway::in_shadow()) std::fprintf(stderr, "[mount] %s's cat gets off missile %d\n", rider_name(r), ms);
+        }
+        if (r.missile != 0) MEM_W(0, addr(r.missile)) = 0;
+        // And it falls from there (left in its running state it stood on
+        // the air at the missile's height for good).
+        MEM_H(0xD0, cat) = static_cast<int16_t>(kCatFalling);
+        MEM_W(0xF0, cat) = 0;
+        MEM_W(0, addr(r.boarding)) = 0;
+        MEM_W(0, addr(r.boarding_left)) = 0;
+        return;
+    }
+    const int ms = nearest_missile(rdram, cx, cy, kMissileFlying);
+    if (ms <= 0) return;
+    // On: the cat, its parts and its rider just above the missile, the cat
+    // falling, where 3-12's loop brings it before its landing test.
+    const gpr mis = slot_addr(ms);
+    const int32_t dx = MEM_W(0x88, mis) - MEM_W(0x88, cat);
+    const int32_t dy = MEM_W(0x8C, mis) + (kBoardAbove << 16) - MEM_W(0x8C, cat);
+    for (int i = first; i < first + m.span; ++i) {
+        MEM_W(0x88, slot_addr(i)) += dx;
+        MEM_W(0x8C, slot_addr(i)) += dy;
+    }
+    const gpr rider = slot_addr(character_slot(rdram, r));
+    MEM_W(0x88, rider) += dx;
+    MEM_W(0x8C, rider) += dy;
+    MEM_H(0xD0, cat) = static_cast<int16_t>(kCatFalling);
+    MEM_W(0xF0, cat) = 0;
+    MEM_W(0x98, mis) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0x98, mis)) & ~kMissileHitBits);
+    MEM_W(0, addr(r.boarding)) = ms;
+    MEM_W(0, addr(r.boarding_left)) = kBoardFrames;
+    MEM_W(0, addr(r.boarding_health)) = MEM_H(0xE0, rider);
+    if (!mm::faraway::in_shadow()) std::fprintf(stderr, "[mount] %s's cat boards missile %d\n", rider_name(r), ms);
+}
+
+// Once a frame: the boarding window runs out, or ends with the landing.
+void boarding_tick(uint8_t* rdram, const Rider& r) {
+    const int left = MEM_W(0, addr(r.boarding_left));
+    if (left <= 0) return;
+    // Touching the missile on the way down hurt her (her hit bits are
+    // cleared as the missile updates, see missile_end; the damage was
+    // already done): she has what she had when she pressed.
+    const gpr rider = slot_addr(character_slot(rdram, r));
+    const int32_t health = MEM_W(0, addr(r.boarding_health));
+    if (MEM_H(0xE0, rider) < health) MEM_H(0xE0, rider) = static_cast<int16_t>(health);
+    const int ms = MEM_W(0, addr(r.boarding));
+    const bool landed = ms > 0 && ms < 0xD0 && MEM_HU(0xD0, slot_addr(ms)) == kMissileRidden;
+    MEM_W(0, addr(r.boarding_left)) = landed ? 0 : left - 1;
+    if (landed || left - 1 <= 0) MEM_W(0, addr(r.boarding)) = 0;
+}
 
 void present(uint8_t* rdram, int cat_slot) {
     const gpr slot96 = slot_addr(kCheatMount.slot);
@@ -460,6 +569,13 @@ void present(uint8_t* rdram, int cat_slot) {
 } // namespace
 
 void missile_end(uint8_t* rdram) {
+    // Being boarded: the rider touching the missile on the way down was
+    // hit (her hit bits: the cat threw her off) and hurt (see boarding_tick).
+    if (g_call.boarded != 0) {
+        const gpr rider = slot_addr(g_call.rider);
+        MEM_W(0x98, rider) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0x98, rider)) & ~kRiderStruck);
+        g_call.boarded = 0;
+    }
     if (!g_call.on) return;
     g_call.on = false;
     if (g_call.hers) {
@@ -485,6 +601,16 @@ void missile_begin(uint8_t* rdram, int actor) {
     if (actor <= 0 || actor >= 0xD0) return;
     const gpr m = slot_addr(actor);
     if (MEM_W(0x80, m) == 0 || MEM_HU(0xD2, m) != kMissile) return;
+    g_call = {};
+    // Being boarded (the mount button): the cat or its rider touching it
+    // on the way down does not blow it up.
+    for (const Rider* r : kRiders) {
+        if (MEM_W(0, addr(r->boarding)) == actor && MEM_W(0, addr(r->boarding_left)) > 0 && MEM_HU(0xD0, m) == kMissileFlying) {
+            MEM_W(0x98, m) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0x98, m)) & ~kMissileHitBits);
+            g_call.boarded = actor;
+            g_call.rider = character_slot(rdram, *r);
+        }
+    }
     // Whose cats are copies: player 1's when the stage has no cat (the
     // cheat), player 2's always.
     const bool stage_cat = stage_mount(rdram) != nullptr;
@@ -495,7 +621,6 @@ void missile_begin(uint8_t* rdram, int actor) {
     const gpr msg = addr(message);
     const gpr hers = addr(kP2.globals + (kMissileMessage - kCatGlobals));
     const uint16_t state = MEM_HU(0xD0, m);
-    g_call = {};
     g_call.slot = actor;
     g_call.message = message;
     if (p2_cat > 0 && MEM_W(0, addr(kP2.missile)) == actor) {
@@ -737,6 +862,10 @@ void tick(uint8_t* rdram) {
             if (m != nullptr && m->request != 0 && (MEM_HU(0xD0, slot_addr(c)) & 0xFF) == kFallState && requested(rdram, *r) == 0) {
                 request(rdram, *r, m->request);
             }
+            // The mount button: onto a missile and off it (a cat away from
+            // 3-12; there the loop brings missiles under the stage's cat).
+            boarding_tick(rdram, *r);
+            if (own_floor && (rider_press(rdram, *r) & kMountButton) != 0) mount_button(rdram, *r, *m, have);
             continue;
         }
         // (Not over nothing: a cat made there fell away again at once, and

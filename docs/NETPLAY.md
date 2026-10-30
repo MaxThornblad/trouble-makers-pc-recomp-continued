@@ -665,6 +665,48 @@ too, and to spawn 3-11's Cat Clancer anywhere.
   far-catx-<stage> (tools/coop_bots.py; cheats for a run come from
   MM_TEST_CHEATS, never written to the test home).
 
+## Cat cheat: body-sized collision, and a button for missiles (2026-10-30)
+
+- The cheat cat's wall check and ground are its own body's (the
+  controller's 32 px box), not the rider's height: ground up to 22 px above
+  its feet counts (1-1's block house has an 18 px floor step under a 50 px
+  door), a wall is from 22 to 26 px above its feet, 16 px ahead, and a
+  frame a wall stops it keeps its speed (the rider's pace word, player 2's
+  block 0x6A0 / 0x6A4), so a jump that meets a ledge's face goes on over it
+  and lands on top. The rider may poke into a low door frame. Bot scenarios
+  cat-house-door / cat-house-roof (the owner's preview-16 states).
+- Riding a spawned missile outside 3-12 never worked: the missile's landing
+  test (func_801A1178, flying state: the cat in slot 96 falling, state
+  0x21 / 0x22, its box over the missile's) needs the cat to come down onto
+  the missile, which 3-12's scrolling loop arranges and a free-running cat
+  almost never does: its jump peaked ~44 px above the missile as it flew
+  under, and the missile then blew up on the cat or its rider (+0x98 bit
+  0x200 makes the flying state explode).
+- The mount button, N64 Z (Left Shift / the left trigger by default; the
+  game reads Z in play only to skip cutscenes, and Marina's input strips
+  it). With the cheat on and a flying missile within 96 px of a rider's cat
+  (a copy outside 3-12), Z puts the cat, its parts and its rider 8 px above
+  the missile, falling: the missile's own landing test then lands it and
+  the cat rides it as in 3-12 (message, landing / riding states, steering).
+  For 12 frames the missile's hit bits (+0x98 0x201) are cleared before its
+  update, so touching the cat on the way down does not blow it up. Z while
+  riding sets the missile's "rider gone" bit (as the cat's own code does
+  when hit) and puts the cat into its falling state (left running, it stood
+  on the air at the missile's height). Landing on it, the rider can touch
+  the missile in a state where she is open to hits (it happened online, by
+  the timing of the riders' state cycle under far rules): she was hurt
+  (266 of 1000) and her hit bit made the cat throw her off five frames
+  later. So while boarding, her hit bits (+0x98 0x2E) are cleared after the
+  missile's update and her health is put back to what it was when she
+  pressed (a frame of the lower health can show). State: the riders'
+  boarding words in player 2's block (0x6A8..0x6BF: missile, frames left,
+  health), input from each character's own press
+  word: the same on both machines. Bot scenarios cat-missile-board,
+  p2-cat-missile-board, net-cat-missile (online the missile comes from
+  `MM_NET_SPAWN=<type, hex>@<session frame>`: the host requests it as the
+  Spawn page does, a command both machines run on the same frame;
+  `MM_TEST_SPAWN` spawns on each machine by itself and the two disagree).
+
 ## Moon jump while carrying (2026-10-30)
 
 Carrying something Marina's jump is states 0x011A (rise) / 0x021A (fall)

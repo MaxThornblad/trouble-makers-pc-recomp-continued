@@ -61,9 +61,10 @@ constexpr std::array<CheatInfo, kCheatCount> kCheats{{
       "flies, up to absurd strength after about four seconds. A bar over the "
       "player shows the charge. Works with the throw strength sliders." },
     { "cat_ride", "Ride the cat",
-      "Both players ride the cat from 3-12 (CERBERUS) in any stage. Jump onto "
-      "missiles to ride them too (the Spawn page has Lunar's missile). Turn it "
-      "off to get off." },
+      "Both players ride the cat from 3-12 (CERBERUS) in any stage. Ride "
+      "missiles too (the Spawn page has Lunar's missile): press Z with one "
+      "near your cat to get on, Z again to get off. Turn the cheat off to get "
+      "off the cat." },
 }};
 
 std::array<std::atomic<bool>, kCheatCount> g_enabled{};
