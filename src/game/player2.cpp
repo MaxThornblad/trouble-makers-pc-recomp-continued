@@ -612,6 +612,12 @@ void collect_pickups(uint8_t* rdram, uint32_t list) {
     const int bottom = by + MEM_H(0xB0, b) - kSlack, top = by + MEM_H(0xAE, b) + kSlack;
     const int tx = MEM_H(0x88, m) + (MEM_H(0xAA, m) + MEM_H(0xAC, m)) / 2;
     const int ty = MEM_H(0x8C, m) + (MEM_H(0xAE, m) + MEM_H(0xB0, m)) / 2;
+    // One already in player 1's box is player 1's: the game collects it for
+    // her this frame, and her health takes it, not player 2's.
+    const int mx = MEM_H(0x88, m), my = MEM_H(0x8C, m);
+    const int m_left = mx + MEM_H(0xAA, m) - kSlack, m_right = mx + MEM_H(0xAC, m) + kSlack;
+    const int m_bottom = my + MEM_H(0xB0, m) - kSlack, m_top = my + MEM_H(0xAE, m) + kSlack;
+    const auto player1s = [&](int x, int y) { return x >= m_left && x <= m_right && y >= m_bottom && y <= m_top; };
     const int cx = MEM_H(0, addr(kCameraX)), cy = MEM_H(0, addr(kCameraY));
     static const bool dbg = std::getenv("MM_GEM_DEBUG") != nullptr;
     if (dbg) {
@@ -639,7 +645,7 @@ void collect_pickups(uint8_t* rdram, uint32_t list) {
         if ((kind & 0xC000u) != 0) continue;
         if (static_cast<uint32_t>(MEM_W(((kind & 0xFFF0u) >> 4) * 4, addr(kItemHandlers))) != kGemHandler) continue;
         const int x = MEM_HU(2, rec) - cx, y = MEM_HU(4, rec) - cy;
-        if (x < left || x > right || y < bottom || y > top) continue;
+        if (x < left || x > right || y < bottom || y > top || player1s(x, y)) continue;
         MEM_H(2, rec) = static_cast<int16_t>(tx + cx);
         MEM_H(4, rec) = static_cast<int16_t>(ty + cy);
         records_taken = true;
@@ -652,7 +658,7 @@ void collect_pickups(uint8_t* rdram, uint32_t list) {
         const gpr a = addr(kActors + static_cast<uint32_t>(s) * kStride);
         if (MEM_W(0x80, a) == 0 || MEM_HU(0xD2, a) != kGemActor) continue;
         const int x = MEM_H(0x88, a), y = MEM_H(0x8C, a);
-        if (x < left || x > right || y < bottom || y > top) continue;
+        if (x < left || x > right || y < bottom || y > top || player1s(x, y)) continue;
         MEM_W(0x88, a) = tx << 16;
         MEM_W(0x8C, a) = ty << 16;
         MEM_W(0xEC, a) = 0;

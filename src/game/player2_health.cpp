@@ -1,6 +1,7 @@
 #include "player2_health.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdio>
 
 #include "cheats.h"
@@ -176,11 +177,24 @@ void gem_actor_touched(uint8_t* rdram, int actor) {
     if (actor > 0 && actor < kSlots) set_mark(rdram, actor, true);
 }
 
+// A marked gem actor was put at slot 0's hit box centre, with no speed, for
+// the game to collect there (player2.cpp collect_pickups). One further from
+// slot 0 than that leaves it is not that gem any more: the slot was reused
+// (a new gem knocked out of an enemy elsewhere), or the game moved it on.
+constexpr int kMarkReach = 48;   // px: what slot 0 moves in the few frames a gem waits to be caught
+
+bool still_hers(uint8_t* rdram, int actor) {
+    const gpr m = record(0), g = record(actor);
+    const int cx = MEM_H(0x88, m) + (MEM_H(0xAA, m) + MEM_H(0xAC, m)) / 2;
+    const int cy = MEM_H(0x8C, m) + (MEM_H(0xAE, m) + MEM_H(0xB0, m)) / 2;
+    return std::abs(MEM_H(0x88, g) - cx) <= kMarkReach && std::abs(MEM_H(0x8C, g) - cy) <= kMarkReach;
+}
+
 void actor_begin(uint8_t* rdram, int actor) {
     pickup_end(rdram);
     if (actor <= 0 || actor >= kSlots || !marked(rdram, actor)) return;
-    if (!gem_actor(rdram, actor)) {
-        set_mark(rdram, actor, false);   // collected (or gone) since
+    if (!gem_actor(rdram, actor) || !still_hers(rdram, actor)) {
+        set_mark(rdram, actor, false);   // collected or gone since, or another gem in the slot
         return;
     }
     pickup_begin(rdram);
