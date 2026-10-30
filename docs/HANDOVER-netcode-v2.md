@@ -419,6 +419,17 @@ netcode, and the owner decides.
   keep their speed; bot scenarios cat-house-door / -roof on the owner's
   preview-16 states, test-home slots 52/53). Open: missile mount button
   (owner's bug 3), the 3-3 carry flicker seen in far-catx-3-3.
+- 2026-10-30, branch review-fixes: preview 18 (Windows, game code 474adc6):
+  the mount button (Z) boards and leaves a spawned missile outside 3-12
+  for either player and online (f0790aa; the rider's hit bits and health
+  are kept while boarding: online she touched the missile landing on it
+  and the cat threw her off), and the cat's floor rises at most 8 px a
+  frame (474adc6; b76f4f1's 22 px snap failed cat-2 / cat-3). Regression
+  set: failures not from this branch's changes (same on the build before
+  b76f4f1): cat-missile, clancer-3-8, catx-2-7 / 2-9 / 2-11 / 4-9 (warp-made
+  test states); catx-3-3, far-catx-3-3 and now catx-3-6 show the carry /
+  hold flicker (player 2 alternates between two x every frame while
+  holding). Open: that flicker.
 
 ## 5. Open questions for the owner (ask when relevant, not up front)
 
