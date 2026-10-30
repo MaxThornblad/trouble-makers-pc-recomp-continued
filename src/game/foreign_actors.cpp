@@ -9,7 +9,6 @@
 
 extern "C" void func_80016E70(uint8_t* rdram, recomp_context* ctx);   // banked actor update, $a0 = slot
 extern "C" void load_overlays(uint32_t rom, int32_t ram_addr, uint32_t size);
-extern "C" void Sound_StopSfx(uint8_t* rdram, recomp_context* ctx);   // $a0 = sound id: stops the channel playing it
 
 namespace mm::foreign_actors {
 namespace {
@@ -133,57 +132,59 @@ private:
 
 } // namespace
 
-// Cat Clancer away from 3-11 is a cat, not a boss: what his stage has him
-// do to the game around him is put back after his update. The camera
-// (0x800BE544..0x800BE5B7: he zoomed it, 0x800BE5B0 448 -> 353, to frame
-// him with Marina), his talk (func_8005DF5C queues a message at
-// 0x80178418, 16 halfwords with their states at 0x801783F8, and resets
-// the text box at 0x800D5820 / 30 / 34: "Hey" with his picture, in 1-1)
-// and his stage's crowd (sound 0x12D, from his update; the 4 sound
-// channels' active bytes are at 0x800EF4F0, their ids at 0x800EF508).
+// Cat Clancer (func_801B1BA4) away from 3-11 is a cat, not a boss. His
+// states: 0 builds him, then 1..0x11 are his stage's introduction (crowd
+// chatter 0x12D, a camera zoom, six talk messages, each waited on through
+// the message queue), 0x1E the fight's start (crowd cheer 0x12E, a fanfare,
+// the stage's music, and state 8 written into slot 0x50, the stage's
+// crowd: anyone at all elsewhere), 0x1F waits for the stage to let him go,
+// 0x20 makes the camera follow him and 0x21 on is play, where he can be
+// grabbed and thrown. His own state 0 already has a way past the
+// introduction (3-11 uses it after a continue: +0xD8 set takes it to 0x1E,
+// placed at the screen's 48,-50). So away from 3-11 he is built that way,
+// kept where he was spawned, and put straight into 0x20; one already in
+// the introduction or the fight's start (a state from an older build) goes
+// there too. Nothing of his introduction starts. (With the introduction
+// running, the talk he queued was taken away after each update and he
+// waited for it for ever, hovering, never grabbable.)
+constexpr uint16_t kClancerPlay = 0x20;
+
+// Before his update: true when this one builds him (state 0; +0xD8 set so
+// he takes the continue path), and his position and state are put right
+// after it (dispatch).
+bool clancer_skip_intro(uint8_t* rdram, gpr a) {
+    const uint16_t state = MEM_HU(0xD0, a);
+    if (state == 0) {
+        MEM_W(0xD8, a) = 1;
+        return true;
+    }
+    if (state < kClancerPlay) {
+        MEM_H(0xD0, a) = static_cast<int16_t>(kClancerPlay);
+        MEM_W(0xD8, a) = 0;
+    }
+    return false;
+}
+
+// What is left for his update to do to the game around him: in play
+// (state 0x20) he makes the camera follow him (0x800BE544, the first word
+// of the camera block; earlier builds also saw him zoom it, 0x800BE5B0).
+// The camera block is put back after each of his updates.
 class Quiet {
 public:
     Quiet(uint8_t* rdram, uint16_t type) : rdram_(rdram), on_(type == kCatClancer) {
-        if (!on_) return;
-        for (int i = 0; i < kSpans; ++i) {
-            std::memcpy(saved_[i], host(rdram, kSpan[i].start), kSpan[i].size);
-        }
-        for (int c = 0; c < kChannels; ++c) {
-            ids_[c] = MEM_HU(2 * c, addr(kSfxIds));
-            active_[c] = MEM_BU(c, addr(kSfxActive));
-        }
+        if (on_) std::memcpy(saved_, host(rdram, kCamera), sizeof saved_);
     }
     void end() {
         if (!on_) return;
         on_ = false;
-        uint8_t* rdram = rdram_;
-        for (int i = 0; i < kSpans; ++i) {
-            std::memcpy(host(rdram_, kSpan[i].start), saved_[i], kSpan[i].size);
-        }
-        for (int c = 0; c < kChannels; ++c) {
-            const uint16_t id = MEM_HU(2 * c, addr(kSfxIds));
-            const bool started = MEM_BU(c, addr(kSfxActive)) != 0 && (active_[c] == 0 || id != ids_[c]);
-            if (!started || id != kCrowd) continue;
-            recomp_context ctx{};
-            ctx.r29 = addr(kScratchStack);
-            ctx.r4 = id;
-            Sound_StopSfx(rdram, &ctx);
-        }
+        std::memcpy(host(rdram_, kCamera), saved_, sizeof saved_);
     }
 
 private:
-    struct Span { uint32_t start, size; };
-    static constexpr int kSpans = 3;
-    static constexpr Span kSpan[kSpans] = {{0x800BE544u, 0x74u}, {0x801783F8u, 0x40u}, {0x800D5820u, 0x18u}};
-    static constexpr uint32_t kSfxActive = 0x800EF4F0u, kSfxIds = 0x800EF508u;
-    static constexpr int kChannels = 4;
-    static constexpr uint16_t kCrowd = 0x12D;
-    static constexpr uint32_t kScratchStack = 0x8045FF00u;   // the host's scratch stack (custom_actors.cpp)
+    static constexpr uint32_t kCamera = 0x800BE544u;
     uint8_t* rdram_;
     bool on_;
-    uint8_t saved_[kSpans][0x74];
-    uint16_t ids_[kChannels];
-    uint8_t active_[kChannels];
+    uint8_t saved_[0x74];
 };
 
 bool known(uint16_t type) {
@@ -260,6 +261,7 @@ bool dispatch(uint8_t* rdram, recomp_context* ctx, int slot) {
     // state 0) until its timer runs out: elsewhere slot 53 is anything, and
     // the missile sat wherever that was. It waits where it was spawned.
     const bool waiting = type == kLunarMissile && MEM_HU(0xD0, a) == 0;
+    const bool clancer_built = type == kCatClancer && clancer_skip_intro(rdram, a);
     const int32_t x = MEM_W(0x88, a), y = MEM_W(0x8C, a);
     const gpr a0 = ctx->r4;
     ctx->r4 = static_cast<gpr>(slot);
@@ -269,9 +271,13 @@ bool dispatch(uint8_t* rdram, recomp_context* ctx, int slot) {
     ctx->r4 = a0;
     if (MEM_HU(0xD2, a) == type) {
         MEM_W(0xEC, a) -= p->scroll;
-        if (waiting) {
+        if (waiting || clancer_built) {
             MEM_W(0x88, a) = x;
             MEM_W(0x8C, a) = y;
+        }
+        if (clancer_built) {
+            MEM_H(0xD0, a) = static_cast<int16_t>(kClancerPlay);
+            MEM_W(0xD8, a) = 0;
         }
         // 3-12's loop takes what flies off the screen behind it away; here
         // it flew on forever. Gone well off the screen (not while ridden).

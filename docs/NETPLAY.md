@@ -578,15 +578,22 @@ too, and to spawn 3-11's Cat Clancer anywhere.
   after its own, over whatever is there (spawned in a busy part of the table
   it wrote over player 2). Spawned objects with parts get a free run
   (foreign_actors::span; below 0x90 first, as stage spawners do).
-- Away from 3-11 he is quiet (foreign_actors.cpp, Quiet): what his update
-  does to the game around him is put back after it. The camera block
-  0x800BE544..0x800BE5B7 (he zoomed it, 0x800BE5B0 448 -> 353, to frame
-  himself with Marina), his talk (func_8005DF5C queues a message at
-  0x80178418, 16 halfwords with states at 0x801783F8, and resets the text
-  box at 0x800D5820/30/34: "Hey" with his picture when Marina came near,
-  in 1-1), and his stage's crowd, sound 0x12D (started by his update, found
-  with a gdb breakpoint on Sound_AddSfx: stopped with Sound_StopSfx; the 4
-  sound channels' active bytes are at 0x800EF4F0, their ids at 0x800EF508).
+- Away from 3-11 he skips his stage's introduction (foreign_actors.cpp,
+  2026-10-30; it was put back after each update before, and he waited for
+  ever for the talk it took away, hovering, never grabbable, with the crowd
+  cheering). His states (func_801B1BA4): 0 builds him; 1..0x11 are the
+  introduction (crowd chatter 0x12D, a camera zoom, six talk messages
+  waited on through the message queue); 0x1E starts the fight (crowd cheer
+  0x12E, a fanfare 0x130, the stage music, state 8 written into slot 0x50,
+  the stage's crowd); 0x1F waits for the stage; 0x20 makes the camera
+  follow him; 0x21 on is play, grabbable from any state (func_801B0944).
+  3-11's own continue path (+0xD8 set in state 0) builds him without the
+  introduction; here he is built that way, kept where he was spawned and
+  put straight into 0x20, so none of it starts. The camera word his play
+  sets (0x800BE544) is still put back after each update (Quiet). Checked
+  with a gdb breakpoint on Sound_AddSfx over the owner's state: none of
+  0x12D, 0x12E, 0x130. Outside an arena he roams freely (3-11's walls hold
+  him there).
 - Save states loaded under fast-forward (and the bot tests' 4x) crashed the
   audio: a state taken at normal speed carries a stale virtual-clock
   "drained" count, so AI_LEN read seconds of queued audio, the game mixed a
