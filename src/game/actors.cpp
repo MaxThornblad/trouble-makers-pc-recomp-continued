@@ -14,7 +14,7 @@
 
 #include "custom_actors.h"
 #include "recomp.h"
-#include "savestate.h"
+#include "state_registry.h"
 
 extern "C" void func_8001E2D0(uint8_t* rdram, recomp_context* ctx);
 
@@ -43,7 +43,7 @@ gpr slot_addr(int slot) {
 }
 
 struct Owned {
-    int slot;
+    int16_t slot;
     uint16_t type;
 };
 
@@ -55,10 +55,21 @@ struct Request {
 std::string g_last_result = "Nothing spawned yet";
 std::atomic<int> g_count{0};
 
-// Game thread only.
-std::vector<Owned> g_owned;
-int g_stage = -1, g_scene = -1;
-uint32_t g_generation = 0;
+// What the spawn tool owns, and the stage value it overrides for a spawned
+// clanball machine: the game's behaviour depends on them (a clear removes
+// exactly these slots, the limit refuses a spawn, link_machine_bodies writes
+// kBodyParam), so they travel with the game (state_registry.h): a save
+// state, a joiner and a rollback all carry them. Clearing them on every
+// state load (as before) left the machine that rolled back with an empty
+// list while the other still had one. Game thread only.
+struct Spawned {
+    static constexpr int kCapacity = 16;       // kMaxSpawned, plus the machine's second entry
+    Owned owned[kCapacity]{};
+    int32_t count = 0;
+    int32_t stage = -1, scene = -1;
+    uint32_t saved_body_param = 0;             // float bits; 0: not overridden
+};
+mm::state::Pod<Spawned> g_spawned{"spawned-actors", 1};
 
 void set_result(const std::string& text) {
     std::lock_guard lock{g_mutex};
@@ -68,6 +79,22 @@ void set_result(const std::string& text) {
 bool alive(uint8_t* rdram, const Owned& o) {
     const gpr a = slot_addr(o.slot);
     return MEM_W(0x80, a) != 0 && MEM_HU(0xD2, a) == o.type;
+}
+
+void own(int slot, uint16_t type) {
+    Spawned& s = *g_spawned;
+    if (s.count < Spawned::kCapacity) s.owned[s.count++] = {static_cast<int16_t>(slot), type};
+}
+
+// Drops the entries whose actor is gone.
+void forget_dead(uint8_t* rdram) {
+    Spawned& s = *g_spawned;
+    int kept = 0;
+    for (int i = 0; i < s.count; ++i) {
+        if (alive(rdram, s.owned[i])) s.owned[kept++] = s.owned[i];
+    }
+    for (int i = kept; i < s.count; ++i) s.owned[i] = {};
+    s.count = kept;
 }
 
 } // namespace
@@ -177,7 +204,6 @@ bool clanball_machine_loaded(uint8_t* rdram) {
 // fall apart at once, so while a spawned machine's clanball is held the low
 // byte names that controller instead; the stage's value is put back after.
 constexpr uint32_t kBodyParam = 0x801AFB6Cu;
-uint32_t g_saved_body_param = 0;                 // float bits; 0: not overridden
 
 uint32_t float_bits(float f) {
     uint32_t bits;
@@ -185,28 +211,31 @@ uint32_t float_bits(float f) {
     return bits;
 }
 
-void link_machine_bodies(uint8_t* rdram, const std::vector<Owned>& owned) {
+void link_machine_bodies(uint8_t* rdram) {
+    Spawned& s = *g_spawned;
+    uint32_t& saved = s.saved_body_param;
     if (!clanball_machine_loaded(rdram)) {
-        g_saved_body_param = 0;                  // another stage's package
+        saved = 0;                               // another stage's package
         return;
     }
     const uint32_t current = static_cast<uint32_t>(MEM_W(0, addr(kBodyParam)));
     const int held = MEM_HU(0xD6, slot_addr(0));   // Marina's held slot
     int controller = -1;
-    for (const Owned& o : owned) {
+    for (int i = 0; i < s.count; ++i) {
+        const Owned& o = s.owned[i];
         if (o.type != 0x181D || !alive(rdram, o)) continue;
         const int state = MEM_HU(0xD0, slot_addr(o.slot));
         if ((state == 0x10 || state == 0x11) && held == o.slot - 1) controller = o.slot;
     }
     if (controller >= 0) {
-        if (g_saved_body_param == 0) g_saved_body_param = current;
+        if (saved == 0) saved = current;
         float stage_value;
-        std::memcpy(&stage_value, &g_saved_body_param, sizeof stage_value);
+        std::memcpy(&stage_value, &saved, sizeof stage_value);
         const uint32_t param = (static_cast<uint32_t>(stage_value) & ~0xFFu) | static_cast<uint32_t>(controller);
         MEM_W(0, addr(kBodyParam)) = static_cast<int32_t>(float_bits(static_cast<float>(param)));
-        } else if (g_saved_body_param != 0) {
-        MEM_W(0, addr(kBodyParam)) = static_cast<int32_t>(g_saved_body_param);
-        g_saved_body_param = 0;
+    } else if (saved != 0) {
+        MEM_W(0, addr(kBodyParam)) = static_cast<int32_t>(saved);
+        saved = 0;
     }
 }
 
@@ -230,13 +259,14 @@ void tick(uint8_t* rdram) {
     const bool gameplay = game_state == 6 || game_state == 10;
     const int stage = MEM_HU(0, addr(kCurrentStage));
     const int scene = static_cast<int16_t>(MEM_HU(0, addr(kCurrentScene)));
-    const uint32_t generation = mm::savestate::load_generation();
-    if (stage != g_stage || scene != g_scene || generation != g_generation || !gameplay) {
-        g_owned.clear();                         // the game reuses or clears those slots
-        g_saved_body_param = 0;                  // the stage package was reloaded with the state
-        g_stage = stage;
-        g_scene = scene;
-        g_generation = generation;
+    Spawned& s = *g_spawned;
+    // (A state load no longer clears the list: it comes back with the state.)
+    if (stage != s.stage || scene != s.scene || !gameplay) {
+        for (Owned& o : s.owned) o = {};         // the game reuses or clears those slots
+        s.count = 0;
+        s.saved_body_param = 0;                  // the stage package went with the scene
+        s.stage = stage;
+        s.scene = scene;
     }
 
     std::vector<Request> queue;
@@ -252,17 +282,15 @@ void tick(uint8_t* rdram) {
         }
     }
 
-    g_owned.erase(std::remove_if(g_owned.begin(), g_owned.end(),
-                                 [rdram](const Owned& o) { return !alive(rdram, o); }),
-                  g_owned.end());
+    forget_dead(rdram);
 
     if (clear) {
-        for (const Owned& o : g_owned) MEM_W(0x80, slot_addr(o.slot)) = 0;
+        for (int i = 0; i < s.count; ++i) MEM_W(0x80, slot_addr(s.owned[i].slot)) = 0;
         char text[64];
-        std::snprintf(text, sizeof text, "Removed %zu spawned object%s", g_owned.size(),
-                      g_owned.size() == 1 ? "" : "s");
+        std::snprintf(text, sizeof text, "Removed %d spawned object%s", s.count, s.count == 1 ? "" : "s");
         set_result(text);
-        g_owned.clear();
+        for (Owned& o : s.owned) o = {};
+        s.count = 0;
     }
 
     for (const Request& request : queue) {
@@ -272,7 +300,7 @@ void tick(uint8_t* rdram) {
             set_result("Spawning works only during a stage");
             break;
         }
-        if (static_cast<int>(g_owned.size()) >= kMaxSpawned) {
+        if (s.count >= kMaxSpawned) {
             std::snprintf(text, sizeof text, "Limit reached (%d spawned); clear some first", kMaxSpawned);
             set_result(text);
             break;
@@ -286,8 +314,8 @@ void tick(uint8_t* rdram) {
                 set_result(error);
                 break;
             }
-            g_owned.push_back({slot, 0x3F});
-            g_owned.push_back({slot + 1, 0x181D});
+            own(slot, 0x3F);
+            own(slot + 1, 0x181D);
             std::snprintf(text, sizeof text, "Spawned the clanball machine in slots %d-%d", slot, slot + 1);
             set_result(text);
             std::fprintf(stderr, "[actors] clanball machine in slots %d-%d\n", slot, slot + 1);
@@ -302,14 +330,13 @@ void tick(uint8_t* rdram) {
             set_result("No free actor slot right now");
             break;
         }
-        g_owned.push_back({slot, type});
+        own(slot, type);
         std::snprintf(text, sizeof text, "Spawned type 0x%02X in slot %d", type, slot);
         set_result(text);
         std::fprintf(stderr, "[actors] spawned type 0x%02X in slot %d\n", type, slot);
     }
-    g_count.store(static_cast<int>(g_owned.size()), std::memory_order_relaxed);
-    if (gameplay) link_machine_bodies(rdram, g_owned);
-
+    g_count.store(s.count, std::memory_order_relaxed);
+    if (gameplay) link_machine_bodies(rdram);
 }
 
 } // namespace mm::actors
