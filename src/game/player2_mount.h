@@ -23,7 +23,8 @@
 
 namespace mm::player2_mount {
 
-constexpr uint8_t kCustomIndex = 0x03;   // custom actor type 0x7F03
+constexpr uint8_t kCustomIndex = 0x03;          // custom actor type 0x7F03 (player 2's)
+constexpr uint8_t kPlayer1CustomIndex = 0x04;   // 0x7F04 (player 1's, the "Ride the cat" cheat)
 
 // Custom actor update (registered in custom_actors.cpp): the controller
 // slot of player 2's mount.

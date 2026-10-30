@@ -1,4 +1,5 @@
 #include "custom_actors.h"
+#include "foreign_actors.h"
 #include "player2.h"
 #include "player2_mount.h"
 
@@ -325,6 +326,7 @@ std::array<TypeInfo, 256> make_table() {
     t[kBlock] = {"Block", block_update, block_setup};
     t[kPlayer2] = {"Player 2", mm::player2::update, mm::player2::setup};
     t[kPlayer2Mount] = {"Player 2's mount", mm::player2_mount::update, nullptr};   // made by player2_mount::tick, not spawned
+    t[kPlayer1Mount] = {"Player 1's mount", mm::player2_mount::update, nullptr};   // (the "Ride the cat" cheat)
     return t;
 }
 const std::array<TypeInfo, 256> kTable = make_table();
@@ -349,6 +351,7 @@ const TypeInfo* info(uint16_t type) {
 extern "C" int mm_custom_actor_dispatch(uint8_t* rdram, recomp_context* ctx) {
     const int slot = static_cast<int>(ctx->r4 & 0xFFFF);
     if (slot <= 0 || slot >= 208) return 0;
+    if (mm::foreign_actors::dispatch(rdram, ctx, slot)) return 1;   // another stage's object (cheats)
     const gpr a = static_cast<gpr>(static_cast<int32_t>(0x800EF510u + slot * 0x198u));
     const auto* t = mm::custom_actors::info(MEM_HU(0xD2, a));
     if (t == nullptr) return 0;

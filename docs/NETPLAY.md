@@ -534,6 +534,52 @@ it took player 1's message and cleared it, so neither cat could ride.
   When her cat is off its missile (not landing / riding, 64 px away) or
   goes, the missile is told its rider is gone (let_go).
 
+### Cheats: the cat anywhere, Lunar's missiles, Cat Clancer (2026-10-30)
+
+The owner asked for "Ride the cat" in any stage, to ride the missiles there
+too, and to spawn 3-11's Cat Clancer anywhere.
+
+- Another stage's objects (src/game/foreign_actors.cpp): types 0x100 and up
+  belong to a stage's code package (3-12's bank 0x0F at 0x80192000, 3-11's
+  bank 0x28 at 0x801B0800). Elsewhere a copy of the package (table, code,
+  data, bss) is kept in expansion memory (0x807A0000 / 0x807C0000, made from
+  the ROM when first needed in a stage) and swapped into place around each
+  of its objects' updates (the stage's bytes and overlay sections put back
+  after). All game memory: save states, replays and the second machine
+  carry it.
+- With the cheat each player gets a cat of their own (custom actors 0x03 /
+  0x04, a 14-slot run) wherever the stage has none. Outside 3-12 the cat is
+  run as if on the loop and corrected after its update:
+  - Height: the loop's floor is at a fixed height on the screen, so the cat,
+    its parts and its rider are moved by "lift" for the update so the ground
+    under it (terrain cells) is at that floor: it runs on hills and steps
+    and falls off ledges (the lift drops at most 8 px a frame).
+  - Across: 3-12's camera scrolls 10 px a frame and the cat runs at 10 px
+    (13 / 7 with the d-pad), held on the screen at x 33. Elsewhere the camera
+    follows the rider, so the cat ran off to the right with the camera. Its
+    code now sees the loop's 10 px and the cat at x 33; what moves it is the
+    rider's d-pad (6 px a frame either way, reached in 12 frames; it stands
+    without), stopped by walls and the screen's edge.
+  - Turned off while riding, the rider falls from her seat, and what the
+    cat set on her goes (+0x94 bit 0x100, player-state 0x80137458 bit
+    0x10000: with that bit her own update carried her on at 10 px a frame).
+- Other 3-12 objects outside their stage (Lunar's missile, from the Spawn
+  page) get the same correction for speed: their code sees the loop's
+  10 px, what moves them is their speed less it (a missile no longer flies
+  off to the right forever).
+- Cat Clancer (0x2801) builds 13 part sprites (type 0x21) in the slots
+  after its own, over whatever is there (spawned in a busy part of the table
+  it wrote over player 2). Spawned objects with parts get a free run
+  (foreign_actors::span; below 0x90 first, as stage spawners do). He starts
+  his boss talk ("I was expecting you...").
+- Save states loaded under fast-forward (and the bot tests' 4x) crashed the
+  audio: a state taken at normal speed carries a stale virtual-clock
+  "drained" count, so AI_LEN read seconds of queued audio, the game mixed a
+  corrupt command list (sample DMAs past the end of the ROM, then an invalid
+  RSP task). Such a state now restarts the clock from two queued frames
+  (register_overlays.cpp), and a PI read past the ROM lands zeros (runtime
+  patch 0018). This is likely also the Windows boss-state crash below.
+
 ## Fixes from the fourth session (owner's reports, 2026-10-28)
 
 - Player 2 carrying player 1 walked and slid at half speed once the camera

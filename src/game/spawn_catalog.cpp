@@ -53,6 +53,8 @@ const Entry kCatalog[] = {
     {0x48, "Clancer", "A small clancer."},
     {0x49, "Bomb clanball", "A purple bomb ball."},
     {0x54, "Blue clancer", "A blue clancer that walks about."},
+    {0x0F09, "Lunar's missile", "A missile from 3-12 (CERBERUS), flying in from the left. With the \"Ride the cat\" cheat, jump onto it to ride it. Works in any stage (3-12's code is brought in for it)."},
+    {0x2801, "Cat Clancer", "The dodgeball Cat Clancer from 3-11 (Cat-astrophe). Works in any stage (3-11's code is brought in for it); needs 14 free actor slots."},
     {0x7F02, "Player 2", "A second Marina for controller 2 (co-op groundwork)."},
     {0x7F01, "Block", "A solid block object: stand on it, grab it, carry it and throw it (custom type)."},
     {0x7F00, "Bobbing block", "A block that floats in place: the custom actor table's test type."},

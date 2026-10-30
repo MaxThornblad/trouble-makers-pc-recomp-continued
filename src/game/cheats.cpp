@@ -60,6 +60,10 @@ constexpr std::array<CheatInfo, kCheatCount> kCheats{{
       "charge the throw; let go to throw. The longer you hold, the harder it "
       "flies, up to absurd strength after about four seconds. A bar over the "
       "player shows the charge. Works with the throw strength sliders." },
+    { "cat_ride", "Ride the cat",
+      "Both players ride the cat from 3-12 (CERBERUS) in any stage. Jump onto "
+      "missiles to ride them too (the Spawn page has Lunar's missile). Turn it "
+      "off to get off." },
 }};
 
 std::array<std::atomic<bool>, kCheatCount> g_enabled{};

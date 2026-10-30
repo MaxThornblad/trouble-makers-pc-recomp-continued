@@ -1,4 +1,5 @@
 #include "actors.h"
+#include "foreign_actors.h"
 #include "frame_input.h"
 
 #include <algorithm>
@@ -101,10 +102,19 @@ const char* last_result() {
 
 int spawn_now(uint8_t* rdram, uint16_t type, int dx, int dy, uint32_t param) {
     int slot = -1;
-    for (int i = kLastSlot; i >= kFirstSlot; --i) {
-        if (MEM_W(0x80, slot_addr(i)) == 0) {
-            slot = i;
-            break;
+    if (const int span = mm::foreign_actors::span(type); span > 1) {
+        // An object that builds its parts in the slots after its own
+        // (whatever is in them): a free run, below 0x90 as its stage's
+        // spawner puts it (its parts take part in collisions there), else
+        // below the particles.
+        slot = free_run(rdram, span, 0x8F);
+        if (slot < 0) slot = free_run(rdram, span, 0xBF);
+    } else {
+        for (int i = kLastSlot; i >= kFirstSlot; --i) {
+            if (MEM_W(0x80, slot_addr(i)) == 0) {
+                slot = i;
+                break;
+            }
         }
     }
     if (slot < 0) return -1;
@@ -145,6 +155,7 @@ void spawn_in(uint8_t* rdram, int slot, uint16_t type, int dx, int dy, uint32_t 
     MEM_W(0x88, a) = MEM_W(0x88, marina) + static_cast<int32_t>(dx * 65536);
     MEM_W(0x8C, a) = MEM_W(0x8C, marina) + static_cast<int32_t>(dy * 65536);
     if (MEM_W(0x80, a) == 0) MEM_W(0x80, a) = 3;  // active + drawn, as most spawners leave it
+    if (mm::foreign_actors::known(type)) mm::foreign_actors::setup(rdram, slot);
     if (const auto* custom = mm::custom_actors::info(type); custom != nullptr && custom->setup) {
         custom->setup(rdram, slot);
     }
@@ -282,7 +293,10 @@ void tick(uint8_t* rdram) {
             std::fprintf(stderr, "[actors] clanball machine in slots %d-%d\n", slot, slot + 1);
             continue;
         }
-        const int slot = spawn_now(rdram, type, 40 * facing, 24, request.param);
+        // Lunar's missile flies right: it starts behind Marina on the left,
+        // low enough to pass under a jump onto it.
+        const bool missile = type == 0x0F09;
+        const int slot = spawn_now(rdram, type, missile ? -150 : 40 * facing, missile ? 8 : 24, request.param);
         if (slot < 0) {
             set_result("No free actor slot right now");
             break;

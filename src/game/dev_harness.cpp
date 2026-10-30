@@ -24,7 +24,9 @@
 //   MM_SOUND_TRACE=1 (2)               positional sounds moved to player 2's camera (every call), coop_sound.cpp
 //   MM_TEST_HUD=1                      print the HUD's display list (widescreen.cpp), first frames
 //   MM_TEST_TERRAIN="x,y;x,y"          terrain bytes around world points (frame 3)
-// With MM_TEST_SCRIPT, "[clock] t<frame> <unix time>" lines every 10 frames
+//   MM_TEST_TOGGLE=7@300               toggle a cheat (its index in cheats.h) on a frame (saved: use a test home)
+// With MM_TEST_SCRIPT (or MM_TEST_CLOCK=1 alone, which leaves the controls
+// alone), "[clock] t<frame> <unix time>" lines every 10 frames
 // line screenshots up with frames (Wine runs far slower than 60 fps).
 #include "dev_harness.h"
 #include "player2.h"
@@ -39,6 +41,7 @@
 
 #include "recomp.h"
 #include "actors.h"
+#include "cheats.h"
 #include "custom_actors.h"
 #include "inspector.h"
 #include "terrain.h"
@@ -118,6 +121,7 @@ void dump_actor(uint8_t* rdram, long t, int slot) {
 
 void tick(uint8_t* rdram) {
     static const char* script = std::getenv("MM_TEST_SCRIPT");
+    static const bool clock = script != nullptr || std::getenv("MM_TEST_CLOCK") != nullptr;
     static const char* dump = std::getenv("MM_TEST_DUMP");
     static const char* trace = std::getenv("MM_TEST_TRACE");
     static const char* diff = std::getenv("MM_TEST_DIFF");
@@ -125,7 +129,7 @@ void tick(uint8_t* rdram) {
     static const char* peek = std::getenv("MM_TEST_PEEK");
     static const char* words = std::getenv("MM_TEST_WORDS");   // slot@frame: all words
     static const char* inspect = std::getenv("MM_TEST_INSPECT");   // =slot: collision view on, slot selected
-    if (!std::getenv("MM_TEST_KILL") && !std::getenv("MM_TEST_SETHP") && !std::getenv("MM_TEST_FFWD") && !std::getenv("MM_TEST_CRASH") && !script && !dump && !trace && !diff && !spawn && !peek && !words && !inspect && !std::getenv("MM_TEST_FIND") && !std::getenv("MM_TEST_SETW") && !std::getenv("MM_TEST_MACHINE") && !std::getenv("MM_TEST_WATCH") && !std::getenv("MM_TEST_PKG") && !std::getenv("MM_TEST_P2PROBE")) return;
+    if (!std::getenv("MM_TEST_KILL") && !clock && !std::getenv("MM_TEST_TOGGLE") && !std::getenv("MM_TEST_SETHP") && !std::getenv("MM_TEST_FFWD") && !std::getenv("MM_TEST_CRASH") && !script && !dump && !trace && !diff && !spawn && !peek && !words && !inspect && !std::getenv("MM_TEST_FIND") && !std::getenv("MM_TEST_SETW") && !std::getenv("MM_TEST_MACHINE") && !std::getenv("MM_TEST_WATCH") && !std::getenv("MM_TEST_PKG") && !std::getenv("MM_TEST_P2PROBE")) return;
     if (std::getenv("MM_TEST_PKG")) {             // with MM_TEST_WARP: is the clanball machine's code loaded?
         static long frames = 0;
         if (++frames % 120 == 0 && MEM_HU(0, addr(0x800BE4F0u)) == 6) {
@@ -142,7 +146,7 @@ void tick(uint8_t* rdram) {
     }
     if (generation == 0) return;
     ++t;
-    if (script && t % 10 == 0) {                 // wall clock, to time screenshots
+    if (clock && t % 10 == 0) {                 // wall clock, to time screenshots
         const double secs = std::chrono::duration<double>(
             std::chrono::system_clock::now().time_since_epoch()).count();
         std::fprintf(stderr, "[clock] t%ld %.1f\n", t, secs);
@@ -157,6 +161,14 @@ void tick(uint8_t* rdram) {
         MEM_H(0, addr(0x801225F0u)) = in;
         MEM_H(0, addr(0x8011DD70u)) = press;
         prev = in;
+    }
+    if (const char* tg = std::getenv("MM_TEST_TOGGLE")) {
+        int index = 0;
+        long at = 0;
+        if (std::sscanf(tg, "%d@%ld", &index, &at) == 2 && t == at && index >= 0 && index < mm::cheats::kCheatCount) {
+            mm::cheats::toggle(static_cast<mm::cheats::Cheat>(index));
+            std::fprintf(stderr, "[test] toggled cheat %d on frame %ld\n", index, t);
+        }
     }
     if (const char* items = std::getenv("MM_TEST_ITEMS"); items && t == std::atol(items)) {
         // Item records within 200 px of the camera: kind, handler, position.

@@ -307,6 +307,16 @@ netcode, and the owner decides.
 - Open: on Windows 10 of 16 boss states crash right after loading (in
   alLoadParam from Sound_Update, a bad sample address) while they pass on
   Linux; logs in his C:\TroubleMakersTest\bot-tests\logs\boss-*.
+  2026-10-30: very likely fixed (the same crash showed on Linux loading a
+  normal-speed state at 4x: stale virtual audio clock; NETPLAY.md "Cheats:
+  the cat anywhere"). Recheck on his PC.
+- 2026-10-30 (overnight, owner asleep): "Ride the cat" anywhere, missiles
+  and Cat Clancer from the Spawn page (NETPLAY.md). Test helpers: dev
+  harness MM_TEST_CLOCK=1 (clock lines without MM_TEST_SCRIPT, which
+  overrides the controls), MM_TEST_TOGGLE=<cheat index>@<frame>. Graphical
+  checks: record headless, play back on the graphics build under Xvfb
+  (same home config, or the replay desyncs). Pad scripts count replay
+  frames; d-pad letters (r/l) only, the game ignores the analog stick.
 - The owner's PC is linked through the desktop app (file tools + screen
   control, no shell yet). His real install and saves are in the connected
   folders: read only. Tests go to C:\TroubleMakersTest (he creates it).

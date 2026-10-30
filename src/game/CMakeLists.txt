@@ -47,6 +47,7 @@ add_executable(troublemakers
     player2_camera.cpp
     player2_lead.cpp
     player2_mount.cpp
+    foreign_actors.cpp
     throw_cheats.cpp
     split_view.cpp
     netplay.cpp

@@ -16,6 +16,7 @@ enum class Cheat : int {
     GrabBlocks,
     MortalNpcs,
     ChargedThrow,
+    CatRide,
     Count,
 };
 
