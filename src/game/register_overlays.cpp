@@ -11,6 +11,7 @@
 // feeds it to recomp::overlays::register_overlays(). Modeled on
 // reference/Zelda64Recomp/src/main/register_overlays.cpp.
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 
@@ -97,7 +98,21 @@ extern "C" void mm_virtual_audio_set(const mm_audio_clock_state* in) {
     mm_audio_input::set_submitted_audio_bytes(in->submitted);
     g_virtual_drained = in->drained;
     g_virtual_remainder = in->remainder;
-    if (g_ai_len && g_virtual_audio.load(std::memory_order_relaxed)) *g_ai_len = in->ai_len;
+    // A state taken while the clock did not run (normal speed, the host
+    // queue drives AI_LEN) carries a stale "drained": put back under the
+    // clock (fast-forward, a replay) the level read submitted - drained, any
+    // number of seconds of audio, and the game mixed a corrupt command list
+    // (its sample DMAs read past the ROM, then an invalid RSP task quit the
+    // game). Such a state starts the clock again from two queued frames.
+    const uint64_t two_frames = static_cast<uint64_t>(mm_audio_input::game_sample_rate()) * 4u * 2u / 60u;
+    const bool stale = in->drained > in->submitted || in->submitted - in->drained > two_frames * 8u;
+    if (stale) {
+        g_virtual_drained = in->submitted - std::min<uint64_t>(two_frames, in->submitted);
+        g_virtual_remainder = 0;
+    }
+    if (g_ai_len && g_virtual_audio.load(std::memory_order_relaxed)) {
+        *g_ai_len = stale ? static_cast<uint32_t>(in->submitted - g_virtual_drained) : in->ai_len;
+    }
 }
 
 // Game thread, once per frame point.

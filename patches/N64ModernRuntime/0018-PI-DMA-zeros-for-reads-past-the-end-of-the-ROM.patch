@@ -1,0 +1,48 @@
+From 7ab3de9e949d0230aec5f4bb5b4b03f3d5d3565f Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 01:18:33 +0100
+Subject: [PATCH] PI DMA: zeros for reads past the end of the ROM
+
+A game reading through a stale or torn pointer (its audio sample DMAs
+after a save state was loaded under fast-forward) read host memory past
+the ROM buffer and crashed. Such a read now lands zeros, with a warning.
+---
+ librecomp/src/pi.cpp | 18 +++++++++++++++++-
+ 1 file changed, 17 insertions(+), 1 deletion(-)
+
+diff --git a/librecomp/src/pi.cpp b/librecomp/src/pi.cpp
+index 0072da6..e38d94f 100644
+--- a/librecomp/src/pi.cpp
++++ b/librecomp/src/pi.cpp
+@@ -1,3 +1,4 @@
++#include <cstdio>
+ #include <memory>
+ #include <fstream>
+ #include <array>
+@@ -68,7 +69,22 @@ void recomp::do_rom_read(uint8_t* rdram, gpr ram_address, uint32_t physical_addr
+     // TODO handle misaligned DMA
+     assert((physical_addr & 0x1) == 0 && "Only PI DMA from aligned ROM addresses is currently supported");
+     assert((ram_address & 0x7) == 0 && "Only PI DMA to aligned RDRAM addresses is currently supported");
+-    uint8_t* rom_addr = rom.data() + physical_addr - recomp::rom_base;
++    // A read past the end of the ROM (a game reading through a stale or torn
++    // pointer, e.g. its audio DMA right after a save state was loaded) gets
++    // zeros instead of reading host memory past the ROM buffer.
++    const uint64_t rom_offset = (uint64_t)physical_addr - recomp::rom_base;
++    if (physical_addr < recomp::rom_base || rom_offset + num_bytes > rom.size()) {
++        static int reported = 0;
++        if (reported++ < 8) {
++            fprintf(stderr, "[WARN] PI DMA read past the ROM: phys 0x%08X size 0x%zX -> 0x%08X (zeros)\n",
++                    physical_addr, num_bytes, (uint32_t)ram_address);
++        }
++        for (size_t i = 0; i < num_bytes; i++) {
++            MEM_B(i, ram_address) = 0;
++        }
++        return;
++    }
++    uint8_t* rom_addr = rom.data() + rom_offset;
+     for (size_t i = 0; i < num_bytes; i++) {
+         MEM_B(i, ram_address) = *rom_addr;
+         rom_addr++;
+-- 
+2.43.0
+
