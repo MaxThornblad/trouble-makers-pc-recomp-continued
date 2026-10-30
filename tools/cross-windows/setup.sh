@@ -10,6 +10,8 @@ X=${TM_XDEPS:-/home/claude/xdeps}
 mkdir -p "$X/hosttools" "$X/winshim/GL" "$X/winshim/gl"
 cp tools/cross-windows/mingw_compat.h tools/cross-windows/mingw_d3d12_guids.h tools/cross-windows/mingw_dxc_uuids.h "$X/"
 cp tools/cross-windows/dxc-wine "$X/hosttools/"
+# (its default checkout path, made this one: the build runs it without TM_REPO)
+sed -i "s|\${TM_REPO:-[^}]*}|\${TM_REPO:-$REPO}|" "$X/hosttools/dxc-wine"
 
 # Case-sensitive header names MSVC code uses, pointing at MinGW's.
 M=/usr/x86_64-w64-mingw32/include
