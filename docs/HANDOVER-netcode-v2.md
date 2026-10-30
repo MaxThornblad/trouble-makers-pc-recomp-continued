@@ -327,6 +327,12 @@ netcode, and the owner decides.
   checks: record headless, play back on the graphics build under Xvfb
   (same home config, or the replay desyncs). Pad scripts count replay
   frames; d-pad letters (r/l) only, the game ignores the analog stick.
+- 2026-10-30 (later that night): cheat cats face the way they run (mirrored
+  about the seat); far apart (split screen / online) player 2 can ride
+  away from player 1 (the cat's "on the loop" player-state bit is cleared
+  after its update only under far rules: on a shared screen the rider
+  needs it). New bot scenarios: catx-<stage> (cat cheat in every boss and
+  special stage), clancer-<stage>, far-cat-*, far-catx-<stage>.
 - The owner's PC is linked through the desktop app (file tools + screen
   control, no shell yet). His real install and saves are in the connected
   folders: read only. Tests go to C:\TroubleMakersTest (he creates it).

@@ -29,6 +29,7 @@ constexpr uint32_t kMarinaWorldY = 0x800BE5DCu;
 // target after it, 0x800BE5A8..B4, which LookAt_Update reads).
 constexpr uint32_t kCamera = 0x800BE544u;
 constexpr uint32_t kCameraSize = 0x74u;
+constexpr uint32_t kCameraX = 0x800BE558u, kCameraY = 0x800BE55Cu;   // s32 16.16: what screen positions are relative to
 
 // The cat (3-12) keeps state outside its record, in the stage package's
 // globals 0x801A80E6..0x801A80EB, which any cat code reads and writes. Last
@@ -93,9 +94,10 @@ struct Rider {
     uint32_t globals;      // her own copy of the cat's globals (player 2 only)
     uint32_t missile;      // s32: the missile her cat rides (player 2 only)
     uint32_t lift;         // s32: the cat's floor outside 3-12 (see kCatRest)
+    uint32_t facing;       // s32: 1 while the cat outside 3-12 faces left (see mirror_cat)
 };
-constexpr Rider kP1{false, kPlayer1CustomIndex, 0x807F0680u, 0x807F0684u, 0, 0, 0x807F0688u};
-constexpr Rider kP2{true, kCustomIndex, 0x807F0418u, 0x807F041Cu, 0x807F0670u, 0x807F0678u, 0x807F068Cu};
+constexpr Rider kP1{false, kPlayer1CustomIndex, 0x807F0680u, 0x807F0684u, 0, 0, 0x807F0688u, 0x807F0690u};
+constexpr Rider kP2{true, kCustomIndex, 0x807F0418u, 0x807F041Cu, 0x807F0670u, 0x807F0678u, 0x807F068Cu, 0x807F0694u};
 
 // Outside 3-12 the cat is on ground it does not know: its code keeps it on
 // the loop's flat floor, at a fixed height on the screen (the controller
@@ -272,6 +274,10 @@ void spawn(uint8_t* rdram, const Rider& r, const Mount& m) {
     // stage's slot) builds the parts after it and takes the rider up, as
     // the stage's did for Marina.
     const int c = character_slot(rdram, r);
+    // Seated from here: whatever she was flying with (a throw) goes, or it
+    // carried her off her new seat for a few frames.
+    MEM_W(0xEC, slot_addr(c)) = 0;
+    MEM_W(0xF0, slot_addr(c)) = 0;
     const int dx = (MEM_W(0x88, slot_addr(c)) - MEM_W(0x88, slot_addr(0))) >> 16;
     const int dy = (MEM_W(0x8C, slot_addr(c)) - MEM_W(0x8C, slot_addr(0))) >> 16;
     mm::actors::spawn_in(rdram, first, m.type, dx, dy);
@@ -279,6 +285,7 @@ void spawn(uint8_t* rdram, const Rider& r, const Mount& m) {
     MEM_W(0, addr(r.mount)) = first;
     MEM_W(0, addr(r.type)) = m.type;
     MEM_W(0, addr(r.lift)) = 0;
+    MEM_W(0, addr(r.facing)) = 0;
     if (m.request != 0) request(rdram, r, m.request);   // and she gets on (her riding state), as Marina was told to
     if (!mm::faraway::in_shadow()) {
         std::fprintf(stderr, "[mount] %s's own %s (slots %d..%d)\n", r.p2 ? "player 2" : "player 1", m.name, first, first + m.span - 1);
@@ -311,15 +318,37 @@ int ground_under(uint8_t* rdram, int x, int y) {
 }
 
 // Ground or a wall in the cat's way: its front (kCatFront px ahead) from
-// above its feet to its back, camera-relative px. Or the screen's edge
-// (kCatEdge from the middle; the camera stops at a stage's ends).
+// above its feet to its back, camera-relative px. Or, on a shared screen,
+// its edge (kCatEdge from the middle; the camera stops at a stage's ends).
+// (Asked before a cat's update: it runs in the slots it borrows, player 2's
+// record among them (3-12's 96..109), and far_coop, not finding her there,
+// would say the screen is shared.)
 constexpr int kCatFront = 28, kCatStep = 6, kCatBack = 44, kCatEdge = 140;
-bool cat_blocked(uint8_t* rdram, int x, int feet, int dir) {
-    if (dir * x > kCatEdge) return true;
+bool shared_screen(uint8_t* rdram) {
+    return !mm::faraway::active(rdram);
+}
+
+bool cat_blocked(uint8_t* rdram, int x, int feet, int dir, bool shared) {
+    if (shared && dir * x > kCatEdge) return true;
     for (int y = feet + kCatStep; y <= feet + kCatBack; y += 6) {
         if (terrain_solid(rdram, x + dir * kCatFront, y)) return true;
     }
     return false;
+}
+
+// 3-12's cat only ever runs right. Running left outside 3-12 it is shown
+// turned round: its parts (the slots after the controller) mirrored about
+// its seat (the first part, where the rider sits: she stays put) and their
+// pictures flipped (+0x80 bit 0x20, as Marina's facing). Undone before its
+// update, so its code always sees itself as it left itself.
+constexpr uint32_t kFacingLeft = 0x20;
+void mirror_cat(uint8_t* rdram, const Mount& m) {
+    const int32_t seat = MEM_W(0x88, slot_addr(m.slot + 1));
+    for (int i = 1; i < m.span; ++i) {
+        const gpr part = slot_addr(m.slot + i);
+        MEM_W(0x88, part) = 2 * seat - MEM_W(0x88, part);
+        MEM_W(0x80, part) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0x80, part)) ^ kFacingLeft);
+    }
 }
 
 // The missile's landing test (func_801A1178, flying state): a cat falling
@@ -438,6 +467,73 @@ void missile_begin(uint8_t* rdram, int actor) {
     MEM_H(0, msg) = MEM_H(0, hers);
 }
 
+// A cat outside 3-12, around its update: what its code sees is 3-12's
+// loop (its floor under it, its spot on the screen, the loop's speed, facing
+// right), what it does is turned back into the stage's terms after.
+struct CatOnLoop {
+    bool shared;   // one screen for both (shared_screen)
+    int32_t lift = 0, across = 0, pace = 0;
+
+    void enter(uint8_t* rdram, const Rider& r, const Mount& m) {
+        if (MEM_W(0, addr(r.facing)) != 0) mirror_cat(rdram, m);   // (as its code left it)
+        const gpr cat = slot_addr(m.slot);
+        const uint16_t state = MEM_HU(0xD0, cat);
+        const bool on_missile = state == kCatLanding || state == kCatRiding;   // (the missile carries it, in the same terms)
+        if (!on_missile) {
+            const int32_t prev = MEM_W(0, addr(r.lift));
+            const int ground = ground_under(rdram, MEM_H(0x88, cat), MEM_H(0x8C, cat) - kCatFeet);
+            const int32_t want = ground == kNoGround ? prev - kCatFall : ground - kCatRest;
+            lift = std::max(want, prev - kCatFall);
+            // Left behind by the camera (it follows the other player) past
+            // the screen's edge: dragged along at the edge, as the shared
+            // screen keeps a player on foot (she was at -257 on her cat, and
+            // snapped to -180 when she got off). Far apart each has a camera
+            // of her own: no shared screen.
+            const int x = MEM_H(0x88, cat);
+            const int drag = !shared ? 0 : x < -kCatEdge ? -kCatEdge - x : x > kCatEdge ? kCatEdge - x : 0;
+            if (drag != 0) {
+                move(rdram, m, drag << 16, 0);
+                MEM_W(0, addr(kMarinaWorldX)) += drag << 16;
+            }
+            across = MEM_W(0x88, cat) - (kCatHomeX << 16);
+        }
+        MEM_W(0, addr(r.lift)) = lift;
+        pace = MEM_W(0xEC, cat);
+        MEM_W(0xEC, cat) = kLoopScroll;
+        move(rdram, m, -across, -(lift << 16));
+    }
+
+    void leave(uint8_t* rdram, const Rider& r, const Mount& m) {
+        const gpr cat = slot_addr(m.slot);
+        const uint16_t held = MEM_HU(0, addr(kHold));
+        const int32_t want = (held & MEM_HU(0, addr(kRightMask))) ? kCatSpeed : (held & MEM_HU(0, addr(kLeftMask))) ? -kCatSpeed : 0;
+        pace = want > pace ? std::min(want, pace + kCatAccel) : std::max(want, pace - kCatAccel);
+        const int x = (MEM_W(0x88, cat) + across) >> 16, feet = (MEM_W(0x8C, cat) >> 16) + lift - kCatFeet;
+        if (pace != 0 && cat_blocked(rdram, x + (pace >> 16), feet, pace > 0 ? 1 : -1, shared)) pace = 0;
+        MEM_W(0xEC, cat) = pace;
+        if (want != 0) MEM_W(0, addr(r.facing)) = want < 0 ? 1 : 0;   // (the way last asked)
+        move(rdram, m, across, lift << 16);
+        if (MEM_W(0, addr(r.facing)) != 0) mirror_cat(rdram, m);
+        // Far apart her camera follows her: the cat's "carried by the loop"
+        // bit would have it scroll by the loop's speed, holding her ~135 px
+        // from the other player. On a shared screen the rider's own code
+        // needs the bit (without it she jitters on and off the seat).
+        if (!shared)
+            MEM_W(0, addr(kPlayerState)) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0, addr(kPlayerState))) & ~kOnLoop);
+    }
+
+    // The cat, its parts and its rider (16.16 px).
+    static void move(uint8_t* rdram, const Mount& m, int32_t dx, int32_t dy) {
+        if (dx == 0 && dy == 0) return;
+        for (int i = 0; i < m.span; ++i) {
+            MEM_W(0x88, slot_addr(m.slot + i)) += dx;
+            MEM_W(0x8C, slot_addr(m.slot + i)) += dy;
+        }
+        MEM_W(0x88, slot_addr(0)) += dx;
+        MEM_W(0x8C, slot_addr(0)) += dy;
+    }
+};
+
 void update(uint8_t* rdram, recomp_context* ctx, int slot) {
     const Rider* r = rider_of(MEM_HU(0xD2, slot_addr(slot)));
     const Mount* m = r ? mount_of_type(static_cast<uint16_t>(MEM_W(0, addr(r->type)))) : nullptr;
@@ -460,60 +556,26 @@ void update(uint8_t* rdram, recomp_context* ctx, int slot) {
     // Another stage's package (decided before it is swapped in, when it
     // looks loaded).
     const bool foreign = !mm::foreign_actors::native(rdram, m->type);
-    mm::foreign_actors::with_package(rdram, m->type, [ctx, m, r, slot, foreign](uint8_t* rdram) {
+    const bool shared = shared_screen(rdram);
+    mm::foreign_actors::with_package(rdram, m->type, [ctx, m, r, slot, foreign, shared](uint8_t* rdram) {
         // (A call like the actor loop's own: the game's context, $a0 = the
         // slot.) The camera is not the copy's to drive: the stage's mount
         // scrolls it (3-12 keeps one shared camera) or the stage's own
         // camera follows the rider, so what the copy does to the camera's
         // words is put back.
-        auto ride = [ctx, m, r, slot, foreign](uint8_t* rdram) {
+        auto ride = [ctx, m, r, slot, foreign, shared](uint8_t* rdram) {
             std::vector<uint8_t> theirs(static_cast<size_t>(m->span) * (kStride - 0x80));
             for (int i = 0; i < m->span; ++i) std::memcpy(theirs.data() + i * (kStride - 0x80), slot_ptr(rdram, m->slot + i) + 0x80, kStride - 0x80);
             copy_records(rdram, m->slot, slot, m->span);
             MEM_H(0xD2, slot_addr(m->slot)) = static_cast<int16_t>(m->type);
-            // Outside its stage: the ground under it as its floor (kCatRest).
-            int32_t lift = 0, across = 0, pace = 0;
-            int ground = 0;
-            if (m->type == kCat && foreign) {
-                const gpr cat = slot_addr(m->slot);
-                const uint16_t state = MEM_HU(0xD0, cat);
-                if (state != kCatLanding && state != kCatRiding) {
-                    const int32_t prev = MEM_W(0, addr(r->lift));
-                    ground = ground_under(rdram, MEM_H(0x88, cat), MEM_H(0x8C, cat) - kCatFeet);
-                    const int32_t want = ground == kNoGround ? prev - kCatFall : ground - kCatRest;
-                    lift = std::max(want, prev - kCatFall);
-                }
-                MEM_W(0, addr(r->lift)) = lift;
-                // Left behind by the camera (it follows the other player)
-                // past the screen's edge: dragged along at the edge, as the
-                // shared screen keeps a player on foot (she was at -257 on
-                // her cat, and snapped to -180 when she got off).
-                if (state != kCatLanding && state != kCatRiding) {
-                    const int x = MEM_H(0x88, cat);
-                    const int drag = x < -kCatEdge ? -kCatEdge - x : x > kCatEdge ? kCatEdge - x : 0;
-                    if (drag != 0) {
-                        for (int i = 0; i < m->span; ++i) MEM_W(0x88, slot_addr(m->slot + i)) += drag << 16;
-                        MEM_W(0x88, slot_addr(0)) += drag << 16;
-                        MEM_W(0, addr(kMarinaWorldX)) += drag << 16;
-                    }
-                }
-                pace = MEM_W(0xEC, cat);
-                MEM_W(0xEC, cat) = kLoopScroll;
-                across = MEM_W(0x88, cat) - (kCatHomeX << 16);
-                if (state == kCatLanding || state == kCatRiding) across = 0;
-                for (int i = 0; i < m->span; ++i) {
-                    MEM_W(0x88, slot_addr(m->slot + i)) -= across;
-                    MEM_W(0x8C, slot_addr(m->slot + i)) -= lift << 16;
-                }
-                MEM_W(0x88, slot_addr(0)) -= across;
-                MEM_W(0x8C, slot_addr(0)) -= lift << 16;
-            }
+            // Outside its stage the cat is run as if on 3-12's loop (CatOnLoop).
+            CatOnLoop loop{shared};
+            const bool on_loop = m->type == kCat && foreign;
+            if (on_loop) loop.enter(rdram, *r, *m);
             const bool own_globals = r->globals != 0 && m->type == kCat;
             if (own_globals) swap_bytes(rdram, kCatGlobals, r->globals, kCatGlobalsSize);   // her cat's own state
             uint8_t camera[kCameraSize];
             std::memcpy(camera, rdram + (kCamera - 0x80000000u), kCameraSize);
-            const int32_t rider_x = MEM_W(0x88, slot_addr(0)), rider_y = MEM_W(0x8C, slot_addr(0));
-            const int32_t world_x = MEM_W(0, addr(kMarinaWorldX)), world_y = MEM_W(0, addr(kMarinaWorldY));
             const gpr a0 = ctx->r4;
             ctx->r4 = static_cast<gpr>(m->slot);
             // Its first update builds it, unless the rider was just hit
@@ -529,31 +591,19 @@ void update(uint8_t* rdram, recomp_context* ctx, int slot) {
             ctx->r4 = a0;
             // The cat moves its rider on the screen (func_801A22AC) and
             // pushes her world position on by the loop's scroll (10 px a
-            // frame: the camera follows her, so 3-12 scrolls). Elsewhere
-            // her world position goes only where the cat took her on the
-            // screen, or the camera ran away to the right.
-            if (foreign) {
-                MEM_W(0, addr(kMarinaWorldX)) = world_x + (MEM_W(0x88, slot_addr(0)) - rider_x);
-                MEM_W(0, addr(kMarinaWorldY)) = world_y + (MEM_W(0x8C, slot_addr(0)) - rider_y);
-            }
+            // frame: the camera follows her, so 3-12 scrolls), and so does
+            // her own update while the cat's "on the loop" mark is on her.
+            // Elsewhere her world position is where she sits (the camera
+            // now loaded plus her place on the screen, as func_8004ED10
+            // has it), or the camera ran away to the right (far apart, her
+            // own camera, holding her in its walls).
+            // (Once she is back in her place: the loop pinned her cat.)
             std::memcpy(rdram + (kCamera - 0x80000000u), camera, kCameraSize);
             if (own_globals) swap_bytes(rdram, kCatGlobals, r->globals, kCatGlobalsSize);
-            if (m->type == kCat && foreign) {
-                const gpr cat = slot_addr(m->slot);
-                const uint16_t held = MEM_HU(0, addr(kHold));
-                const int32_t want = (held & MEM_HU(0, addr(kRightMask))) ? kCatSpeed : (held & MEM_HU(0, addr(kLeftMask))) ? -kCatSpeed : 0;
-                pace = want > pace ? std::min(want, pace + kCatAccel) : std::max(want, pace - kCatAccel);
-                const int x = (MEM_W(0x88, cat) + across) >> 16, feet = (MEM_W(0x8C, cat) >> 16) + lift - kCatFeet;
-                if (pace != 0 && cat_blocked(rdram, x + (pace >> 16), feet, pace > 0 ? 1 : -1)) pace = 0;
-                MEM_W(0xEC, cat) = pace;
-            }
-            if (lift != 0 || across != 0) {
-                for (int i = 0; i < m->span; ++i) {
-                    MEM_W(0x88, slot_addr(m->slot + i)) += across;
-                    MEM_W(0x8C, slot_addr(m->slot + i)) += lift << 16;
-                }
-                MEM_W(0x88, slot_addr(0)) += across;
-                MEM_W(0x8C, slot_addr(0)) += lift << 16;
+            if (on_loop) loop.leave(rdram, *r, *m);
+            if (foreign) {
+                MEM_W(0, addr(kMarinaWorldX)) = MEM_W(0x88, slot_addr(0)) + MEM_W(0, addr(kCameraX));
+                MEM_W(0, addr(kMarinaWorldY)) = MEM_W(0x8C, slot_addr(0)) + MEM_W(0, addr(kCameraY));
             }
             copy_records(rdram, slot, m->slot, m->span);
             MEM_H(0xD2, slot_addr(slot)) = static_cast<int16_t>(mm::custom_actors::type_id(r->custom));

@@ -87,6 +87,14 @@ SCENARIOS += [
     # state, no loop scroll carrying them) and walk on.
     ("cat-off", 1, 900, "200:r,200:,300:l,200:", "900:", 0,
      dict(env=dict(CAT, MM_TEST_TOGGLE="7@400"), expect=["[cheats] Ride the cat off"])),
+    # Turned on mid-stage: both get a cat at their feet and sit on it where
+    # they stand (player 2 was put next to player 1 for a few frames online).
+    ("cat-on", 1, 700, "60:,100:r,200:,200:l,140:", "60:,100:l,200:,200:r,140:", 0,
+     dict(env={"MM_TEST_TOGGLE": "7@100"}, expect=["[cheats] Ride the cat on", "[mount] player 2's own cat"])),
+    # The same in random play (net-cat's scripts: on while player 2 lands
+    # from player 1's throw).
+    ("cat-on-fuzz", 1, 1500, fuzz(905), fuzz(906), 3,
+     dict(env={"MM_TEST_TOGGLE": "7@100"}, expect=["[mount] player 2's own cat"])),
     # Lunar's missile spawned ahead (as the Spawn page puts it) flies back
     # past player 1; her cat's jump lands on it and she steers it.
     ("cat-missile", 1, 700, "128:,25:A,60:,80:r,80:l,350:", "700:", 0,
@@ -128,6 +136,17 @@ for slot, label in STAGES:
     SCENARIOS.append(("stage-%s" % label, slot, 1800, fuzz(1300 + slot, grab_bias=True), fuzz(1400 + slot), 3))
     SCENARIOS.append(("stage-%s-run" % label, slot, 1500, "1500:r", "60:,1440:r", 3))
 
+# "Ride the cat" anywhere: random play on cats in every boss and special
+# stage (rides, rafts, free falls, arenas), and Cat Clancer spawned in a few
+# of them. 3-11 has its own cat machine; there the cheat must stay out of
+# its way (no expectation).
+for slot, label in BOSSES + STAGES:
+    SCENARIOS.append(("catx-%s" % label, slot, 1500, fuzz(1500 + slot), fuzz(1550 + slot), BOSS_REJOINS.get(label, 3) + 2,
+                      dict(env=CAT, expect=["[mount] player 1's own cat"] if label != "3-11" else [])))
+for slot, label in ((4, "t4"), (32, "2-7"), (14, "3-8"), (42, "4-7")):
+    SCENARIOS.append(("clancer-%s" % label, slot, 900, fuzz(1601 + slot), fuzz(1651 + slot), 3,
+                      dict(env={"MM_TEST_SPAWN": "2801@120@80@0"}, expect=["spawned 2801"])))
+
 # Far apart (far_coop.cpp), run locally with MM_FAR=1: once as player 1's
 # machine sees it and once building player 2's picture each frame
 # (MM_FAR_SHADOW=1), which must not change the game at all (same memory
@@ -148,6 +167,15 @@ FAR = [
     ("far-there-and-back", 1, 1200, "60:,500:r,600:", "60:,300:l,300:r,500:", 400),
     ("far-fuzz-4", 4, 1800, fuzz(404, grab_bias=True), "60:," + fuzz(405), 0),
     ("far-fuzz-2", 2, 1800, fuzz(202), "60:,300:l," + fuzz(203), 0),
+    # Both on cats (the cheat) far apart: player 2's cat in her own view.
+    ("far-cat", 1, 1200, "60:,500:r,600:", "60:,500:l,600:", 300, dict(env={"MM_TEST_CHEATS": "cat_ride=1"})),
+    ("far-cat-fuzz", 1, 1500, fuzz(1501), fuzz(1502), 0, dict(env={"MM_TEST_CHEATS": "cat_ride=1"})),
+    ("far-cat-apart-4", 4, 1200, "60:,500:l,600:", "60:,500:r,600:", 0, dict(env={"MM_TEST_CHEATS": "cat_ride=1"})),
+    ("far-cat-9", 9, 1200, "60:,500:r,600:", "60:,500:l,600:", 0, dict(env={"MM_TEST_CHEATS": "cat_ride=1"})),
+] + [
+    ("far-catx-%s" % label, slot, 1200, fuzz(1700 + slot), "60:,240:l," + fuzz(1750 + slot), 0,
+     dict(env={"MM_TEST_CHEATS": "cat_ride=1"}))
+    for slot, label in ((32, "2-7"), (42, "4-7"), (20, "5-3"), (25, "3-3"))
 ] + [
     ("far-boss-%s" % label, slot, 1500, fuzz(900 + slot), "60:,240:l," + fuzz(950 + slot), 0)
     for slot, label in BOSSES
@@ -267,7 +295,8 @@ def run_game(args, env, timeout):
 CARRY_STATES = {0x16, 0x2F, 0x11F, 0x122, 0x126, 0xA14, 0xB14}
 # Scripted moves: a star teleporter's flight (0x301).
 SCRIPTED_STATES = {0x301, 0x231,   # 0x231: back onto her cat (3-12) after a fall
-                   0x401}          # hurt: a hazard (2-6's lava) puts her back on safe ground (the same spot each time)
+                   0x401,          # hurt: a hazard (2-6's lava) puts her back on safe ground (the same spot each time)
+                   0x001}          # moved by the stage (4-2's ride; 3-3: a missile flying off with her)
 # Riding a mount (3-12's cats: 0x003, getting on / off and bucked 0x230,
 # 0x231, 0x233, 0x531): the stage keeps riders in view itself, out to
 # about 240 px from the camera, so the shared-screen check allows that
@@ -371,14 +400,14 @@ def check_trace(text, allowed_rejoins, far=False):
                 # 1010 px round) wraps the camera and the players back up.
                 if abs(a[1] - b[1]) > 600 and abs(a[0] - b[0]) <= 8:
                     continue
-                if states[k] in CARRY_STATES or prev[2][k] in CARRY_STATES:
-                    continue
-                if states[k] in SCRIPTED_STATES or prev[2][k] in SCRIPTED_STATES:
-                    continue
                 # Getting (back) on a mount: it seats its rider (a new cat
                 # from the cheat, back on her bee after a grab).
                 if states[k] in RIDING_STATES and prev[2][k] not in RIDING_STATES:
                     joined_recently = max(joined_recently, 2)   # (and the frame after)
+                    continue
+                if states[k] in CARRY_STATES or prev[2][k] in CARRY_STATES:
+                    continue
+                if states[k] in SCRIPTED_STATES or prev[2][k] in SCRIPTED_STATES:
                     continue
                 # Landing (a new state) may snap her up onto what she lands on.
                 max_step[k] = max(max_step[k], abs(a[0] - b[0]))

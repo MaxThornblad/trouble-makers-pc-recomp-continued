@@ -560,6 +560,9 @@ too, and to spawn 3-11's Cat Clancer anywhere.
     code now sees the loop's 10 px and the cat at x 33; what moves it is the
     rider's d-pad (6 px a frame either way, reached in 12 frames; it stands
     without), stopped by walls and the screen's edge.
+  - Facing: 3-12's cat only runs right. Running left it is shown turned
+    round: its parts mirrored about its seat (the rider stays put) and
+    their pictures flipped (+0x80 bit 0x20), undone before its update.
   - Turned off while riding, the rider falls from her seat, and what the
     cat set on her goes (+0x94 bit 0x100, player-state 0x80137458 bit
     0x10000: with that bit her own update carried her on at 10 px a frame).
@@ -604,7 +607,18 @@ too, and to spawn 3-11's Cat Clancer anywhere.
   rider sitting on nothing, carried on at the loop's 10 px a frame: the
   rider gets off as when the cheat goes off, and gets a new cat.
 - A cat rider left behind by the camera past the screen's edge is dragged
-  along at the edge, as the shared screen keeps a player on foot.
+  along at the edge, as the shared screen keeps a player on foot (not far
+  apart / split screen, where each has her own camera).
+- Far apart (online, split screen) player 2 could not ride away from
+  player 1: the "carried by the loop" bit the cat sets on its rider
+  (player state 0x80137458 bit 0x10000) made her own update push her world
+  position on by 10 px a frame, her camera followed that and its walls
+  held her. Outside 3-12, with far rules on, the bit is cleared after
+  each cat update (far-cat, far-cat-fuzz). Not on a shared screen: there
+  the rider's own code needs it, or she jitters on and off her seat
+  (cat-3/4/5 failed with the bit always cleared).
+- Getting on a cat mid-throw: the rider's speed is cleared when her cat is
+  made.
 - Bot scenarios: cat-1..9 (random play with the cheat on in each test
   stage), cat-off, cat-missile, clancer (tools/coop_bots.py; cheats for a
   run come from MM_TEST_CHEATS, never written to the test home).
