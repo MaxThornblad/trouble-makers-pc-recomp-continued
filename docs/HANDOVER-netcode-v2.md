@@ -310,6 +310,16 @@ netcode, and the owner decides.
   2026-10-30: very likely fixed (the same crash showed on Linux loading a
   normal-speed state at 4x: stale virtual audio clock; NETPLAY.md "Cheats:
   the cat anywhere"). Recheck on his PC.
+- 2026-10-30 (overnight): 5-3's bee for player 2; cat cheat crash/drift
+  fixes from cat-1..9; stage-* bot scenarios (states in the test home's
+  slots 32-44 from --make-boss-states; 4-1, 4-8 and 2-4 never reach plain
+  play there, so they have none and their scenarios skip). Open: 3-3
+  (Missile Surf!): player 1 stands on and steers a missile (type 0x1C0E,
+  slot 49, func_801A88C8, held on the screen while the camera scrolls);
+  player 2 has none and is left behind (the leash brings her back). A copy
+  for her like the cat / bee was tried: it builds but never flies (its
+  "ridden" bit 0x2000 drops even with her +0xCC "standing on" slot mapped
+  to 49), so it was taken out again.
 - 2026-10-30 (overnight, owner asleep): "Ride the cat" anywhere, missiles
   and Cat Clancer from the Spawn page (NETPLAY.md). Test helpers: dev
   harness MM_TEST_CLOCK=1 (clock lines without MM_TEST_SCRIPT, which

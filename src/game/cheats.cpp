@@ -112,7 +112,7 @@ gpr addr(uint32_t vaddr) {
 }
 
 void save() {
-    if (g_path.empty() || std::getenv("MM_TEST_CHEATS") || std::getenv("MM_TEST_TOGGLE")) return;   // (tests share a home)
+    if (g_path.empty() || std::getenv("MM_TEST_CHEATS") || std::getenv("MM_TEST_TOGGLE") || std::getenv("MM_NET_TOGGLE")) return;   // (tests share a home)
     std::lock_guard lock{g_file_mutex};
     std::ofstream f(g_path, std::ios::trunc);
     if (!f) {

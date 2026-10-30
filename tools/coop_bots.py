@@ -215,6 +215,11 @@ NETPLAY = [
     ("net-carry", 1, 1200, "80:,6:l,10:B,20:,60:r,30:,60:l,20:,10:B,900:", "600:,6:r,10:B,20:,60:l,30:,60:r,20:,10:B,400:"),
     ("net-fuzz", 4, 1800, fuzz(901, grab_bias=True), fuzz(902, grab_bias=True)),
     ("net-fuzz-9", 9, 1800, fuzz(903, grab_bias=True), fuzz(904, grab_bias=True)),
+    # "Ride the cat" (cheat 7) turned on by the host: both machines build the
+    # same cats from 3-12's package and stay identical.
+    ("net-cat", 1, 1500, fuzz(905), fuzz(906), dict(env={"MM_NET_TOGGLE": "7@100"})),
+    # 5-3: player 2's own bee online.
+    ("net-bee", 20, 1500, fuzz(907, grab_bias=True), fuzz(908, grab_bias=True)),
 ]
 
 BASE_ENV = {"MM_HEADLESS_GFX": "1", "SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"}
@@ -369,6 +374,11 @@ def check_trace(text, allowed_rejoins, far=False):
                 if states[k] in CARRY_STATES or prev[2][k] in CARRY_STATES:
                     continue
                 if states[k] in SCRIPTED_STATES or prev[2][k] in SCRIPTED_STATES:
+                    continue
+                # Getting (back) on a mount: it seats its rider (a new cat
+                # from the cheat, back on her bee after a grab).
+                if states[k] in RIDING_STATES and prev[2][k] not in RIDING_STATES:
+                    joined_recently = max(joined_recently, 2)   # (and the frame after)
                     continue
                 # Landing (a new state) may snap her up onto what she lands on.
                 max_step[k] = max(max_step[k], abs(a[0] - b[0]))
