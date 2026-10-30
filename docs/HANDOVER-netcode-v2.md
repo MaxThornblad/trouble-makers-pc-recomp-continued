@@ -430,6 +430,13 @@ netcode, and the owner decides.
   test states); catx-3-3, far-catx-3-3 and now catx-3-6 show the carry /
   hold flicker (player 2 alternates between two x every frame while
   holding). Open: that flicker.
+- 2026-10-30, branch review-fixes: preview 19 (Windows, game code 516676e):
+  Cat Clancer away from 3-11 is a pet (src/game/pet_clancer.cpp, from the
+  decompilation's reading of his match code: his states picked for him
+  each frame; falls, follows the nearest player, jumps at walls and up to
+  her, grabbable, thrown and back; Mortal NPCs leaves him alone). Bot
+  scenarios pet-clancer, pet-clancer-wall. Open: he jumps at steps he
+  could walk up; the carry flicker.
 
 ## 5. Open questions for the owner (ask when relevant, not up front)
 
