@@ -7,7 +7,7 @@ conv() { local p="$1"; echo "Z:${p//\//\\}"; }
 args=()
 for a in "$@"; do
   case "$a" in
-    /*) args+=("$(conv "$a")") ;;
+    /*/*) args+=("$(conv "$a")") ;;   # a path (a switch like /Fo stays as it is)
     -I/*) args+=("-I$(conv "${a#-I}")") ;;
     *) args+=("$a") ;;
   esac
