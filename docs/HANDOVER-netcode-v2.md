@@ -411,6 +411,14 @@ netcode, and the owner decides.
   session kit's test-home needs this slot 9 (copy from
   /tmp/claude-0/t1/home_312 in this container, or remake it with
   MM_TEST_WARP=3-12 MM_TEST_SAVESTATE_SLOT=9 MM_TEST_SAVESTATE=save@760).
+- 2026-10-30, branch review-fixes: preview 17 (Windows, game code b76f4f1):
+  the code-review fixes (spawn list registered, whole-settings prediction
+  compare, probe spans, deferred player-1 flag, mount removal, gem marks,
+  padding assert, harness scoping), Cat Clancer skips his 3-11 intro away
+  from 3-11, the cat cheat's body-sized collision (steps, ledges, jumps
+  keep their speed; bot scenarios cat-house-door / -roof on the owner's
+  preview-16 states, test-home slots 52/53). Open: missile mount button
+  (owner's bug 3), the 3-3 carry flicker seen in far-catx-3-3.
 
 ## 5. Open questions for the owner (ask when relevant, not up front)
 
