@@ -127,12 +127,15 @@ constexpr Rider kP2{true, kCustomIndex, 0x807F0418u, 0x807F041Cu, 0x807F0670u, 0
 // rests at y -36, its feet 10 px lower). So for its update the cat, its
 // parts and its rider are moved down by "lift", what puts the ground under
 // it at that floor, and back up after: the cat runs on hills, steps and
-// blocks. The lift follows the ground up at once and down no faster than a
-// fall, so the cat drops off ledges instead of sinking through them. Not
+// blocks. The lift follows the ground up no faster than kCatRise (it steps
+// up a tall step over a few frames: snapped up 22 px at once, the cat and
+// its rider jumped) and down no faster than a fall, so the cat drops off
+// ledges instead of sinking through them. Not
 // while it rides a missile (the missile carries it, in the same terms).
 constexpr int kCatRest = -36 - 10;    // the loop's floor, under the controller at rest
 constexpr int kCatFeet = 10;          // feet below the controller
 constexpr int kCatFall = 8;           // px a frame the floor may drop
+constexpr int kCatRise = 8;           // px a frame the floor may rise
 constexpr int kGroundSearch = 240;    // px searched below the feet
 constexpr int kPitY = -300;           // camera-relative: far below the screen (it shows about -120..120)
 // The cat's own body (its controller's box, +-16 around it; the rider sits
@@ -669,7 +672,7 @@ struct CatOnLoop {
             const int32_t prev = MEM_W(0, addr(r.lift));
             const int ground = ground_under(rdram, MEM_H(0x88, cat), MEM_H(0x8C, cat) - kCatFeet, m);
             const int32_t want = ground == kNoGround ? prev - kCatFall : ground - kCatRest;
-            lift = std::max(want, prev - kCatFall);
+            lift = std::min(std::max(want, prev - kCatFall), prev + kCatRise);
             // Left behind by the camera (it follows the other player) past
             // the screen's edge: dragged along at the edge, as the shared
             // screen keeps a player on foot (she was at -257 on her cat, and
