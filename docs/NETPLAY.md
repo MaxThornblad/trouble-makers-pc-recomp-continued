@@ -566,7 +566,11 @@ too, and to spawn 3-11's Cat Clancer anywhere.
 - Other 3-12 objects outside their stage (Lunar's missile, from the Spawn
   page) get the same correction for speed: their code sees the loop's
   10 px, what moves them is their speed less it (a missile no longer flies
-  off to the right forever).
+  off to the right forever), and they go when 640 px off the screen (not
+  while ridden). A missile waits on its launcher before flying (slot 53 in
+  3-12, anything elsewhere): it waits where it was spawned. Spawned 200 px
+  ahead, it flies left at its own height (y 0 on the screen) and a cat's
+  jump lands on it as in 3-12; ridden, left / right steer it.
 - Cat Clancer (0x2801) builds 13 part sprites (type 0x21) in the slots
   after its own, over whatever is there (spawned in a busy part of the table
   it wrote over player 2). Spawned objects with parts get a free run

@@ -44,6 +44,8 @@ constexpr uint32_t kMadeFor = 0x807E0000u;
 constexpr uint16_t kCat = 0x0F01;
 constexpr uint16_t kLunarMissile = 0x0F09;
 constexpr uint16_t kCatClancer = 0x2801;
+constexpr uint16_t kMissileRidden = 4;
+constexpr int kGoneX = 640;   // px from the screen's middle
 constexpr uint16_t kMissileImage = 0x025C, kMissileDraw = 0x0101;
 
 int g_inside = 0;   // nesting of swapped-in updates
@@ -196,11 +198,28 @@ bool dispatch(uint8_t* rdram, recomp_context* ctx, int slot) {
     // with the scroll, what moves them is their speed less it.
     const gpr a = addr(kActors + static_cast<uint32_t>(slot) * kStride);
     MEM_W(0xEC, a) += p->scroll;
+    // Lunar's missile waits on its launcher (slot 53 in 3-12, func_801A1178
+    // state 0) until its timer runs out: elsewhere slot 53 is anything, and
+    // the missile sat wherever that was. It waits where it was spawned.
+    const bool waiting = type == kLunarMissile && MEM_HU(0xD0, a) == 0;
+    const int32_t x = MEM_W(0x88, a), y = MEM_W(0x8C, a);
     const gpr a0 = ctx->r4;
     ctx->r4 = static_cast<gpr>(slot);
     func_80016E70(rdram, ctx);
     ctx->r4 = a0;
-    if (MEM_HU(0xD2, a) == type) MEM_W(0xEC, a) -= p->scroll;
+    if (MEM_HU(0xD2, a) == type) {
+        MEM_W(0xEC, a) -= p->scroll;
+        if (waiting) {
+            MEM_W(0x88, a) = x;
+            MEM_W(0x8C, a) = y;
+        }
+        // 3-12's loop takes what flies off the screen behind it away; here
+        // it flew on forever. Gone well off the screen (not while ridden).
+        const int sx = MEM_H(0x88, a);
+        if (p->scroll != 0 && (sx > kGoneX || sx < -kGoneX) && !(type == kLunarMissile && MEM_HU(0xD0, a) == kMissileRidden)) {
+            for (uint32_t off = 0x80; off < kStride; off += 4) MEM_W(off, a) = 0;
+        }
+    }
     return true;
 }
 

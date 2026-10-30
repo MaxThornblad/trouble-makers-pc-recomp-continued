@@ -293,10 +293,11 @@ void tick(uint8_t* rdram) {
             std::fprintf(stderr, "[actors] clanball machine in slots %d-%d\n", slot, slot + 1);
             continue;
         }
-        // Lunar's missile flies right: it starts behind Marina on the left,
-        // low enough to pass under a jump onto it.
+        // Lunar's missile flies left at its own height (as in 3-12, where it
+        // overtakes the cat and drops back past it): it starts well ahead on
+        // the right, so a cat can jump onto it as it comes by.
         const bool missile = type == 0x0F09;
-        const int slot = spawn_now(rdram, type, missile ? -150 : 40 * facing, missile ? 8 : 24, request.param);
+        const int slot = spawn_now(rdram, type, missile ? 200 : 40 * facing, missile ? 8 : 24, request.param);
         if (slot < 0) {
             set_result("No free actor slot right now");
             break;
