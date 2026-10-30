@@ -437,6 +437,17 @@ netcode, and the owner decides.
   her, grabbable, thrown and back; Mortal NPCs leaves him alone). Bot
   scenarios pet-clancer, pet-clancer-wall. Open: he jumps at steps he
   could walk up; the carry flicker.
+- 2026-10-30, branch review-fixes: preview 20 (61ff4db, untested at the
+  owner's request) and 21 (839f7a9): Z calls a missile of the cat's own
+  (no Spawn page), the ridden cat stops under ceilings, the pet runs
+  half as fast again and sizes his jumps to what bars him (a sign bug in
+  20 made him wait at every step), the cheat's blocks are knocked out of
+  1-1's campfire instead of sitting in it ungrabbable. The owner's new
+  states (a second computer; C:\TroubleMakersTest\game\savestates) are
+  test-home slots 60 (on the cat under a roof), 61, 62 (pet at the step
+  pyramid), 63 (blocks stuck in the fire), 64 (holding a block by the
+  fire); scenarios pet-pyramid and block-fire need 62 and 64. Open: the
+  carry flicker; the one-frame health dip when boarding.
 
 ## 5. Open questions for the owner (ask when relevant, not up front)
 
