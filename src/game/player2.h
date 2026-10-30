@@ -78,6 +78,9 @@ int slot(uint8_t* rdram);
 // with the next scene. Game memory, so replays and netplay carry it.
 bool lead_swapped(uint8_t* rdram);
 
+// The gameplay frame's start (func_80020024, after the camera; every frame,
+// the thrown-away ones too): this frame's bookkeeping starts clean.
+void frame_begin();
 // After the actor loop: player 2's tint on slot 0 while she leads.
 void after_actors(uint8_t* rdram);
 

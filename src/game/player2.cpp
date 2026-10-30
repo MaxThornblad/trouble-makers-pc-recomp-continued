@@ -366,6 +366,15 @@ bool lead_swapped(uint8_t* rdram) {
     return MEM_W(0, addr(kLeadBlock)) != 0;
 }
 
+bool g_p1_deferred = false;   // player 1's update was skipped at its usual place this frame (update_core)
+
+void frame_begin() {
+    // Never carried over: a thrown-away frame (the shadow frame, a probe)
+    // that deferred player 1's update and then skipped player 2's left it
+    // set, and the next real frame ran player 1's update twice.
+    g_p1_deferred = false;
+}
+
 void after_actors(uint8_t* rdram) {
     if (lead_swapped(rdram) && slot(rdram) > 0) tint(rdram, 0);
 }
@@ -689,7 +698,6 @@ void clamp_x(uint8_t* rdram, int32_t centre, int32_t half_width) {
 
 bool g_in_own_call = false;   // inside a func_8004ED10 call made here
 int g_marina_character = 0;   // whose update func_8004ED10 runs: 0 slot 0's character, 1 player 2's slot's
-bool g_p1_deferred = false;   // player 1's update was skipped at its usual place this frame
 
 void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
     g.slot = slot;

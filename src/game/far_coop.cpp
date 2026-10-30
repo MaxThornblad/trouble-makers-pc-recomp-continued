@@ -324,6 +324,7 @@ extern "C" int mm_far_in_shadow(void) {
 // the shadow frame); onscreen-only actors in its view are spared.
 extern "C" void mm_far_after_camera(uint8_t* rdram, recomp_context* ctx) {
     trace_exit(rdram, "frame start", -1);
+    mm::player2::frame_begin();
     if (!in_shadow()) {   // test: MM_FAR_DUMP=<dir> writes game memory every 20 frames
         static const char* dump = std::getenv("MM_FAR_DUMP");
         static uint32_t n = 0;
