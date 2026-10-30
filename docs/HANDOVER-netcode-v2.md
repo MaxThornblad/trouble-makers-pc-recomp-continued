@@ -372,6 +372,14 @@ netcode, and the owner decides.
 
 ## Sources
 
+- Drahsid/mischief-makers (github.com/Drahsid/mischief-makers): an
+  unfinished matching decompilation of the same US 1.1 ROM (hand-written C
+  checked byte for byte with IDO). The owner asked (2026-10-29/30) whether
+  to move over to it: no. This port needs no readable C (N64Recomp
+  translates everything), and CLAUDE.md forbids taking symbols or code
+  from an unrelated decomp. It may be read as a reference for what an
+  address or function does; nothing from it goes into this repo.
+
 - coop-anything: playbook/decomp-and-recomp.md, playbook/networking.md,
   games/ocarina-of-time/README.md (github.com/cranebeaker/coop-anything)
 - Shipwright Anchor client: soh/soh/Network/Anchor/Packets/PlayerUpdate.cpp
