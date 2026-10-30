@@ -99,6 +99,15 @@ SCENARIOS += [
     # past player 1; her cat's jump lands on it and she steers it.
     ("cat-missile", 1, 700, "128:,25:A,60:,80:r,80:l,350:", "700:", 0,
      dict(env=dict(CAT, MM_TEST_SPAWN="F09@80@200@8"), expect=["[mount] player 1's cat lands on missile"])),
+    # The owner's preview-16 states (his slots 0-3, copied to the test
+    # home's 50-53; skipped where the home lacks them). 52: player 1 rides
+    # her cheat cat left into 1-1's block house (an 18 px floor step, a
+    # 50 px door); it stopped dead at the step. 53: a jump left onto the
+    # house's roof; it stopped dead at the face and fell back.
+    ("cat-house-door", 52, 400, "400:l", "400:", 0,
+     dict(env=CAT, final=lambda s0, s2: s0[0] < -200)),
+    ("cat-house-roof", 53, 300, "20:,12:lA,268:l", "300:", 0,
+     dict(env=CAT, final=lambda s0, s2: s0[0] < -150)),
     # 3-11's Cat Clancer spawned anywhere builds his parts in a free run
     # (he wrote over player 2's slot).
     ("clancer", 1, 900, fuzz(1201), fuzz(1202), 0,

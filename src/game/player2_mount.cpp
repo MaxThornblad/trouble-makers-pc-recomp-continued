@@ -97,9 +97,10 @@ struct Rider {
     uint32_t lift;         // s32: the cat's floor outside 3-12 (see kCatRest)
     uint32_t facing;       // s32: 1 while the cat outside 3-12 faces left (see mirror_cat)
     uint32_t high;         // s32: 1 once the stage took her mount's slots (spawn)
+    uint32_t pace;         // s32: the cat's speed outside 3-12 (16.16), kept through a frame a wall stops it
 };
-constexpr Rider kP1{false, kPlayer1CustomIndex, 0x807F0680u, 0x807F0684u, 0, 0, 0x807F0688u, 0x807F0690u, 0x807F0698u};
-constexpr Rider kP2{true, kCustomIndex, 0x807F0418u, 0x807F041Cu, 0x807F0670u, 0x807F0678u, 0x807F068Cu, 0x807F0694u, 0x807F069Cu};
+constexpr Rider kP1{false, kPlayer1CustomIndex, 0x807F0680u, 0x807F0684u, 0, 0, 0x807F0688u, 0x807F0690u, 0x807F0698u, 0x807F06A0u};
+constexpr Rider kP2{true, kCustomIndex, 0x807F0418u, 0x807F041Cu, 0x807F0670u, 0x807F0678u, 0x807F068Cu, 0x807F0694u, 0x807F069Cu, 0x807F06A4u};
 
 // Outside 3-12 the cat is on ground it does not know: its code keeps it on
 // the loop's flat floor, at a fixed height on the screen (the controller
@@ -114,6 +115,16 @@ constexpr int kCatFeet = 10;          // feet below the controller
 constexpr int kCatFall = 8;           // px a frame the floor may drop
 constexpr int kGroundSearch = 240;    // px searched below the feet
 constexpr int kPitY = -300;           // camera-relative: far below the screen (it shows about -120..120)
+// The cat's own body (its controller's box, +-16 around it; the rider sits
+// above it and is not the cat's to fit): what it steps up onto and what
+// stops it. kCatStep: how far above its feet ground still counts as ground,
+// walking (a house's 18 px floor step in 1-1) and landing from a jump
+// alike (its body over a ledge's edge, feet up to that far below the top).
+// Anything taller is a wall, up to its body's top; above that only the
+// rider is in the way, and she passes (a 50 px door with the cat's 26 px).
+constexpr int kCatStep = 22;          // px above the feet
+constexpr int kCatTop = 26;           // px above the feet: the body's top
+constexpr int kCatFront = 16;         // px ahead of its middle: the body's front
 // Across, 3-12's camera scrolls by 10 px a frame and the cat runs at 10 px
 // (13 holding right, 7 left), so it stays on the screen. Elsewhere the
 // camera follows its rider: the cat ran off to the right with it. So
@@ -315,6 +326,7 @@ void spawn(uint8_t* rdram, const Rider& r, const Mount& m) {
     // 86 px in 4-11), and drops from there (CatOnLoop::enter).
     MEM_W(0, addr(r.lift)) = (MEM_H(0x8C, slot_addr(c)) - kCatFeet) - kCatRest;
     MEM_W(0, addr(r.facing)) = 0;
+    MEM_W(0, addr(r.pace)) = 0;
     if (m.request != 0) request(rdram, r, m.request);   // and she gets on (her riding state), as Marina was told to
     if (!mm::faraway::in_shadow()) {
         std::fprintf(stderr, "[mount] %s's own %s (slots %d..%d)\n", r.p2 ? "player 2" : "player 1", m.name, first, first + m.span - 1);
@@ -349,7 +361,7 @@ bool cats_record(uint8_t* rdram, int s, const Mount& m) {
 int ground_under(uint8_t* rdram, int x, int y, const Mount& m) {
     int best = kNoGround;
     for (int px : {x - 12, x, x + 12}) {
-        for (int py = y + 8; py >= y - kGroundSearch; --py) {
+        for (int py = y + kCatStep; py >= y - kGroundSearch; --py) {
             if (terrain_solid(rdram, px, py)) {
                 best = std::max(best, py + 1);
                 break;
@@ -361,7 +373,7 @@ int ground_under(uint8_t* rdram, int x, int y, const Mount& m) {
         if ((static_cast<uint32_t>(MEM_W(0x80, o)) & (kSolidBox | kPlatformBox)) == 0 || cats_record(rdram, s, m)) continue;
         const int ox = MEM_H(0x88, o), top = MEM_H(0x8C, o) + MEM_H(0xAE, o);
         if (x + 12 < ox + MEM_H(0xAA, o) || x - 12 > ox + MEM_H(0xAC, o)) continue;
-        if (top <= y + 8 && top >= y - kGroundSearch) best = std::max(best, top);
+        if (top <= y + kCatStep && top >= y - kGroundSearch) best = std::max(best, top);
     }
     return best;
 }
@@ -372,14 +384,14 @@ int ground_under(uint8_t* rdram, int x, int y, const Mount& m) {
 // (Asked before a cat's update: it runs in the slots it borrows, player 2's
 // record among them (3-12's 96..109), and far_coop, not finding her there,
 // would say the screen is shared.)
-constexpr int kCatFront = 28, kCatStep = 6, kCatBack = 44, kCatEdge = 140;
+constexpr int kCatEdge = 140;
 bool shared_screen(uint8_t* rdram) {
     return !mm::faraway::active(rdram);
 }
 
 bool cat_blocked(uint8_t* rdram, int x, int feet, int dir, bool shared) {
     if (shared && dir * x > kCatEdge) return true;
-    for (int y = feet + kCatStep; y <= feet + kCatBack; y += 6) {
+    for (int y = feet + kCatStep + 1; y <= feet + kCatTop; y += 2) {
         if (terrain_solid(rdram, x + dir * kCatFront, y)) return true;
     }
     return false;
@@ -547,7 +559,7 @@ struct CatOnLoop {
             across = MEM_W(0x88, cat) - (kCatHomeX << 16);
         }
         MEM_W(0, addr(r.lift)) = lift;
-        pace = MEM_W(0xEC, cat);
+        pace = MEM_W(0, addr(r.pace));
         MEM_W(0xEC, cat) = kLoopScroll;
         move(rdram, m, -across, -(lift << 16));
     }
@@ -558,8 +570,12 @@ struct CatOnLoop {
         const int32_t want = (held & MEM_HU(0, addr(kRightMask))) ? kCatSpeed : (held & MEM_HU(0, addr(kLeftMask))) ? -kCatSpeed : 0;
         pace = want > pace ? std::min(want, pace + kCatAccel) : std::max(want, pace - kCatAccel);
         const int x = (MEM_W(0x88, cat) + across) >> 16, feet = (MEM_W(0x8C, cat) >> 16) + lift - kCatFeet;
-        if (pace != 0 && cat_blocked(rdram, x + (pace >> 16), feet, pace > 0 ? 1 : -1, shared)) pace = 0;
-        MEM_W(0xEC, cat) = pace;
+        // A wall stops it this frame, its speed stays: a jump that meets a
+        // ledge's face goes on over it once its body clears the top, as
+        // Marina's does (it stopped dead and went straight up).
+        const bool blocked = pace != 0 && cat_blocked(rdram, x + (pace >> 16), feet, pace > 0 ? 1 : -1, shared);
+        MEM_W(0, addr(r.pace)) = pace;
+        MEM_W(0xEC, cat) = blocked ? 0 : pace;
         if (want != 0) MEM_W(0, addr(r.facing)) = want < 0 ? 1 : 0;   // (the way last asked)
         move(rdram, m, across, lift << 16);
         if (MEM_W(0, addr(r.facing)) != 0) mirror_cat(rdram, m);
