@@ -114,13 +114,15 @@ struct Input {
     mm::frame_input::Command commands[mm::frame_input::kMaxCommands];
 };
 
+static_assert(sizeof(mm::cheats::SessionSettings) == 4 + 8, "SessionSettings has padding: memcmp would compare it");
+
 bool same_input(const Input& a, const Input& b) {
     if (a.pad.buttons != b.pad.buttons || a.pad.x != b.pad.x || a.pad.y != b.pad.y || a.pad.connected != b.pad.connected)
         return false;
-    if (a.settings.cheats != b.settings.cheats || a.settings.active != b.settings.active ||
-        a.settings.hold_dash != b.settings.hold_dash || a.settings.gem_hints != b.settings.gem_hints ||
-        a.settings.widescreen != b.settings.widescreen || a.settings.coop != b.settings.coop)
-        return false;
+    // The whole struct (no padding, static_assert below): a field-by-field
+    // compare missed the throw sliders, so a prediction wrong about them was
+    // taken as right and the frames in between threw at the old strength.
+    if (std::memcmp(&a.settings, &b.settings, sizeof a.settings) != 0) return false;
     if (a.command_count != b.command_count) return false;
     for (int i = 0; i < a.command_count; ++i) {
         if (a.commands[i].kind != b.commands[i].kind || a.commands[i].a != b.commands[i].a ||
