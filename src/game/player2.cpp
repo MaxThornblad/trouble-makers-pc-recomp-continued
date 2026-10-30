@@ -716,14 +716,11 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
     std::array<uint8_t, kStride> p1_record;
     std::array<uint8_t, globals_size()> p1_globals;
     std::memcpy(p1_record.data(), slot_ptr(rdram, 0), kStride);
-    uint32_t p1_flags;
-    std::memcpy(&p1_flags, p1_record.data() + 0x80, 4);   // host-endian word, as MEM_W stores it
     copy_globals_out(rdram, p1_globals.data());
 
     // Player 2 in, with her own health.
     std::memcpy(slot_ptr(rdram, 0), slot_ptr(rdram, slot), kStride);
     MEM_H(0xD2, addr(kActors)) = static_cast<int16_t>(kMarinaType);
-    (void)p1_flags;
     // Carrying player 1? The game recorded slot 0 as what she holds, but in
     // her own update slot 0 is herself. Player 1's record goes into player
     // 2's slot for the update and the held slot points there, so Marina's
@@ -738,9 +735,6 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
         MEM_H(0xD2, addr(kActors + static_cast<uint32_t>(slot) * kStride)) =
             static_cast<int16_t>(mm::custom_actors::type_id(kCustomIndex));
         MEM_H(0xD6, addr(kActors)) = static_cast<int16_t>(slot);
-        if (const char* t = std::getenv("MM_TEST_HELDX")) {   // experiment: move the held copy
-            MEM_W(0x88, addr(kActors + static_cast<uint32_t>(slot) * kStride)) += std::atoi(t) << 16;
-        }
         if (trace_on()) {
             const gpr h = addr(kActors + static_cast<uint32_t>(slot) * kStride);
             std::fprintf(stderr, "[p2trace] carry in: p2 x %d vx %d | held x %d y %d fl %08X st %04X D8 %08X\n",
@@ -934,58 +928,8 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
     MEM_H(0xE0, addr(kActors + static_cast<uint32_t>(slot) * kStride)) = her_health;
 }
 
-// Test (MM_P2_BISECT): the first time player 2 starts a grab (0x011F)
-// without input, find which game memory changed since the frame before
-// makes her do it: rerun her update with parts of memory put back.
 void update(uint8_t* rdram, recomp_context* ctx, int slot) {
-    static const bool bisect = std::getenv("MM_P2_BISECT") != nullptr;
-    if (!bisect) {
-        update_core(rdram, ctx, slot);
-        return;
-    }
-    constexpr size_t kSize = 0x800000;
-    static std::vector<uint8_t> prev;
-    static bool done = false;
-    std::vector<uint8_t> cur(rdram, rdram + kSize);
-    const gpr me = addr(kActors + static_cast<uint32_t>(slot) * kStride);
-    const uint16_t before = MEM_HU(0xD0, me);
-    const recomp_context saved_ctx = *ctx;
     update_core(rdram, ctx, slot);
-    if (!done && !prev.empty() && before != 0x011F && MEM_HU(0xD0, me) == 0x011F) {
-        done = true;
-        std::vector<uint8_t> post(rdram, rdram + kSize);
-        std::vector<uint32_t> diff;
-        for (uint32_t w = 0; w < kSize / 4; ++w) {
-            if (reinterpret_cast<uint32_t*>(cur.data())[w] != reinterpret_cast<uint32_t*>(prev.data())[w]) diff.push_back(w);
-        }
-        auto grabs_with = [&](const std::vector<uint32_t>& revert) {
-            std::memcpy(rdram, cur.data(), kSize);
-            for (uint32_t w : revert) reinterpret_cast<uint32_t*>(rdram)[w] = reinterpret_cast<uint32_t*>(prev.data())[w];
-            *ctx = saved_ctx;
-            update_core(rdram, ctx, slot);
-            return MEM_HU(0xD0, me) == 0x011F;
-        };
-        std::fprintf(stderr, "[bisect] %zu words changed; all reverted: grab=%d\n", diff.size(), grabs_with(diff) ? 1 : 0);
-        // Shrink: drop chunks whose reversion is not needed to stop the grab.
-        std::vector<uint32_t> need = diff;
-        for (size_t chunk = need.size() / 2; chunk >= 1; chunk /= 2) {
-            for (size_t i = 0; i < need.size();) {
-                std::vector<uint32_t> trial;
-                trial.insert(trial.end(), need.begin(), need.begin() + static_cast<long>(i));
-                trial.insert(trial.end(), need.begin() + static_cast<long>(std::min(need.size(), i + chunk)), need.end());
-                if (!grabs_with(trial)) need = trial;
-                else i += chunk;
-            }
-            if (chunk == 1) break;
-        }
-        for (uint32_t w : need) {
-            std::fprintf(stderr, "[bisect] needed %08X: %08X (frame before %08X)\n", 0x80000000u + w * 4,
-                         reinterpret_cast<uint32_t*>(cur.data())[w], reinterpret_cast<uint32_t*>(prev.data())[w]);
-        }
-        std::memcpy(rdram, post.data(), kSize);
-        *ctx = saved_ctx;
-    }
-    prev = std::move(cur);
 }
 
 void publish_marker(uint8_t* rdram, int p2) {

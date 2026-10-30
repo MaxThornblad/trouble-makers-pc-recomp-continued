@@ -162,7 +162,7 @@ from the overlay's Session page.
 ## Co-op fixes after the first real session
 
 Found with scripted two-player runs and `MM_P2_TRACE=1` (both players'
-positions, states and flags every frame) plus `MM_P2_BISECT` (the first time
+positions, states and flags every frame) plus `MM_P2_BISECT` (since removed; the first time
 player 2 starts a grab without input, rerun her update with parts of memory put
 back to the frame before, to find what made her do it):
 

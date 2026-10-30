@@ -230,8 +230,8 @@ std::map<uint32_t, uint64_t> g_local_hash, g_remote_hash;
 uint32_t g_seen_load_generation = 0;
 int g_resyncs = 0;
 bool g_sandboxed = false;
-bool g_restarted = false;
-mm::cheats::SessionSettings g_start_settings;   // the host's, from the last (re)start           // a start was applied during this frame point
+bool g_restarted = false;                       // a start was applied during this frame point
+mm::cheats::SessionSettings g_start_settings;   // the host's, from the last (re)start
 
 // Widescreen environment, as the guest had it before following the host.
 struct EnvSave { const char* name; std::string value; bool had; };

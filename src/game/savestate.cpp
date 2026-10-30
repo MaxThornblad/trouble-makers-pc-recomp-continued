@@ -389,10 +389,11 @@ uint8_t* rdram_at(uint8_t* rdram, uint32_t vaddr) {
     return rdram + (vaddr - 0x80000000u);
 }
 
-// Brings the host side to a point where RDRAM is the whole truth: no RSP or
-// RDP work is outstanding and every completion/VI/SI event has been put in
-// its N64 queue. Save and load both do this, so the two sides of a load see
-// the same kind of moment.
+// Before a load: no RSP or RDP work is outstanding, and every completion/
+// VI/SI event still in flight is put in its N64 queue (which the load then
+// overwrites, along with the deferred list it restores). A capture does not
+// deliver them (it parks them, see capture): taken every frame for rollback,
+// it must not change when the game sees them.
 bool quiesce(uint8_t* rdram, std::string& error) {
     if (!ultramodern::wait_for_rsp_idle(std::chrono::milliseconds(1000))) {
         error = "the RSP did not go idle";
