@@ -1,5 +1,6 @@
 #include "pet_clancer.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
@@ -37,13 +38,18 @@ constexpr uint32_t kFacesLeft = 0x20;
 constexpr uint32_t kGrabbable = 0x10000;   // Marina may pick him up
 constexpr uint32_t kSolidBox = 0x40000;    // another actor's solid box
 
-constexpr int32_t kRunSpeed = 0x19000;     // his run (1.5625 px a frame)
-constexpr int32_t kJumpSpeed = 0x14000;    // across, while he jumps (his own is 0.625)
+constexpr int32_t kRunSpeed = 0x25800;     // 2.34 px a frame (his run is 1.5625; half as fast again)
+constexpr int32_t kJumpSpeed = 0x1E000;    // across, while he jumps (his own is 0.625)
 constexpr int kStopNear = 40;              // px from the player he stops at
 constexpr int kJumpUpNear = 56;            // px: a player this close and above him is worth a jump
-constexpr int kJumpUpHeight = 28;          // px above his feet
+constexpr int kJumpUpHeight = 20;          // px above his feet
 constexpr int kWallAhead = 12;             // px ahead of his middle probed for a wall
 constexpr int kBodyTop = 14;               // px above his feet the body reaches (box -4..8)
+constexpr int kStepUp = 6;                 // px: this much he steps up without a jump
+constexpr int kJumpMargin = 6;             // px over the obstacle's top the jump aims for
+constexpr int kJumpMax = 56;               // px: the highest he jumps (his own 4.5 px/frame rises 46)
+// His gravity (func_801B0D80: -0.21875 px a frame each frame, 16.16).
+constexpr int32_t kGravity = 0x3800;
 constexpr int kJumpWait = 45;              // frames between jumps
 constexpr int16_t kHealth = 200;           // kept: below 5 his match ends (stage state!)
 
@@ -105,6 +111,32 @@ bool wall_ahead(uint8_t* rdram, int self, int x, int feet, int dir) {
     return false;
 }
 
+// How high the thing in his way stands over his feet: the column ahead is
+// followed up through what is solid to the first gap his body fits in
+// (kBodyTop + 2). Only what bars him counts, not anything further up.
+// kTooHigh when there is no such gap within his reach.
+constexpr int kTooHigh = 0x7FFF;
+int obstacle_height(uint8_t* rdram, int self, int x, int feet, int dir) {
+    const int px = x + dir * kWallAhead;
+    int top = -1, clear = 0;
+    for (int py = feet + 1; py <= feet + kJumpMax + kBodyTop + 2; py += 2) {
+        if (solid_at(rdram, self, px, py)) {
+            top = py + 1;
+            clear = 0;
+        } else {
+            clear += 2;
+            if (top >= 0 && clear > kBodyTop) return top - feet;
+        }
+    }
+    return kTooHigh;
+}
+
+// The rise (16.16 px a frame) that peaks height px up under his gravity.
+int32_t rise_for(int height) {
+    const double h = static_cast<double>(height) * 65536.0, g = static_cast<double>(kGravity);
+    return static_cast<int32_t>(std::sqrt(2.0 * g * h));
+}
+
 // The nearest player's record (slot 0, or player 2's).
 gpr target(uint8_t* rdram, int x) {
     gpr best = slot_addr(0);
@@ -123,6 +155,7 @@ struct Frame {
     Want want = kHisOwn;    // what before() asked of him this frame
     int dir = 0;            // the way he should move (-1 / 0 / 1)
     bool near = false;      // within kStopNear of the player
+    int32_t rise = 0;       // the jump asked for, 16.16 px a frame (0: his own)
 };
 Frame g_frame;
 
@@ -186,12 +219,22 @@ void before(uint8_t* rdram, int slot) {
     if (std::abs(dx) > kStopNear) {
         face(rdram, a, dir);
         if (wall_ahead(rdram, slot, x, feet, dir)) {
-            if (timer == 0) {
+            const int height = obstacle_height(rdram, slot, x, feet, dir);
+            if (height <= kStepUp) {
+                // A step: up it, running on.
+                MEM_W(0x8C, a) += height << 16;
+                g_frame.want = kWantRun;
+                if (state != kRun) set_state(rdram, a, kRunEnter);
+                return;
+            }
+            if (timer == 0 && height <= kJumpMax) {
                 g_frame.want = kWantJump;
+                g_frame.rise = rise_for(height + kJumpMargin);
                 set_state(rdram, a, kJumpEnter);
                 MEM_W(kTimer, a) = kJumpWait;
                 say("jumps at a wall");
             } else {
+                // Too high for him, or just jumped: he waits here.
                 g_frame.want = kWantIdle;
                 if (!idling(state)) set_state(rdram, a, kIdleEnter);
             }
@@ -202,10 +245,11 @@ void before(uint8_t* rdram, int slot) {
         return;
     }
     g_frame.dir = 0;
-    if (dy > kJumpUpHeight && std::abs(dx) < kJumpUpNear && timer == 0) {
+    if (dy > kJumpUpHeight && dy <= kJumpMax && std::abs(dx) < kJumpUpNear && timer == 0) {
         face(rdram, a, dir);
         g_frame.dir = dir;
         g_frame.want = kWantJump;
+        g_frame.rise = rise_for(dy + kJumpMargin);
         set_state(rdram, a, kJumpEnter);
         MEM_W(kTimer, a) = kJumpWait;
         say("jumps up to the player");
@@ -244,6 +288,7 @@ void after(uint8_t* rdram, int slot) {
         else if (now == kThrownEnter) say("is thrown");
     }
     if (now == kRun) MEM_W(0xEC, a) = g_frame.dir * kRunSpeed;
+    if (now == kJumpUp && g_frame.want == kWantJump && g_frame.rise != 0) MEM_W(0xF0, a) = g_frame.rise;   // (his own is 4.5 px a frame)
     if ((now == kJumpUp || now == kJumpDown) && g_frame.dir != 0) MEM_W(0xEC, a) = g_frame.dir * kJumpSpeed;
     // Standing or running he may be picked up (his match sets this only
     // where the match allows a catch).

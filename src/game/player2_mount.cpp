@@ -148,6 +148,7 @@ constexpr int kPitY = -300;           // camera-relative: far below the screen (
 constexpr int kCatStep = 22;          // px above the feet
 constexpr int kCatTop = 26;           // px above the feet: the body's top
 constexpr int kCatFront = 16;         // px ahead of its middle: the body's front
+constexpr int kRiderTop = 44;         // px above the feet: the rider's head (she sits ~19 px over the controller)
 // Across, 3-12's camera scrolls by 10 px a frame and the cat runs at 10 px
 // (13 holding right, 7 left), so it stays on the screen. Elsewhere the
 // camera follows its rider: the cat ran off to the right with it. So
@@ -497,6 +498,43 @@ const char* rider_name(const Rider& r) { return r.p2 ? "player 2" : "player 1"; 
 
 // Pressed with the rider's cat (a copy outside 3-12) in its slots from
 // `first`: onto the nearest flying missile, or off the one it rides.
+// Onto a flying missile: the cat, its parts and its rider just above it,
+// the cat falling, where 3-12's loop brings it before its landing test.
+void board(uint8_t* rdram, const Rider& r, const Mount& m, int first, int ms) {
+    const gpr cat = slot_addr(first);
+    const gpr mis = slot_addr(ms);
+    const int32_t dx = MEM_W(0x88, mis) - MEM_W(0x88, cat);
+    const int32_t dy = MEM_W(0x8C, mis) + (kBoardAbove << 16) - MEM_W(0x8C, cat);
+    for (int i = first; i < first + m.span; ++i) {
+        MEM_W(0x88, slot_addr(i)) += dx;
+        MEM_W(0x8C, slot_addr(i)) += dy;
+    }
+    const gpr rider = slot_addr(character_slot(rdram, r));
+    MEM_W(0x88, rider) += dx;
+    MEM_W(0x8C, rider) += dy;
+    MEM_H(0xD0, cat) = static_cast<int16_t>(kCatFalling);
+    MEM_W(0xF0, cat) = 0;
+    MEM_W(0x98, mis) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0x98, mis)) & ~kMissileHitBits);
+    if (!mm::faraway::in_shadow()) std::fprintf(stderr, "[mount] %s's cat boards missile %d\n", rider_name(r), ms);
+}
+
+// A missile of the cat's own, under it (Lunar's, 3-12's code brought in
+// as the Spawn page does): made waiting on its launcher with the wait
+// already over (its +0x114 timer below zero), so its first update launches
+// it (dispatch keeps it where it was made); the cat boards it the frame
+// after, when it flies (boarding_tick). Or 0: no slot for it.
+int make_missile(uint8_t* rdram, const Rider& r, int first) {
+    const gpr cat = slot_addr(first);
+    const gpr marina = slot_addr(0);
+    const int dx = MEM_H(0x88, cat) - MEM_H(0x88, marina);
+    const int dy = MEM_H(0x8C, cat) - MEM_H(0x8C, marina) - kBoardAbove;
+    const int ms = mm::actors::spawn_now(rdram, kMissile, dx, dy);
+    if (ms <= 0) return 0;
+    MEM_W(0x114, slot_addr(ms)) = static_cast<int32_t>(0xBF800000u);   // -1.0f
+    if (!mm::faraway::in_shadow()) std::fprintf(stderr, "[mount] %s's cat calls missile %d\n", rider_name(r), ms);
+    return ms;
+}
+
 void mount_button(uint8_t* rdram, const Rider& r, const Mount& m, int first) {
     const gpr cat = slot_addr(first);
     const uint16_t state = MEM_HU(0xD0, cat);
@@ -518,27 +556,19 @@ void mount_button(uint8_t* rdram, const Rider& r, const Mount& m, int first) {
         MEM_W(0, addr(r.boarding_left)) = 0;
         return;
     }
-    const int ms = nearest_missile(rdram, cx, cy, kMissileFlying);
-    if (ms <= 0) return;
-    // On: the cat, its parts and its rider just above the missile, the cat
-    // falling, where 3-12's loop brings it before its landing test.
-    const gpr mis = slot_addr(ms);
-    const int32_t dx = MEM_W(0x88, mis) - MEM_W(0x88, cat);
-    const int32_t dy = MEM_W(0x8C, mis) + (kBoardAbove << 16) - MEM_W(0x8C, cat);
-    for (int i = first; i < first + m.span; ++i) {
-        MEM_W(0x88, slot_addr(i)) += dx;
-        MEM_W(0x8C, slot_addr(i)) += dy;
-    }
+    if (MEM_W(0, addr(r.boarding_left)) > 0) return;   // one on its way
     const gpr rider = slot_addr(character_slot(rdram, r));
-    MEM_W(0x88, rider) += dx;
-    MEM_W(0x8C, rider) += dy;
-    MEM_H(0xD0, cat) = static_cast<int16_t>(kCatFalling);
-    MEM_W(0xF0, cat) = 0;
-    MEM_W(0x98, mis) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0x98, mis)) & ~kMissileHitBits);
+    // On: a flying missile near, else one of the cat's own.
+    int ms = nearest_missile(rdram, cx, cy, kMissileFlying);
+    if (ms > 0) {
+        board(rdram, r, m, first, ms);
+    } else {
+        ms = make_missile(rdram, r, first);
+        if (ms <= 0) return;
+    }
     MEM_W(0, addr(r.boarding)) = ms;
     MEM_W(0, addr(r.boarding_left)) = kBoardFrames;
     MEM_W(0, addr(r.boarding_health)) = MEM_H(0xE0, rider);
-    if (!mm::faraway::in_shadow()) std::fprintf(stderr, "[mount] %s's cat boards missile %d\n", rider_name(r), ms);
 }
 
 // Once a frame: the boarding window runs out, or ends with the landing.
@@ -552,7 +582,17 @@ void boarding_tick(uint8_t* rdram, const Rider& r) {
     const int32_t health = MEM_W(0, addr(r.boarding_health));
     if (MEM_H(0xE0, rider) < health) MEM_H(0xE0, rider) = static_cast<int16_t>(health);
     const int ms = MEM_W(0, addr(r.boarding));
-    const bool landed = ms > 0 && ms < 0xD0 && MEM_HU(0xD0, slot_addr(ms)) == kMissileRidden;
+    const gpr mis = ms > 0 && ms < 0xD0 ? slot_addr(ms) : 0;
+    const uint16_t mstate = mis != 0 && MEM_HU(0xD2, mis) == kMissile ? MEM_HU(0xD0, mis) : 0xFFFF;
+    // A called missile has launched: onto it (the cat is not yet falling
+    // onto it, nor on it).
+    const int first = MEM_W(0, addr(r.mount));
+    const Mount* m = mount_of_type(static_cast<uint16_t>(MEM_W(0, addr(r.type))));
+    if (mstate == kMissileFlying && first > 0 && m != nullptr && m->type == kCat) {
+        const uint16_t cstate = MEM_HU(0xD0, slot_addr(first));
+        if (cstate != kCatFalling && cstate != kCatLanding && cstate != kCatRiding) board(rdram, r, *m, first, ms);
+    }
+    const bool landed = mstate == kMissileRidden;
     MEM_W(0, addr(r.boarding_left)) = landed ? 0 : left - 1;
     if (landed || left - 1 <= 0) MEM_W(0, addr(r.boarding)) = 0;
 }
@@ -707,6 +747,26 @@ struct CatOnLoop {
         if (want != 0) MEM_W(0, addr(r.facing)) = want < 0 ? 1 : 0;   // (the way last asked)
         move(rdram, m, across, lift << 16);
         if (MEM_W(0, addr(r.facing)) != 0) mirror_cat(rdram, m);
+        // A ceiling: nothing is ever over 3-12's loop, so the cat's jump
+        // knows none, and it rose through a block house's roof with its
+        // rider. Rising into one, they stop just under it and come down.
+        if (MEM_W(0xF0, cat) > 0) {
+            const int wx = MEM_H(0x88, cat), wfeet = MEM_H(0x8C, cat) - kCatFeet;
+            int lowest = 0x7FFFFFFF;
+            for (int px : {wx - 8, wx, wx + 8}) {
+                for (int py = wfeet + kCatStep + 1; py <= wfeet + kRiderTop; py += 2) {
+                    if (terrain_solid(rdram, px, py)) {
+                        lowest = std::min(lowest, py);
+                        break;
+                    }
+                }
+            }
+            if (lowest != 0x7FFFFFFF) {
+                const int dy = (lowest - 1 - kRiderTop) - wfeet;
+                if (dy < 0) move(rdram, m, 0, dy << 16);
+                MEM_W(0xF0, cat) = 0;
+            }
+        }
         // Far apart her camera follows her: the cat's "carried by the loop"
         // bit would have it scroll by the loop's speed, holding her ~135 px
         // from the other player. On a shared screen the rider's own code

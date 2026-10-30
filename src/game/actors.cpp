@@ -298,11 +298,13 @@ void tick(uint8_t* rdram) {
         char text[96];
         if (!gameplay) {
             set_result("Spawning works only during a stage");
+            std::fprintf(stderr, "[actors] spawn of type 0x%02X refused: not in a stage\n", type);
             break;
         }
         if (s.count >= kMaxSpawned) {
             std::snprintf(text, sizeof text, "Limit reached (%d spawned); clear some first", kMaxSpawned);
             set_result(text);
+            std::fprintf(stderr, "[actors] spawn of type 0x%02X refused: limit\n", type);
             break;
         }
         // In front of Marina (flag 0x20 at +0x80 = facing left), a little above.
@@ -328,6 +330,7 @@ void tick(uint8_t* rdram) {
         const int slot = spawn_now(rdram, type, missile ? 200 : 40 * facing, missile ? 8 : 24, request.param);
         if (slot < 0) {
             set_result("No free actor slot right now");
+            std::fprintf(stderr, "[actors] spawn of type 0x%02X refused: no free slot\n", type);
             break;
         }
         own(slot, type);
