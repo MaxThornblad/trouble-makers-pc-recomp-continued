@@ -340,6 +340,15 @@ netcode, and the owner decides.
   cheat, 3-6 tug-of-war jitter, net-cat flaky. Lead probes
   (player2_lead.cpp) run the gameplay frame on a copy with the characters
   swapped: debug prints inside actor code show up twice on those frames.
+- 2026-10-30 later morning: previews 14-16. Cat Clancer quiet away from
+  3-11 (camera, talk, crowd sound put back: foreign_actors Quiet); player
+  2's HUD bar shown health in her picture (far_coop); the cats' fall-away
+  rule limited to cheat cats on the rider's own screen (it took player
+  2's 5-3 bee far apart). Sound debugging: gdb breakpoint on Sound_AddSfx
+  with args at *(int*)($rsi+32/40/48) (ctx->r4..r6; optimized build).
+  Open: cat-5 (player 2 drops ~120 px once after letting go of a held
+  object, not reproduced on purpose yet), catx-3-1 (off the shared screen
+  once), plus the open items above.
 - The owner's PC is linked through the desktop app (file tools + screen
   control, no shell yet). His real install and saves are in the connected
   folders: read only. Tests go to C:\TroubleMakersTest (he creates it).
