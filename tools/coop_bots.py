@@ -233,7 +233,8 @@ NETPLAY = [
     # charges for 150 frames and throws; both machines see the same strong
     # throw (fingerprints), the host logs its strength.
     ("net-throw", 4, 700, "80:,6:r,10:B,20:,10:A,40:,30:r,150:rB,300:", "700:",
-     dict(env={"MM_NET_TOGGLE": "6@30"}, host_re=[r"throw at (?!100%)\d+%: slot \d+ \(an object\)"])),
+     dict(env={"MM_NET_TOGGLE": "6@30", "MM_TEST_CHEATS": "charged_throw=0"},   # (off first, whatever the test home has)
+          host_re=[r"throw at (?!100%)\d+%: slot \d+ \(an object\)"])),
     # The guest's connection drops at frame 400: it connects again, the host
     # restarts both from its game, and the session goes on (no resync counted).
     ("net-reconnect", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r",
