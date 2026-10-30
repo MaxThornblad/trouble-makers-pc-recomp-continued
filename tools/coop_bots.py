@@ -105,7 +105,9 @@ SCENARIOS += [
      dict(env={"MM_TEST_SPAWN": "2801@120@80@0"}, expect=["spawned 2801"], max_joins=1)),
 ]
 
-# Slot 9: stage 3-12 (CERBERUS), where the owner saw trouble.
+# Slot 9: stage 3-12 (CERBERUS), where the owner saw trouble: the looping,
+# auto-scrolling arena (check_trace loop=True).
+LOOP_SLOT = 9
 for slot in (1, 2, 3, 4, 5, 6, 7, 8, 9):
     for seed in (1, 2):
         SCENARIOS.append(("fuzz-%d-%d" % (slot, seed), slot, 2400,
@@ -331,7 +333,10 @@ def timeline(text):
     return [line for _, line in out]
 
 
-def check_trace(text, allowed_rejoins, far=False):
+def check_trace(text, allowed_rejoins, far=False, loop=False):
+    """loop: an auto-scrolling, looping stage (3-12, save slot 9): steps are
+    also judged against the camera's own step, and riders are allowed out to
+    where its cats keep them."""
     problems = []
     frames = present = apart = 0
     prev = None
@@ -390,7 +395,7 @@ def check_trace(text, allowed_rejoins, far=False):
         apart = max(apart, abs(p1[0] - p2[0]))
         if not far:
             for k, who, rel in ((0, "p1", int(m.group(4))), (1, "p2", int(m.group(10)))):
-                edge = 275 if riding else 181   # (a rider at ~240 holds the other ahead of her)
+                edge = 275 if riding and loop else 181   # (3-12: a rider at ~240 holds the other ahead of her)
                 if abs(rel) > edge and joined_recently == 0:
                     problems.append("%s off the shared screen at frame %d (x %d)" % (who, n, rel))
         if prev and joined_recently == 0:
@@ -415,11 +420,15 @@ def check_trace(text, allowed_rejoins, far=False):
                 # Landing (a new state) may snap her up onto what she lands on.
                 max_step[k] = max(max_step[k], abs(a[0] - b[0]))
                 landing = states[k] != prev[2][k] and abs(a[0] - b[0]) <= 8 and 0 < b[1] - a[1] <= 32
-                # An auto-scrolling stage (3-12) carries the players with the
-                # screen: judge the step against the camera's as well.
-                dxc = (b[0] - a[0]) - (cx - prev_cam[0])
-                dyc = (b[1] - a[1]) - (cy - prev_cam[1])
-                big = (abs(a[0] - b[0]) > 24 or abs(a[1] - b[1]) > 24) and (abs(dxc) > 24 or abs(dyc) > 24)
+                big = abs(a[0] - b[0]) > 24 or abs(a[1] - b[1]) > 24
+                if loop and big:
+                    # An auto-scrolling stage (3-12) carries the players with
+                    # the screen: judge the step against the camera's as well.
+                    # (Only there: elsewhere the camera follows a player, so a
+                    # teleport it snapped along with would pass unseen.)
+                    dxc = (b[0] - a[0]) - (cx - prev_cam[0])
+                    dyc = (b[1] - a[1]) - (cy - prev_cam[1])
+                    big = abs(dxc) > 24 or abs(dyc) > 24
                 if not landing and big:
                     problems.append("%s jumped at frame %d: %s -> %s" % (who, n, a, b))
         prev = (p1, p2, states)
@@ -512,7 +521,7 @@ def run_local(args, name, slot, frames, pad1, pad2, allowed, extra_env=None, far
     section = out[start:end if end > 0 else None] if start >= 0 else ""
     if start < 0:
         return ["did not start recording"], 0
-    problems, traced, apart = check_trace(section, allowed, far)
+    problems, traced, apart = check_trace(section, allowed, far, loop=slot == LOOP_SLOT)
     problems += rollback_problems
     if extra:
         problems += check_extra(extra, out, check_trace.moved)
@@ -550,7 +559,7 @@ def run_far(args, name, slot, frames, pad1, pad2, want_apart, extra=None):
         if start < 0:
             return ["did not start recording"], 0
         if shadow:
-            problems, traced, apart = check_trace(out[start:end if end > 0 else None], 3, far=True)
+            problems, traced, apart = check_trace(out[start:end if end > 0 else None], 3, far=True, loop=slot == LOOP_SLOT)
             if want_apart and apart < want_apart:
                 problems.append("only %d px apart at most (want %d)" % (apart, want_apart))
             if "shadow frame too big" in out:
@@ -624,8 +633,11 @@ def run_netplay(args, name, slot, frames, pad1, pad2, port, extra=None):
             return out
         h, g = hashes(hlog), hashes(glog)
         common = sorted(set(h) & set(g))
-        if len(common) < max(2, frames // 60 // 3):
-            problems.append("only %d fingerprint checks in common" % len(common))
+        # One fingerprint every 60 frames on each side; nearly all should be
+        # in common (a frame's hash waits until its inputs are confirmed, so
+        # lag delays it, it does not lose it).
+        if len(common) < max(2, frames // 60 * 2 // 3):
+            problems.append("only %d fingerprint checks in common (of about %d)" % (len(common), frames // 60))
         bad = [k for k in common if h[k] != g[k]]
         if bad:
             problems.append("fingerprints differ (first at epoch %s frame %d)" % bad[0])
@@ -643,7 +655,7 @@ def run_netplay(args, name, slot, frames, pad1, pad2, port, extra=None):
         for text in extra.get("guest", []):
             if text not in gout:
                 problems.append("guest: missing %r" % text)
-        more, traced, _ = check_trace(hout[start:end if end > 0 else None], 3, far=True)
+        more, traced, _ = check_trace(hout[start:end if end > 0 else None], 3, far=True, loop=slot == LOOP_SLOT)
         return problems + more, traced
 
 
