@@ -247,9 +247,20 @@ void dismount(uint8_t* rdram, const Rider& r) {
     }
 }
 
-void remove(uint8_t* rdram, const Rider& r, int first, int span) {
+// The copy's slots that are still the mount's: its controller (the rider's
+// custom type), and parts of its stage's bank (the stage's own objects may
+// have taken some of the run since, as 3-6's do every few seconds: those
+// stay).
+bool mounts_record(uint8_t* rdram, const Rider& r, const Mount& m, int first, int s) {
+    const uint16_t type = MEM_HU(0xD2, slot_addr(s));
+    if (s == first) return type == mm::custom_actors::type_id(r.custom);
+    return MEM_W(0x80, slot_addr(s)) != 0 && (type >> 8) == (m.type >> 8);
+}
+
+void remove(uint8_t* rdram, const Rider& r, const Mount& m, int first) {
     let_go(rdram, r);   // (else her missile went on writing player 1's message)
-    for (int i = first; i < first + span; ++i) {
+    for (int i = first; i < first + m.span; ++i) {
+        if (!mounts_record(rdram, r, m, first, i)) continue;
         for (uint32_t off = 0x80; off < kStride; off += 4) MEM_W(off, slot_addr(i)) = 0;
     }
     dismount(rdram, r);
@@ -575,7 +586,7 @@ void update(uint8_t* rdram, recomp_context* ctx, int slot) {
     // from there seconds later. She gets a new one at her feet when she is
     // back (tick). The same when the cheat goes off or the stage changes.
     if (wanted(rdram, *r) != m) {
-        remove(rdram, *r, slot, m->span);
+        remove(rdram, *r, *m, slot);
         return;
     }
     // The game's mount code on the copy in the stage's slots (whatever is
@@ -678,7 +689,7 @@ void tick(uint8_t* rdram) {
                 continue;
             }
             if (want != m) {   // its update takes it away; when it does not run (paused), here
-                if (m != nullptr) remove(rdram, *r, have, m->span);
+                if (m != nullptr) remove(rdram, *r, *m, have);
                 continue;
             }
             // Fallen far below the screen (no ground under it: 2-11's lava,
@@ -690,7 +701,7 @@ void tick(uint8_t* rdram) {
             // screen: far apart player 2's is not the main camera's.)
             const bool own_floor = m != nullptr && m->type == kCat && !mm::foreign_actors::native(rdram, kCat);
             if (own_floor && view_y(rdram, *r, MEM_H(0x8C, slot_addr(have))) < kPitY) {
-                remove(rdram, *r, have, m->span);
+                remove(rdram, *r, *m, have);
                 continue;
             }
             // Put down after a carry the rider is in the fall state, which
