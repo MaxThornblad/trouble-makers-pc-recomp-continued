@@ -1,0 +1,52 @@
+From 788b1a02c8e262fd3938b8e2e572309cf10705d3 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 30 Oct 2026 21:40:30 +0100
+Subject: [PATCH] Save: set_save_data puts a snapshot's save back (rollback)
+
+A frame rolled back may have written the cartridge save; the rollback
+puts the save of the frame it returns to back with this, as the game's
+own write would (in a sandbox it stays in memory).
+---
+ librecomp/include/librecomp/game.hpp | 5 +++++
+ librecomp/src/pi.cpp                 | 9 +++++++++
+ 2 files changed, 14 insertions(+)
+
+diff --git a/librecomp/include/librecomp/game.hpp b/librecomp/include/librecomp/game.hpp
+index e6e3a55..1f4388d 100644
+--- a/librecomp/include/librecomp/game.hpp
++++ b/librecomp/include/librecomp/game.hpp
+@@ -121,6 +121,11 @@ namespace recomp {
+     // reaches the disk; the file keeps the real save, which comes back after.
+     void begin_save_sandbox(const std::vector<uint8_t>& data);
+     void end_save_sandbox();
++    // Puts `data` (padded or cut to the save size) in the cartridge save as
++    // the game sees it, as a save write by the game would: for a rollback,
++    // which puts back the save of the frame it returns to. In a sandbox it
++    // stays in memory; otherwise it is written to the file.
++    void set_save_data(const std::vector<uint8_t>& data);
+     bool eeprom_allowed();
+     bool sram_allowed();
+     bool flashram_allowed();
+diff --git a/librecomp/src/pi.cpp b/librecomp/src/pi.cpp
+index e38d94f..5325066 100644
+--- a/librecomp/src/pi.cpp
++++ b/librecomp/src/pi.cpp
+@@ -225,6 +225,15 @@ static void signal_save_write() {
+     if (!save_sandbox_active) save_context.write_sempahore.signal();
+ }
+ 
++void recomp::set_save_data(const std::vector<uint8_t>& data) {
++    {
++        std::lock_guard lock { save_context.save_buffer_mutex };
++        std::fill(save_context.save_buffer.begin(), save_context.save_buffer.end(), 0);
++        std::copy_n(data.begin(), std::min(data.size(), save_context.save_buffer.size()), save_context.save_buffer.begin());
++    }
++    signal_save_write();
++}
++
+ void save_write_ptr(const void* in, uint32_t offset, uint32_t count) {
+     if (!recomp::save_writes_enabled()) {
+         return;
+-- 
+2.43.0
+

@@ -28,6 +28,7 @@
 
 #include "ultramodern/ultra64.h"
 #include "ultramodern/ultramodern.hpp"
+#include "librecomp/game.hpp"
 #include "librecomp/overlays.hpp"
 
 #ifdef MM_HAS_GRAPHICS
@@ -107,6 +108,7 @@ struct Snapshot {
     mm_audio_clock_state audio_clock{};   // (version 4) the virtual audio clock, when it ran
     uint8_t has_audio_clock = 0;
     std::vector<mm::state::Blob> modules;   // (version 5) registered host-side state (state_registry.h)
+    std::vector<uint8_t> eeprom;            // the cartridge save (in memory only, netplay: a rollback puts it back)
 };
 
 // ---------------------------------------------------------------------------
@@ -441,6 +443,10 @@ bool capture(uint8_t* rdram, recomp_context* ctx, Snapshot& s, std::string& erro
     mm_virtual_audio_get(&s.audio_clock);
     s.has_audio_clock = 1;
     s.modules = mm::state::save_all();
+    // Online a frame may write the cartridge save (a stage's end) and then
+    // be rolled back; the save of the frame returned to comes back with it.
+    // Not in a file (a loaded save state must not touch the real save).
+    s.eeprom = mm::netplay::active() ? recomp::get_save_data() : std::vector<uint8_t>{};
     return true;
 }
 
@@ -498,6 +504,7 @@ bool apply(uint8_t* rdram, recomp_context* ctx, const Snapshot& s, std::string& 
         static int reported = 0;
         if (reported++ < 8) std::fprintf(stderr, "[savestate] the state has no \"%s\": reset\n", name.c_str());
     }
+    if (!s.eeprom.empty() && mm::netplay::active()) recomp::set_save_data(s.eeprom);
     mm_ws_set_host_bank_end(s.ws_bank_end);
     mm_ws_after_state_load();
 #ifdef MM_HAS_GRAPHICS

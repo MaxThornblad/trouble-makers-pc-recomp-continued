@@ -658,6 +658,23 @@ too, and to spawn 3-11's Cat Clancer anywhere.
   hit as the game's objects do: knocked out with the velocity the hit left
   (+0xF8 / +0xFC, capped to a hop of 2 x 4 px a frame), the hit's type
   (+0xDC) and damage (+0xE2) cleared; it lands grabbable.
+- Pet, third pass: he follows slot 0 (the game's Marina: player 1, or the
+  lead after a swap), not the nearest player. A wall too high to jump:
+  he goes the other way for up to 90 frames (his +0xD8 word's high half,
+  signed by direction; the jump timer is in the low half) looking for a
+  way: a jumpable thing toward the player within 60 px ends the detour
+  (he turns and takes it), lower things on the way he jumps or steps; at
+  the end he gives up, rests 90 frames, tries again. Hits (his +0x98 bit
+  0x2: an enemy, a thrown thing) run his own code: fly back (0x2000),
+  hurt landing (0x40), idle. His sounds away from 3-11 are the shared
+  set (grab, step, hit, jump, land); the stage's crowd and fanfare go with
+  the skipped intro.
+- Boarding a missile: the rider's health is put back in missile_end, the
+  same frame the missile hit her (it showed a dip for one frame before).
+- Netplay snapshots carry the cartridge save (savestate.cpp, in memory
+  only; runtime patch 0019 adds recomp::set_save_data): a rollback puts
+  back the save of the frame it returns to. Save-state files do not carry
+  it: a loaded state must never touch the real save.
 - Save states loaded under fast-forward (and the bot tests' 4x) crashed the
   audio: a state taken at normal speed carries a stale virtual-clock
   "drained" count, so AI_LEN read seconds of queued audio, the game mixed a
@@ -717,9 +734,29 @@ too, and to spawn 3-11's Cat Clancer anywhere.
 - Open: 2-11 (lava arena) with the cheat on: the floating rock sinks under
   the riders and a player who falls in is never put back on safe ground
   (without the cheat the lava bounces her back). Not understood yet.
-- Open: in 3-6 two players each holding a part of the same many-part
-  creature (types 0x0300 / 0x0021) tug it between them: the second
-  holder jitters by up to ~35 px a frame (not cat related).
+- Grabs and parts (2026-10-30 evening). The collision pass
+  (func_8001EC1C) offers a grab any actor below 0x90 with +0x80 bit
+  0x1000, a hit box B and health; what a player holds carries +0x98 bit
+  0x200 (the holder's handshake, func_800291AC) and needs nothing else.
+  Two things followed from that with two players: (a) the cheat cats'
+  parts (type 0x21) have 0x1000 (3-12 has no one on foot to reach them):
+  a player on foot grabbed the other's cat part and was pulled between
+  her hands and the cat's animation every frame; the ridden cats' slots
+  now lose the bit after each update (player2_mount.cpp). (b) 3-6's
+  many-part creature (a head, its 0x21 parts after it): both players
+  held parts of one creature, or the same part, and the second holder
+  was thrown 80 px back and forth (the creature pulls its parts to the
+  head, each holder pulls hers). player2.cpp chain_grab_guard, after the
+  actors: once a part is held, every part of that creature (the held one
+  too) loses 0x1000; the bits it cleared are registered state
+  ("chain-grab-guard") and come back when the part is let go. catx-3-6's
+  jitter at frame 881 is gone with it.
+- Open: catx-3-3 / far-catx-3-3 (Missile Surf): player 2 carrying player
+  1 while the stage moves them, her x alternates by 32 px a frame. The
+  carry re-run (player2.cpp, "moved > 12 px: run her update again with
+  player 1 shifted") fires every frame there: with the stage moving the
+  pair, the carrier's own move is large and legitimate, and the shift
+  overcorrects. Not fixed; the heuristic wants a check on what moved her.
 - Open: net-cat fails now and then (p2 shown next to player 1 for four
   frames right after the cheat goes on, while player 1 threw her); it
   depends on the inputs' timing online, not reproduced locally.

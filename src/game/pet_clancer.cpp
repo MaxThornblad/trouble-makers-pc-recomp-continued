@@ -1,6 +1,7 @@
 #include "pet_clancer.h"
 
 #include <cmath>
+#include <initializer_list>
 #include <cstdio>
 #include <cstdlib>
 
@@ -8,7 +9,6 @@
 
 #include "custom_actors.h"
 #include "far_coop.h"
-#include "player2.h"
 
 namespace mm::pet_clancer {
 namespace {
@@ -54,8 +54,12 @@ constexpr int32_t kGravity = 0x3800;
 constexpr int kJumpWait = 45;              // frames between jumps
 constexpr int16_t kHealth = 200;           // kept: below 5 his match ends (stage state!)
 
-// Jump timer: his +0xD8 word, read by his code only before he is built.
-constexpr uint32_t kTimer = 0xD8;
+// His +0xD8 word, read by his code only before he is built: the jump
+// timer in its low half, the detour (frames left, signed: the way he goes)
+// in its high half.
+constexpr uint32_t kTimer = 0xDA, kDetour = 0xD8;
+constexpr int kDetourFrames = 90;          // frames he looks for a way round a wall too high (~210 px)
+constexpr int kDetourRest = 90;            // frames he waits before looking again
 
 // What his match code wants and this stage has no use for.
 bool match_only(uint16_t state) {
@@ -104,8 +108,8 @@ bool ground_under(uint8_t* rdram, int self, int x, int feet) {
     return mm::custom_actors::floor_between(rdram, self, x, feet, feet - 3) != mm::custom_actors::kNoFloor;
 }
 
-bool wall_ahead(uint8_t* rdram, int self, int x, int feet, int dir) {
-    const int px = x + dir * kWallAhead;
+bool wall_ahead(uint8_t* rdram, int self, int x, int feet, int dir, int reach = kWallAhead) {
+    const int px = x + dir * reach;
     for (int dy = 3; dy <= kBodyTop; dy += 4) {
         if (solid_at(rdram, self, px, feet + dy)) return true;
     }
@@ -117,8 +121,8 @@ bool wall_ahead(uint8_t* rdram, int self, int x, int feet, int dir) {
 // (kBodyTop + 2). Only what bars him counts, not anything further up.
 // kTooHigh when there is no such gap within his reach.
 constexpr int kTooHigh = 0x7FFF;
-int obstacle_height(uint8_t* rdram, int self, int x, int feet, int dir) {
-    const int px = x + dir * kWallAhead;
+int obstacle_height(uint8_t* rdram, int self, int x, int feet, int dir, int reach = kWallAhead) {
+    const int px = x + dir * reach;
     int top = 0, clear = 0;
     bool found = false;
     for (int py = feet + 1; py <= feet + kJumpMax + kBodyTop + 2; py += 2) {
@@ -134,21 +138,35 @@ int obstacle_height(uint8_t* rdram, int self, int x, int feet, int dir) {
     return kTooHigh;
 }
 
+// On a detour: a way toward the player he can take within kDetourLook
+// px: nothing in the way, or something low enough to jump. (Not "the wall
+// is out of sight": 60 px on he forgot it and turned back.)
+constexpr int kDetourLook = 60;
+bool way_toward(uint8_t* rdram, int self, int x, int feet, int dir, int* jump_height) {
+    *jump_height = 0;
+    for (int reach = kWallAhead; reach <= kDetourLook; reach += 8) {
+        if (!wall_ahead(rdram, self, x, feet, dir, reach)) continue;
+        const int h = obstacle_height(rdram, self, x, feet, dir, reach);
+        if (h > kJumpMax) return false;
+        if (reach == kWallAhead) *jump_height = h;   // close enough to jump now
+        return true;
+    }
+    return false;   // nothing seen: the wall is behind the look, not gone
+}
+
 // The rise (16.16 px a frame) that peaks height px up under his gravity.
 int32_t rise_for(int height) {
     const double h = static_cast<double>(height) * 65536.0, g = static_cast<double>(kGravity);
     return static_cast<int32_t>(std::sqrt(2.0 * g * h));
 }
 
-// The nearest player's record (slot 0, or player 2's).
-gpr target(uint8_t* rdram, int x) {
-    gpr best = slot_addr(0);
-    const int p2 = mm::player2::slot(rdram);
-    if (p2 > 0) {
-        const gpr b = slot_addr(p2);
-        if (MEM_W(0x80, b) != 0 && std::abs(MEM_H(0x88, b) - x) < std::abs(MEM_H(0x88, best) - x)) best = b;
-    }
-    return best;
+// Whom he follows: slot 0, the game's Marina, who is player 1 (or whoever
+// leads after a swap, player2_lead.cpp). Spawns are the host's and made in
+// front of slot 0, so that is who got him. (He followed the nearest player
+// first: with two players apart he changed sides, and standing between
+// them he picked the one who stood still.)
+gpr target(uint8_t* rdram, int /*x*/) {
+    return slot_addr(0);
 }
 
 enum Want { kHisOwn, kWantIdle, kWantRun, kWantJump, kWantFall };
@@ -198,8 +216,9 @@ void before(uint8_t* rdram, int slot) {
     g_frame.before = state;
     if (state < kIdleEnter) return;   // not built yet
     MEM_H(0xE0, a) = kHealth;
-    int timer = MEM_W(kTimer, a);
-    if (timer > 0) MEM_W(kTimer, a) = --timer;
+    int timer = MEM_H(kTimer, a);
+    if (timer > 0) MEM_H(kTimer, a) = static_cast<int16_t>(--timer);
+    int detour = MEM_H(kDetour, a);   // frames left, negative: going left
 
     const int x = MEM_H(0x88, a), y = MEM_H(0x8C, a);
     const int feet = y + MEM_H(0xB0, a);
@@ -221,6 +240,44 @@ void before(uint8_t* rdram, int slot) {
         return;
     }
     const bool running = state == kRun || state == kRunEnter;
+    // A detour: a wall toward the player too high to jump, he goes the
+    // other way for a while looking for a lower place (a pyramid's far
+    // side, a step up elsewhere), then gives up and waits.
+    if (detour != 0) {
+        const int away = detour < 0 ? -1 : 1;
+        detour = detour < 0 ? detour + 1 : detour - 1;
+        MEM_H(kDetour, a) = static_cast<int16_t>(detour);
+        int jump_height = 0;
+        if (way_toward(rdram, slot, x, feet, dir, &jump_height)) {
+            MEM_H(kDetour, a) = 0;   // a way toward the player: back to following (and over it)
+        } else if (detour == 0) {
+            MEM_H(kTimer, a) = kDetourRest;
+            say("gives up on the wall");
+        } else {
+            face(rdram, a, away);
+            g_frame.dir = away;
+            const bool wall_away = wall_ahead(rdram, slot, x, feet, away);
+            const int h_away = wall_away ? obstacle_height(rdram, slot, x, feet, away) : 0;
+            if (wall_away && h_away > kStepUp && h_away <= kJumpMax && timer == 0) {
+                g_frame.want = kWantJump;
+                g_frame.rise = rise_for(h_away + kJumpMargin);
+                set_state(rdram, a, kJumpEnter);
+                MEM_H(kTimer, a) = kJumpWait;
+                return;
+            }
+            if (wall_away && h_away > kJumpMax) {
+                MEM_H(kDetour, a) = 0;   // boxed in: wait
+                MEM_H(kTimer, a) = kDetourRest;
+                g_frame.want = kWantIdle;
+                if (!idling(state)) set_state(rdram, a, kIdleEnter);
+                return;
+            }
+            if (wall_away && h_away <= kStepUp) MEM_W(0x8C, a) += h_away << 16;
+            g_frame.want = kWantRun;
+            if (state != kRun) set_state(rdram, a, kRunEnter);
+            return;
+        }
+    }
     if (std::abs(dx) > (running ? kStopNear : kStartFar)) {
         face(rdram, a, dir);
         if (wall_ahead(rdram, slot, x, feet, dir)) {
@@ -236,10 +293,16 @@ void before(uint8_t* rdram, int slot) {
                 g_frame.want = kWantJump;
                 g_frame.rise = rise_for(height + kJumpMargin);
                 set_state(rdram, a, kJumpEnter);
-                MEM_W(kTimer, a) = kJumpWait;
+                MEM_H(kTimer, a) = kJumpWait;
                 say("jumps at a wall");
+            } else if (height > kJumpMax && timer == 0) {
+                // Too high for him: round it, the other way.
+                MEM_H(kDetour, a) = static_cast<int16_t>(-dir * kDetourFrames);
+                say("looks for a way round");
+                g_frame.want = kWantIdle;
+                if (!idling(state)) set_state(rdram, a, kIdleEnter);
             } else {
-                // Too high for him, or just jumped: he waits here.
+                // Just jumped, or resting after a detour: he waits here.
                 g_frame.want = kWantIdle;
                 if (!idling(state)) set_state(rdram, a, kIdleEnter);
             }
@@ -256,7 +319,7 @@ void before(uint8_t* rdram, int slot) {
         g_frame.want = kWantJump;
         g_frame.rise = rise_for(dy + kJumpMargin);
         set_state(rdram, a, kJumpEnter);
-        MEM_W(kTimer, a) = kJumpWait;
+        MEM_H(kTimer, a) = kJumpWait;
         say("jumps up to the player");
         return;
     }
@@ -269,8 +332,10 @@ void after(uint8_t* rdram, int slot) {
     const gpr a = slot_addr(slot);
     const uint16_t state = MEM_HU(0xD0, a);
     if (state < kIdleEnter) return;
-    if (g_frame.want == kWantIdle && g_last_want != kWantIdle && g_frame.near) say("caught up");
-    g_last_want = g_frame.want;
+    if (!mm::faraway::in_shadow()) {   // (not the thrown-away frames: a lead probe has player 2 in slot 0)
+        if (g_frame.want == kWantIdle && g_last_want != kWantIdle && g_frame.near) say("caught up");
+        g_last_want = g_frame.want;
+    }
     // His match decisions undone (they only set the state word; the state's
     // own code would run next frame): a turn at an arena mark while he
     // runs, a run, jump or catch for a "ball" while he stands.
@@ -291,6 +356,7 @@ void after(uint8_t* rdram, int slot) {
         else if (now == kHurtLand) say("lands after a throw");
         else if (now == kHeld) say("is picked up");
         else if (now == kThrownEnter) say("is thrown");
+        else if (now == kHitEnter) say("is hit");
     }
     if (now == kRun) MEM_W(0xEC, a) = g_frame.dir * kRunSpeed;
     if (now == kJumpUp && g_frame.want == kWantJump && g_frame.rise != 0) MEM_W(0xF0, a) = g_frame.rise;   // (his own is 4.5 px a frame)

@@ -20,6 +20,7 @@
 #include "player2_health.h"
 #include "player2_internal.h"
 #include "player2_mount.h"
+#include "state_registry.h"
 #include "throw_cheats.h"
 
 
@@ -375,8 +376,59 @@ void frame_begin() {
     g_p1_deferred = false;
 }
 
+// Many-part creatures (3-6's: a head, then its parts, type 0x21, in the
+// slots after it) are grabbed by a part. With two players, two parts of
+// one creature were held at once: the creature's code pulls its parts to
+// the head and each holder pulls hers, and the second holder was thrown
+// between the two places every frame. Once one part is held, the creature's
+// other parts are kept off the grab (the collision pass offers an actor to
+// a grab by +0x80 bit 0x1000; the holder's handshake is +0x98 bit 0x200 and
+// does not need it, so the held part loses it too: both players held the
+// same part once); the bits come back when the part is let go.
+// Which bits are ours to put back is registered state (a state load, a
+// rollback and a joiner all carry it).
+namespace {
+constexpr uint16_t kPartType = 0x0021;
+constexpr uint32_t kGrabTarget = 0x1000;
+constexpr uint32_t kGrabbed = 0x200;   // +0x98: a holder's handshake
+struct ChainGuard {
+    std::array<uint8_t, 0x90> hidden{};   // 1: this slot's grab bit is cleared by the guard
+};
+mm::state::Pod<ChainGuard> g_chain_guard{"chain-grab-guard", 1};
+
+int chain_head(uint8_t* rdram, int s) {
+    while (s > 0 && MEM_HU(0xD2, addr(kActors + static_cast<uint32_t>(s) * kStride)) == kPartType) --s;
+    return s;
+}
+
+void chain_grab_guard(uint8_t* rdram) {
+    std::array<bool, 0x90> held{};
+    for (int s = 1; s < 0x90; ++s) {
+        const gpr a = addr(kActors + static_cast<uint32_t>(s) * kStride);
+        if (MEM_W(0x80, a) != 0 && MEM_HU(0xD2, a) == kPartType && (static_cast<uint32_t>(MEM_W(0x98, a)) & kGrabbed) != 0)
+            held[chain_head(rdram, s)] = true;
+    }
+    for (int s = 1; s < 0x90; ++s) {
+        const gpr a = addr(kActors + static_cast<uint32_t>(s) * kStride);
+        const bool part = MEM_W(0x80, a) != 0 && MEM_HU(0xD2, a) == kPartType;
+        const uint32_t flags = static_cast<uint32_t>(MEM_W(0x80, a));
+        uint8_t& hidden = g_chain_guard->hidden[s];
+        if (part && held[chain_head(rdram, s)]) {   // (the held part too: the other player grabbed the same one)
+            if ((flags & kGrabTarget) != 0) {
+                MEM_W(0x80, a) = static_cast<int32_t>(flags & ~kGrabTarget);
+                hidden = 1;
+            }
+        } else if (hidden != 0) {
+            if (part) MEM_W(0x80, a) = static_cast<int32_t>(flags | kGrabTarget);
+            hidden = 0;
+        }
+    }
+}
+} // namespace
+
 void after_actors(uint8_t* rdram) {
     if (lead_swapped(rdram) && slot(rdram) > 0) tint(rdram, 0);
+    chain_grab_guard(rdram);
 }
 
 // Player 2 as Marina for a moment (the second camera's pass, far_coop.cpp):

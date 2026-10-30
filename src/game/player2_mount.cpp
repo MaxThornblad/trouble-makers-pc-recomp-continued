@@ -428,6 +428,7 @@ bool cat_blocked(uint8_t* rdram, int x, int feet, int dir, bool shared) {
 // pictures flipped (+0x80 bit 0x20, as Marina's facing). Undone before its
 // update, so its code always sees itself as it left itself.
 constexpr uint32_t kFacingLeft = 0x20;
+constexpr uint32_t kGrabTarget = 0x1000;   // +0x80: the collision pass offers it to a grab
 void mirror_cat(uint8_t* rdram, const Mount& m) {
     const int32_t seat = MEM_W(0x88, slot_addr(m.slot + 1));
     for (int i = 1; i < m.span; ++i) {
@@ -469,6 +470,7 @@ struct MissileCall {
     int32_t cat_x = 0, cat_y = 0;
     int boarded = 0;            // the missile being boarded (the mount button)
     int rider = 0;              // and its rider's slot
+    const Rider* who = nullptr; // and the rider
 };
 MissileCall g_call;
 
@@ -618,6 +620,12 @@ void missile_end(uint8_t* rdram) {
     if (g_call.boarded != 0) {
         const gpr rider = slot_addr(g_call.rider);
         MEM_W(0x98, rider) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0x98, rider)) & ~kRiderStruck);
+        // And her health, here, before the frame is drawn (put back only
+        // next frame it showed a dip for one frame).
+        if (g_call.who != nullptr) {
+            const int32_t health = MEM_W(0, addr(g_call.who->boarding_health));
+            if (MEM_H(0xE0, rider) < health) MEM_H(0xE0, rider) = static_cast<int16_t>(health);
+        }
         g_call.boarded = 0;
     }
     if (!g_call.on) return;
@@ -652,6 +660,7 @@ void missile_begin(uint8_t* rdram, int actor) {
         if (MEM_W(0, addr(r->boarding)) == actor && MEM_W(0, addr(r->boarding_left)) > 0 && MEM_HU(0xD0, m) == kMissileFlying) {
             MEM_W(0x98, m) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0x98, m)) & ~kMissileHitBits);
             g_call.boarded = actor;
+            g_call.who = r;
             g_call.rider = character_slot(rdram, *r);
         }
     }
@@ -861,6 +870,13 @@ void update(uint8_t* rdram, recomp_context* ctx, int slot) {
             }
             copy_records(rdram, slot, m->slot, m->span);
             MEM_H(0xD2, slot_addr(slot)) = static_cast<int16_t>(mm::custom_actors::type_id(r->custom));
+            // Not to be picked up: the collision pass (func_8001EC1C) takes
+            // any actor with +0x80 bit 0x1000 and a hit box as a thing to
+            // grab, and the cat's parts have the bit (in 3-12 no one is on
+            // foot to reach them). A player who grabbed one was pulled
+            // between her hands and the cat's animation every frame.
+            for (int i = 0; i < m->span; ++i)
+                MEM_W(0x80, slot_addr(slot + i)) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0x80, slot_addr(slot + i))) & ~kGrabTarget);
             for (int i = 0; i < m->span; ++i) std::memcpy(slot_ptr(rdram, m->slot + i) + 0x80, theirs.data() + i * (kStride - 0x80), kStride - 0x80);
         };
         // Player 2 stands in for Marina first (her own record may be one of
