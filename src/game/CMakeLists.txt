@@ -28,6 +28,7 @@ add_executable(troublemakers
     gem_hints.cpp
     actors.cpp
     custom_actors.cpp
+    pet_clancer.cpp
     grab_blocks.cpp
     dev_harness.cpp
     inspector.cpp

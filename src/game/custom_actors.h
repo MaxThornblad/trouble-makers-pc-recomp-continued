@@ -58,4 +58,12 @@ void make_slope(uint8_t* rdram, int slot, uint8_t left_code, uint8_t right_code)
 // nullptr for an index with no type.
 const TypeInfo* info(uint16_t type);
 
+// Collision probes for other modules, camera-relative px (+y up):
+// the terrain map solid at a point (func_80012AB4); and the highest floor
+// (a terrain cell's top or a solid / stand-on actor's top) the actor in
+// slot meets falling from old_bottom to new_bottom, or kNoFloor.
+constexpr int kNoFloor = -100000;
+bool terrain_solid(uint8_t* rdram, int x, int y);
+int floor_between(uint8_t* rdram, int slot, int x, int old_bottom, int new_bottom);
+
 } // namespace mm::custom_actors

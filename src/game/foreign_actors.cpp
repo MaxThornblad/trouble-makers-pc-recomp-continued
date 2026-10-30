@@ -7,6 +7,8 @@
 #include "librecomp/game.hpp"
 #include "librecomp/overlays.hpp"
 
+#include "pet_clancer.h"
+
 extern "C" void func_80016E70(uint8_t* rdram, recomp_context* ctx);   // banked actor update, $a0 = slot
 extern "C" void load_overlays(uint32_t rom, int32_t ram_addr, uint32_t size);
 
@@ -262,6 +264,9 @@ bool dispatch(uint8_t* rdram, recomp_context* ctx, int slot) {
     // the missile sat wherever that was. It waits where it was spawned.
     const bool waiting = type == kLunarMissile && MEM_HU(0xD0, a) == 0;
     const bool clancer_built = type == kCatClancer && clancer_skip_intro(rdram, a);
+    // Built, he is a pet here: his states are picked for him (pet_clancer.cpp).
+    const bool pet = type == kCatClancer && !clancer_built;
+    if (pet) mm::pet_clancer::before(rdram, slot);
     const int32_t x = MEM_W(0x88, a), y = MEM_W(0x8C, a);
     const gpr a0 = ctx->r4;
     ctx->r4 = static_cast<gpr>(slot);
@@ -270,6 +275,7 @@ bool dispatch(uint8_t* rdram, recomp_context* ctx, int slot) {
     quiet.end();
     ctx->r4 = a0;
     if (MEM_HU(0xD2, a) == type) {
+        if (pet) mm::pet_clancer::after(rdram, slot);
         MEM_W(0xEC, a) -= p->scroll;
         if (waiting || clancer_built) {
             MEM_W(0x88, a) = x;

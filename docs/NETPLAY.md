@@ -592,8 +592,43 @@ too, and to spawn 3-11's Cat Clancer anywhere.
   put straight into 0x20, so none of it starts. The camera word his play
   sets (0x800BE544) is still put back after each update (Quiet). Checked
   with a gdb breakpoint on Sound_AddSfx over the owner's state: none of
-  0x12D, 0x12E, 0x130. Outside an arena he roams freely (3-11's walls hold
-  him there).
+  0x12D, 0x12E, 0x130. (Outside an arena he then ran in the air to the
+  stage's end: see the pet, below.)
+- Away from 3-11 he is a pet (src/game/pet_clancer.cpp, 2026-10-30). His
+  code is the dodgeball match: his standing and running states have no
+  gravity (the arena's floor is where he is put), his run turns at arena
+  marks (x > 80), and his idle picks a run, a jump or a catch for a
+  "dodgeball" found in actor slots 0x40..0x43, which elsewhere hold
+  whatever the stage has; and the grab needs +0x80 bit 0x10000, which the
+  match sets only where it allows a catch. So spawned in 1-1 he ran right
+  at a fixed height for ever, through everything, uncatchable. Now, built,
+  his state is chosen for him before each update out of the states he has
+  (the decompilation names them; func_801B1BA4): no ground within 3 px
+  under his feet (terrain or a solid / stand-on actor): fall (0x28, lands
+  by his own floor check, 0x38 land, 0x20 idle); the nearest player (slot
+  0 or player 2) more than 40 px away: run (0x26 / 0x27, 1.5625 px a
+  frame) toward her, facing set first; a wall ahead (12 px, feet + 3..14,
+  terrain or a solid actor): jump (0x50, his own gravity and landing; 1.25
+  px a frame across, from the 0.625 he jumps with), at most one every 45
+  frames (his +0xD8 word, which his code reads only before he is built);
+  within 40 px and the player's feet 28 px or more above his: the same
+  jump; else idle (0x20 / 0x21, with his own turn-to-face and look-around).
+  After the update what the match set is undone: a turn or stop while he
+  should run (back to 0x27), anything but idling while he should stand
+  (back to 0x21), and his match-only states (walk 0x24, ball throw 0x58,
+  catch 0x100, gem 0x110, the lost match 0x48) at any time (to 0x20). His
+  run and jump speeds are set after each update; 0x10000 is set while he
+  is on his feet (grabbable: the game's generic carry handler, state
+  0x1000 held, 0x30 thrown with his hit flash and 50 damage a hit, 0x40
+  hurt landing, then idle and he comes back). His health is kept at 200:
+  below 5 his code ends the match (a music fade, the lost states, and
+  state 0x4A bumps the stage state). The "Mortal NPCs" cheat leaves him
+  alone (cheats.cpp: it saw the refill as a refilling character and beat
+  him after one throw); "Clear spawned" removes him. In the air, held or
+  thrown his own code runs. All state is his record, so it is the same on
+  both machines online. Bot scenarios pet-clancer (lands, follows, is
+  picked up, thrown, comes back) and pet-clancer-wall (jumps onto a
+  spawned block in his way).
 - Save states loaded under fast-forward (and the bot tests' 4x) crashed the
   audio: a state taken at normal speed carries a stale virtual-clock
   "drained" count, so AI_LEN read seconds of queued audio, the game mixed a

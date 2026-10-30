@@ -122,7 +122,7 @@ bool supported(uint8_t* rdram, int slot) {
 // top or a solid actor's top), or kNoFloor. Landing is done here rather than
 // left to the terrain collision, which pushes a block that sinks into the
 // edge of another sideways, so blocks slid off instead of stacking.
-constexpr int kNoFloor = -100000;
+} // namespace
 
 bool terrain_solid(uint8_t* rdram, int x, int y) {
     recomp_context ctx{};
@@ -156,6 +156,8 @@ int floor_between(uint8_t* rdram, int slot, int x, int old_bottom, int new_botto
     }
     return best;
 }
+
+namespace {
 
 // --- Slope blocks ----------------------------------------------------------
 // A box can't be sloped, so a slope block at rest writes its two slope cells

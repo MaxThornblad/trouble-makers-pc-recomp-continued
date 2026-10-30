@@ -117,6 +117,17 @@ SCENARIOS += [
     ("p2-cat-missile-board", 1, 420, "420:", "142:,4:Z,60:r,54:,4:Z,156:", 0,
      dict(env=dict(CAT, MM_TEST_SPAWN="F09@80@200@8"),
           expect=["player 2's cat boards missile", "her cat lands on missile", "player 2's cat gets off missile"])),
+    # 3-11's Cat Clancer spawned anywhere is a pet (pet_clancer.cpp): he
+    # falls to the ground, follows the player and stops near her, can be
+    # picked up and thrown, and comes back; a spawned block in his way he
+    # jumps onto.
+    ("pet-clancer", 1, 700, "60:,90:r,80:,12:l,100:,6:B,60:,6:rB,286:", "700:", 0,
+     dict(env={"MM_TEST_SPAWN": "2801@20@80@0"},
+          expect=["[pet] Cat Clancer lands", "[pet] Cat Clancer caught up", "[pet] Cat Clancer is picked up",
+                  "[pet] Cat Clancer is thrown", "[pet] Cat Clancer lands after a throw"])),
+    ("pet-clancer-wall", 1, 400, "400:", "400:", 0,
+     dict(env={"MM_TEST_SPAWN": "7F01@20@40@0;2801@22@150@0"},
+          expect=["[pet] Cat Clancer jumps at a wall", "[pet] Cat Clancer caught up"])),
     # 3-11's Cat Clancer spawned anywhere builds his parts in a free run
     # (he wrote over player 2's slot).
     ("clancer", 1, 900, fuzz(1201), fuzz(1202), 0,

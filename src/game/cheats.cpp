@@ -10,6 +10,7 @@
 #include <string>
 
 #include "gem_compass.h"
+#include "foreign_actors.h"
 #include "grab_blocks.h"
 #include "far_coop.h"
 #include "player2.h"
@@ -509,7 +510,10 @@ void apply_mortal_refills(uint8_t* rdram) {
         const gpr a = addr(0x800EF510u + static_cast<uint32_t>(slot) * 0x198u);
         Shadow& sh = g_shadows->slots[slot];
         const uint16_t type = MEM_W(0x80, a) != 0 ? MEM_HU(0xD2, a) : 0;
-        if (type == 0 || (type >> 8) == 0x7F || type == 0x63) {
+        // (Not the pet: 3-11's cat spawned elsewhere, kept at his health by
+        // pet_clancer.cpp so his match never ends. "Clear spawned" removes him.)
+        const bool pet = type == 0x2801 && !mm::foreign_actors::native(rdram, type);
+        if (type == 0 || (type >> 8) == 0x7F || type == 0x63 || pet) {
             sh = {};
             continue;
         }
