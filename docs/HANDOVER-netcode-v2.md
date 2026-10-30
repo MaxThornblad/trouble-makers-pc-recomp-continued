@@ -202,7 +202,7 @@ Gotchas from this project:
 - The `lib/N64ModernRuntime` gitlink on `netcode-v2` and `save-states` points
   at the old container's local `tm-fixes` commit, which no remote has
   (`main`'s gitlink is the real upstream pin, ae1ffbb). To rebuild: check
-  out ae1ffbb in lib/N64ModernRuntime, `git am` the 18 patches (they apply
+  out ae1ffbb in lib/N64ModernRuntime, `git am` the 19 patches (they apply
   cleanly), and don't commit the gitlink (CLAUDE.md).
 - The system CMake 3.28 refuses `src/game/CMakeLists.txt`'s
   `WHOLE_ARCHIVE` link of `librecomp`/`ultramodern` next to their plain
@@ -448,6 +448,14 @@ netcode, and the owner decides.
   pyramid), 63 (blocks stuck in the fire), 64 (holding a block by the
   fire); scenarios pet-pyramid and block-fire need 62 and 64. Open: the
   carry flicker; the one-frame health dip when boarding.
+- 2026-10-30 evening, branch review-fixes: preview 22 (fb7f14f): the
+  carry flicker's two grab causes (cat parts, 3-6's creature parts:
+  chain_grab_guard; catx-3-6 passes), the boarding health dip, the save
+  in netplay snapshots (runtime patch 0019: the tm-fixes branch now needs
+  19 patches), the pet follows slot 0 and detours round walls too high.
+  Open: catx-3-3 / far-catx-3-3 (player 2 carrying player 1 on the
+  moving stage: the carry re-run heuristic overcorrects), the
+  pre-existing warp-state failures.
 
 ## 5. Open questions for the owner (ask when relevant, not up front)
 
