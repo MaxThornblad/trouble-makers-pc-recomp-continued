@@ -41,6 +41,7 @@ constexpr uint32_t kHoldingFlag = 0x02000000u;   // +0x80: carrying something (s
 constexpr uint32_t kPads = 0x8012AD70u;           // OSContPad[4], 6 bytes each
 constexpr uint32_t kPadsRead = 0x8012AD88u;       // the same, Input_Update's first read
 constexpr uint32_t kHold = 0x800BE4F8u;
+constexpr uint16_t kFallState = 0x0016;              // Marina's fall (+0xD0)
 constexpr uint32_t kPress = 0x800BE4FCu;
 
 // Marina's own globals: everything her update writes outside her slot that
@@ -240,8 +241,17 @@ void place(uint8_t* rdram, int slot, int16_t health) {
         fl = dx > 0 ? (fl | 0x20u) : (fl & ~0x20u);   // 0x20: facing left
         std::memcpy(p + 0x80, &fl, 4);
     }
-    MEM_W(0x80, addr(kActors + static_cast<uint32_t>(slot) * kStride)) &= ~0x02000000;   // not holding anything
-    MEM_H(0xD6, addr(kActors + static_cast<uint32_t>(slot) * kStride)) = 0;
+    const gpr me = addr(kActors + static_cast<uint32_t>(slot) * kStride);
+    if ((MEM_W(0x80, me) & 0x02000000) != 0) {
+        // Player 1 holds something: the copy holds nothing, so not her
+        // holding state either (joined holding nothing in it, at 4-11's
+        // boss, she flew off into the pit). She falls from there.
+        MEM_H(0xD0, me) = static_cast<int16_t>(kFallState);
+        MEM_W(0xEC, me) = 0;
+        MEM_W(0xF0, me) = 0;
+    }
+    MEM_W(0x80, me) &= ~0x02000000;   // not holding anything
+    MEM_H(0xD6, me) = 0;
     // Her own health (player2_health.h).
     MEM_H(0xE0, addr(kActors + static_cast<uint32_t>(slot) * kStride)) = std::max<int16_t>(1, health);
     copy_globals_out(rdram, at(rdram, kP2Globals));
