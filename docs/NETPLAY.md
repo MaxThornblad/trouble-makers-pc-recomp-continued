@@ -584,6 +584,31 @@ too, and to spawn 3-11's Cat Clancer anywhere.
   (register_overlays.cpp), and a PI read past the ROM lands zeros (runtime
   patch 0018). This is likely also the Windows boss-state crash below.
 
+### Player 2's bee in 5-3; cats in busy stages (2026-10-30, bot tests)
+
+- 5-3 is a mount stage too: Marina rides a bee (type 0x1F02, slot 48, parts
+  in 49..71, func_801A89C0) through an auto-scrolling boss fight. Player 2
+  had none: she hung in mid-air at the top of the screen. The bee is a
+  second entry in player2_mount.cpp's mount table, so she gets her own copy
+  as in 3-12 (24 slots). (The copy's update first had no package to run in:
+  foreign_actors now treats a type whose package it does not keep as the
+  stage's own, in place.)
+- A mount copy is never placed over the stage slots its update borrows (her
+  cat in 99..112 overlapped 96..109: copying records in and out mixed them
+  and the cat crashed on its first update).
+- A cat built on a frame where the rider was just hit (player-state bits
+  0x80137444 & 0x10002, e.g. a state loaded on such a frame) went straight
+  to throwing her off, unbuilt, and crashed: its first update does not see
+  those bits.
+- A cat whose record was switched off (a thrown player hit it) left its
+  rider sitting on nothing, carried on at the loop's 10 px a frame: the
+  rider gets off as when the cheat goes off, and gets a new cat.
+- A cat rider left behind by the camera past the screen's edge is dragged
+  along at the edge, as the shared screen keeps a player on foot.
+- Bot scenarios: cat-1..9 (random play with the cheat on in each test
+  stage), cat-off, cat-missile, clancer (tools/coop_bots.py; cheats for a
+  run come from MM_TEST_CHEATS, never written to the test home).
+
 ## Fixes from the fourth session (owner's reports, 2026-10-28)
 
 - Player 2 carrying player 1 walked and slid at half speed once the camera

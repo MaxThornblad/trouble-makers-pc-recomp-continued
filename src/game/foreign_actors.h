@@ -29,10 +29,11 @@ namespace mm::foreign_actors {
 bool known(uint16_t type);
 
 // The type's package is the one loaded now (its own stage): no swap needed.
+// True for types whose package this module does not keep (the stage's own).
 bool native(uint8_t* rdram, uint16_t type);
 
-// Runs `body` with the type's package in place (at once when it is native).
-// False when the type is not known.
+// Runs `body` with the type's package in place (at once when it is native,
+// or a package this module does not keep). False when its ROM is missing.
 bool with_package(uint8_t* rdram, uint16_t type, const std::function<void(uint8_t*)>& body);
 
 // Generated hook at func_80016E70's entry (via custom_actors.cpp): a foreign

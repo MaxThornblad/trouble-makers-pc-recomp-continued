@@ -24,7 +24,8 @@
 //   MM_SOUND_TRACE=1 (2)               positional sounds moved to player 2's camera (every call), coop_sound.cpp
 //   MM_TEST_HUD=1                      print the HUD's display list (widescreen.cpp), first frames
 //   MM_TEST_TERRAIN="x,y;x,y"          terrain bytes around world points (frame 3)
-//   MM_TEST_TOGGLE=7@300               toggle a cheat (its index in cheats.h) on a frame (saved: use a test home)
+//   MM_TEST_TOGGLE=7@300               toggle a cheat (its index in cheats.h) on a frame (not saved)
+//   MM_TEST_CHEATS="cat_ride=1,coop=0" cheats.cfg lines on top of the file (cheats.cpp; not saved)
 // With MM_TEST_SCRIPT (or MM_TEST_CLOCK=1 alone, which leaves the controls
 // alone), "[clock] t<frame> <unix time>" lines every 10 frames
 // line screenshots up with frames (Wine runs far slower than 60 fps).

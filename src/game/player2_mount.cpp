@@ -50,11 +50,14 @@ constexpr uint32_t kCatGlobals = 0x801A80E6u;
 constexpr uint32_t kCatGlobalsSize = 6;
 constexpr uint32_t kMissileMessage = 0x801A80EAu;   // u16: the missile's slot, 0 = none
 constexpr uint16_t kCat = 0x0F01;
+constexpr uint16_t kBee = 0x1F02;
 constexpr uint16_t kFallState = 0x16;                // Marina's fall (low byte of +0xD0)
 constexpr uint16_t kRideState = 0x03;                // Marina on a mount
 constexpr uint16_t kOnCat = 0x0100;                  // Marina's +0x94: on the cat (set by the cat)
 constexpr uint32_t kPlayerState = 0x80137458u;       // Marina's player-state word
 constexpr uint32_t kOnLoop = 0x10000;                // ... carried by 3-12's loop (set by the cat)
+constexpr uint32_t kRiderHit = 0x80137444u;          // player-state word: bits 0x2 / 0x10000, she was hit (func_801A23C4)
+constexpr uint32_t kRiderHitBits = 0x10002;
 constexpr uint16_t kMissile = 0x0F09;
 constexpr uint16_t kMissileFlying = 1, kMissileRidden = 4;
 constexpr uint32_t kMissileHit = 0x200;             // +0x98: hit, about to blow up
@@ -74,6 +77,7 @@ struct Mount {
 };
 constexpr Mount kMounts[] = {
     {kCat, 96, 14, 5, "cat"},   // 3-12 CERBERUS: the cat Marina rides (func_801A23C4; parts in 97..109)
+    {kBee, 48, 24, 5, "bee"},   // 5-3: the bee Marina rides (func_801A89C0; parts in 49..71)
 };
 constexpr const Mount& kCheatMount = kMounts[0];   // the "Ride the cat" cheat
 
@@ -215,13 +219,12 @@ void let_go(uint8_t* rdram, const Rider& r) {
     if (!mm::faraway::in_shadow()) std::fprintf(stderr, "[mount] her cat leaves missile %d\n", missile);
 }
 
-void remove(uint8_t* rdram, const Rider& r, int first, int span) {
-    let_go(rdram, r);   // (else her missile went on writing player 1's message)
-    // Still on it (the cheat went off): she falls from where she sat, as
-    // from a jump, instead of sitting on nothing. And what the cat set on
-    // her when she got on goes (its first update, func_801A23C4's state 0):
-    // with the loop's mark in her player state her own update carried her
-    // on with the loop's 10 px a frame, cat or not.
+// Her mount is gone. Still on it (the cheat went off, the cat was taken
+// away): she falls from where she sat, as from a jump, instead of sitting on
+// nothing. And what the cat set on her when she got on goes (its first
+// update, func_801A23C4's state 0): with the loop's mark in her player state
+// her own update carried her on with the loop's 10 px a frame, cat or not.
+void dismount(uint8_t* rdram, const Rider& r) {
     auto get_off = [](uint8_t* rdram) {
         if ((MEM_HU(0xD0, slot_addr(0)) & 0xFF) != kRideState) return;
         MEM_H(0xD0, slot_addr(0)) = static_cast<int16_t>(kFallState);
@@ -233,9 +236,6 @@ void remove(uint8_t* rdram, const Rider& r, int first, int span) {
     } else {
         get_off(rdram);
     }
-    for (int i = first; i < first + span; ++i) {
-        for (uint32_t off = 0x80; off < kStride; off += 4) MEM_W(off, slot_addr(i)) = 0;
-    }
     MEM_W(0, addr(r.mount)) = 0;
     MEM_W(0, addr(r.type)) = 0;
     if (r.globals != 0) {
@@ -243,12 +243,30 @@ void remove(uint8_t* rdram, const Rider& r, int first, int span) {
     }
 }
 
+void remove(uint8_t* rdram, const Rider& r, int first, int span) {
+    let_go(rdram, r);   // (else her missile went on writing player 1's message)
+    for (int i = first; i < first + span; ++i) {
+        for (uint32_t off = 0x80; off < kStride; off += 4) MEM_W(off, slot_addr(i)) = 0;
+    }
+    dismount(rdram, r);
+}
+
 void spawn(uint8_t* rdram, const Rider& r, const Mount& m) {
     // Below 0x90 like the stage's own, so the parts take part in collisions
     // as its parts do; else anywhere below the particles (0xC0), where a
     // busy stage has room.
-    int first = mm::actors::free_run(rdram, m.span, 0x8F);
-    if (first < 0) first = mm::actors::free_run(rdram, m.span, 0xBF);
+    // Not over the stage slots its update borrows (m.slot on): there the
+    // copy in and out of its own records overlapped and mixed them (her cat
+    // in 99..112 crashed on its first update).
+    auto run_below = [rdram, &m](int last) {
+        for (;;) {
+            const int first = mm::actors::free_run(rdram, m.span, last);
+            if (first < 0 || first + m.span <= m.slot || first >= m.slot + m.span) return first;
+            last = first + m.span - 2;   // the next run down
+        }
+    };
+    int first = run_below(0x8F);
+    if (first < 0) first = run_below(0xBF);
     if (first < 0) return;
     // A new one at the rider's feet; its first update (state 0, run as the
     // stage's slot) builds the parts after it and takes the rider up, as
@@ -261,7 +279,7 @@ void spawn(uint8_t* rdram, const Rider& r, const Mount& m) {
     MEM_W(0, addr(r.mount)) = first;
     MEM_W(0, addr(r.type)) = m.type;
     MEM_W(0, addr(r.lift)) = 0;
-    request(rdram, r, m.request);   // and she gets on (her riding state), as Marina was told to
+    if (m.request != 0) request(rdram, r, m.request);   // and she gets on (her riding state), as Marina was told to
     if (!mm::faraway::in_shadow()) {
         std::fprintf(stderr, "[mount] %s's own %s (slots %d..%d)\n", r.p2 ? "player 2" : "player 1", m.name, first, first + m.span - 1);
     }
@@ -406,11 +424,13 @@ void missile_begin(uint8_t* rdram, int actor) {
         const gpr p1 = stage_cat ? slot_addr(kCheatMount.slot) : (p1_cat > 0 ? slot_addr(p1_cat) : 0);
         if (p1 != 0 && cat_lands(rdram, p1, m, MEM_HU(0, msg))) {
             if (stage_cat) return;   // already in slot 96
+            if (!mm::faraway::in_shadow()) std::fprintf(stderr, "[mount] player 1's cat lands on missile %d\n", actor);
             g_call.on = true;
             present(rdram, p1_cat);
             return;
         }
         if (p2_cat <= 0 || !cat_lands(rdram, slot_addr(p2_cat), m, MEM_HU(0, hers))) return;
+        if (!mm::faraway::in_shadow()) std::fprintf(stderr, "[mount] her cat lands on missile %d\n", actor);
         g_call.on = g_call.hers = g_call.landing_p2 = true;
         present(rdram, p2_cat);
     }
@@ -464,6 +484,19 @@ void update(uint8_t* rdram, recomp_context* ctx, int slot) {
                     lift = std::max(want, prev - kCatFall);
                 }
                 MEM_W(0, addr(r->lift)) = lift;
+                // Left behind by the camera (it follows the other player)
+                // past the screen's edge: dragged along at the edge, as the
+                // shared screen keeps a player on foot (she was at -257 on
+                // her cat, and snapped to -180 when she got off).
+                if (state != kCatLanding && state != kCatRiding) {
+                    const int x = MEM_H(0x88, cat);
+                    const int drag = x < -kCatEdge ? -kCatEdge - x : x > kCatEdge ? kCatEdge - x : 0;
+                    if (drag != 0) {
+                        for (int i = 0; i < m->span; ++i) MEM_W(0x88, slot_addr(m->slot + i)) += drag << 16;
+                        MEM_W(0x88, slot_addr(0)) += drag << 16;
+                        MEM_W(0, addr(kMarinaWorldX)) += drag << 16;
+                    }
+                }
                 pace = MEM_W(0xEC, cat);
                 MEM_W(0xEC, cat) = kLoopScroll;
                 across = MEM_W(0x88, cat) - (kCatHomeX << 16);
@@ -483,7 +516,16 @@ void update(uint8_t* rdram, recomp_context* ctx, int slot) {
             const int32_t world_x = MEM_W(0, addr(kMarinaWorldX)), world_y = MEM_W(0, addr(kMarinaWorldY));
             const gpr a0 = ctx->r4;
             ctx->r4 = static_cast<gpr>(m->slot);
+            // Its first update builds it, unless the rider was just hit
+            // (player-state bits the stage's cat checks first: it goes
+            // straight to throwing her off, unbuilt, and crashed; a state
+            // loaded on such a frame did it). Built first, it sees them next
+            // frame.
+            const bool building = m->type == kCat && MEM_HU(0xD0, slot_addr(m->slot)) == 0;
+            const uint32_t hit = static_cast<uint32_t>(MEM_W(0, addr(kRiderHit))) & kRiderHitBits;
+            if (building) MEM_W(0, addr(kRiderHit)) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0, addr(kRiderHit))) & ~kRiderHitBits);
             func_80016E70(rdram, ctx);
+            if (building) MEM_W(0, addr(kRiderHit)) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0, addr(kRiderHit))) | hit);
             ctx->r4 = a0;
             // The cat moves its rider on the screen (func_801A22AC) and
             // pushes her world position on by the loop's scroll (10 px a
@@ -537,10 +579,14 @@ void tick(uint8_t* rdram) {
         const Mount* want = wanted(rdram, *r);
         if (have > 0) {
             const Mount* m = mount_of_type(static_cast<uint16_t>(MEM_W(0, addr(r->type))));
-            const bool still = MEM_HU(0xD2, slot_addr(have)) == mm::custom_actors::type_id(r->custom);
-            if (!still) {   // a new scene cleared the slots under it
-                MEM_W(0, addr(r->mount)) = 0;
-                MEM_W(0, addr(r->type)) = 0;
+            // A new scene cleared the slots under it, or something took it
+            // away (its record off, +0x80 clear: player 1's cat went while
+            // she threw player 2, and she sat on nothing, carried on at the
+            // loop's speed). Not its slots: they may be another's now.
+            const bool still = MEM_W(0x80, slot_addr(have)) != 0 &&
+                               MEM_HU(0xD2, slot_addr(have)) == mm::custom_actors::type_id(r->custom);
+            if (!still) {
+                dismount(rdram, *r);
                 continue;
             }
             if (want != m) {   // its update takes it away; when it does not run (paused), here
@@ -552,7 +598,7 @@ void tick(uint8_t* rdram) {
             // fell in place for seconds, unable to jump. Asked to get on
             // again, as when her mount was made.
             const int c = character_slot(rdram, *r);
-            if (m != nullptr && (MEM_HU(0xD0, slot_addr(c)) & 0xFF) == kFallState && requested(rdram, *r) == 0) {
+            if (m != nullptr && m->request != 0 && (MEM_HU(0xD0, slot_addr(c)) & 0xFF) == kFallState && requested(rdram, *r) == 0) {
                 request(rdram, *r, m->request);
             }
             continue;

@@ -139,7 +139,7 @@ bool known(uint16_t type) {
 
 bool native(uint8_t* rdram, uint16_t type) {
     const Package* p = package_of(type);
-    return p != nullptr && is_loaded(rdram, *p);
+    return p == nullptr || is_loaded(rdram, *p);   // (a package this module does not keep: the stage's own)
 }
 
 bool swapped_in() {
@@ -156,7 +156,11 @@ uint32_t live(uint8_t* rdram, uint16_t type, uint32_t vaddr) {
 
 bool with_package(uint8_t* rdram, uint16_t type, const std::function<void(uint8_t*)>& body) {
     const Package* p = package_of(type);
-    if (p == nullptr || !rom_ready(*p)) return false;
+    if (p == nullptr) {   // not one this module keeps: the stage's own, in place
+        body(rdram);
+        return true;
+    }
+    if (!rom_ready(*p)) return false;
     if (is_loaded(rdram, *p)) {
         body(rdram);
         return true;

@@ -75,6 +75,28 @@ SCENARIOS = [
     ("p1-down", 1, 600, "60:,300:r,240:", "60:,300:l,240:", 1,
      dict(env={"MM_TEST_SETHP": "0:0@150"}, expect=["slot 0's character is down", "[player2] back next to the other player"])),
 ]
+# "Ride the cat" (player2_mount.cpp, foreign_actors.cpp) in stages without
+# a cat: both players get one and ride it around (random play), in 1-1's
+# desert (1), the other test stages and 3-12 itself (9, the stage's own).
+CAT = {"MM_TEST_CHEATS": "cat_ride=1"}
+for slot in (1, 2, 3, 4, 5, 6, 7, 8, 9):
+    SCENARIOS.append(("cat-%d" % slot, slot, 1800, fuzz(1100 + slot), fuzz(1150 + slot), 3,
+                      dict(env=CAT, expect=["[mount] player 1's own cat"] if slot != 9 else [])))
+SCENARIOS += [
+    # Turned off mid-ride: both riders drop off (no rider left in the ride
+    # state, no loop scroll carrying them) and walk on.
+    ("cat-off", 1, 900, "200:r,200:,300:l,200:", "900:", 0,
+     dict(env=dict(CAT, MM_TEST_TOGGLE="7@400"), expect=["[cheats] Ride the cat off"])),
+    # Lunar's missile spawned ahead (as the Spawn page puts it) flies back
+    # past player 1; her cat's jump lands on it and she steers it.
+    ("cat-missile", 1, 700, "128:,25:A,60:,80:r,80:l,350:", "700:", 0,
+     dict(env=dict(CAT, MM_TEST_SPAWN="F09@80@200@8"), expect=["[mount] player 1's cat lands on missile"])),
+    # 3-11's Cat Clancer spawned anywhere builds his parts in a free run
+    # (he wrote over player 2's slot).
+    ("clancer", 1, 900, fuzz(1201), fuzz(1202), 0,
+     dict(env={"MM_TEST_SPAWN": "2801@120@80@0"}, expect=["spawned 2801"], max_joins=1)),
+]
+
 # Slot 9: stage 3-12 (CERBERUS), where the owner saw trouble.
 for slot in (1, 2, 3, 4, 5, 6, 7, 8, 9):
     for seed in (1, 2):
@@ -88,8 +110,23 @@ for slot in (1, 2, 3, 4, 5, 6, 7, 8, 9):
 BOSSES = [(10, "1-6"), (11, "1-8"), (12, "2-6"), (13, "2-11"), (14, "3-8"), (15, "3-11"), (16, "4-2"),
           (17, "4-6"), (18, "4-9"), (19, "4-11"), (20, "5-3"), (21, "5-4"), (22, "5-6"), (23, "5-7"),
           (24, "5-8"), (25, "3-3")]
+# Leash rejoins are how player 2 is brought back when random play leaves
+# her behind: 5-6 is a free fall where player 1 holds on to the boss and a
+# player 2 who does not falls away (every few seconds); 5-3's arena drops
+# her out of view now and then.
+BOSS_REJOINS = {"5-3": 5, "5-6": 12}
 for slot, label in BOSSES:
-    SCENARIOS.append(("boss-%s" % label, slot, 1800, fuzz(700 + slot, grab_bias=True), fuzz(800 + slot, grab_bias=True), 3))
+    SCENARIOS.append(("boss-%s" % label, slot, 1800, fuzz(700 + slot, grab_bias=True), fuzz(800 + slot, grab_bias=True),
+                      BOSS_REJOINS.get(label, 3)))
+
+# Stages that play differently (rides, rafts, races, free falls; states made
+# like the bosses' with --make-boss-states, slots 32 on): random play, and a
+# run to the right by both players.
+STAGES = [(32, "2-7"), (33, "2-8"), (34, "2-9"), (35, "3-5"), (36, "3-6"), (37, "4-1"), (38, "4-8"),
+          (39, "1-9"), (41, "2-4"), (42, "4-7"), (43, "1-3"), (44, "3-1")]
+for slot, label in STAGES:
+    SCENARIOS.append(("stage-%s" % label, slot, 1800, fuzz(1300 + slot, grab_bias=True), fuzz(1400 + slot), 3))
+    SCENARIOS.append(("stage-%s-run" % label, slot, 1500, "1500:r", "60:,1440:r", 3))
 
 # Far apart (far_coop.cpp), run locally with MM_FAR=1: once as player 1's
 # machine sees it and once building player 2's picture each frame
@@ -220,8 +257,9 @@ def run_game(args, env, timeout):
 
 # States in which a player's position is the carry's to set: being carried
 # (0x16 grabbed, 0x2F; she snaps to the carrier's hands, and to the other side when the
-# carrier turns), reaching (0x11F), carrying / throwing (0x122, 0x126).
-CARRY_STATES = {0x16, 0x2F, 0x11F, 0x122, 0x126}
+# carrier turns), reaching (0x11F), carrying / throwing (0x122, 0x126, and
+# the throw's end 0xA14 / 0xB14: on a cat she is put back on her seat then).
+CARRY_STATES = {0x16, 0x2F, 0x11F, 0x122, 0x126, 0xA14, 0xB14}
 # Scripted moves: a star teleporter's flight (0x301).
 SCRIPTED_STATES = {0x301, 0x231,   # 0x231: back onto her cat (3-12) after a fall
                    0x401}          # hurt: a hazard (2-6's lava) puts her back on safe ground (the same spot each time)
@@ -277,6 +315,8 @@ def check_trace(text, allowed_rejoins, far=False):
                 prev = (prev[1], prev[0], (prev[2][1], prev[2][0]))
             if first:
                 first = (first[1], first[0])
+            # (At an exit the other character is brought to the new lead.)
+            joined_recently = 3
             continue
         # (Going down: the hidden character moves to the other at once,
         # player2_health.cpp; not a jump.)
@@ -371,6 +411,8 @@ def check_extra(extra, out, moved):
     for want in extra.get("expect", []):
         if want not in out:
             problems.append("no '%s'" % want)
+    if "max_joins" in extra and out.count("[player2] joined in slot") > extra["max_joins"]:
+        problems.append("player 2 joined %d times (allowed %d)" % (out.count("[player2] joined in slot"), extra["max_joins"]))
     for unwanted in extra.get("absent", []):
         if unwanted in out:
             problems.append("'%s' appeared" % unwanted)
@@ -568,7 +610,7 @@ def make_boss_states(args):
     B every two seconds through the introduction, save once the stage has
     been in plain play for four seconds (MM_TEST_SAVESTATE=save@ready)."""
     failed = 0
-    for slot, label in BOSSES:
+    for slot, label in BOSSES + STAGES:
         env = merged(os.environ, BASE_ENV, HOME=args.home, MM_TEST_WARP=label, MM_TEST_AUTO_ADVANCE="1",
                    MM_TEST_SAVESTATE_SLOT=str(slot), MM_TEST_SAVESTATE="save@ready", MM_REPLAY_SPEED="4",
                    MM_TEST_EXIT_AFTER_SAVE="1")
@@ -576,6 +618,11 @@ def make_boss_states(args):
         # state made in a normal-speed session crashed in the game's sound
         # DMA (Sound_DmaCallback) when a 4x-from-boot test loaded it.
         state = Path(args.home) / ".config" / "troublemakers-recomp" / "savestates" / ("slot%d.tmstate" % slot)
+        # Kept unless asked for by name (--only 5-3,2-7): the tests' states
+        # must stay the same from run to run.
+        if state.exists() and not (args.only and label in args.only.split(',')):
+            print("%-6s slot %d: kept" % (label, slot), flush=True)
+            continue
         before = state.stat().st_mtime if state.exists() else 0
         run_game(args, env, 150)
         # (The game exits at once after the save, before its log catches up:
@@ -608,8 +655,12 @@ def main():
         return make_boss_states(args)
     failed = 0
     port = args.port
+    states = Path(args.home) / ".config" / "troublemakers-recomp" / "savestates"
     for name, slot, frames, p1, p2, allowed, *extra in SCENARIOS:
         if args.only and not any(o in name for o in args.only.split(',')):
+            continue
+        if not (states / ("slot%d.tmstate" % slot)).exists():
+            print("%-18s skip (no save state %d in the test home: --make-boss-states)" % (name, slot), flush=True)
             continue
         problems, traced = run_local(args, name, slot, frames, p1, p2, allowed,
                                      extra_env=extra[0].get("env") if extra else None, extra=extra[0] if extra else None)

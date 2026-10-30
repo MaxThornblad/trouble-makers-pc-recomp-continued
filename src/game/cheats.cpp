@@ -112,7 +112,7 @@ gpr addr(uint32_t vaddr) {
 }
 
 void save() {
-    if (g_path.empty()) return;
+    if (g_path.empty() || std::getenv("MM_TEST_CHEATS") || std::getenv("MM_TEST_TOGGLE")) return;   // (tests share a home)
     std::lock_guard lock{g_file_mutex};
     std::ofstream f(g_path, std::ios::trunc);
     if (!f) {
@@ -589,69 +589,86 @@ void toggle(Cheat cheat) {
     save();
 }
 
+namespace {
+
+// One "key=value" line of cheats.cfg (or of MM_TEST_CHEATS).
+void apply_setting(std::string line) {
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();  // CRLF files
+    const size_t eq = line.find('=');
+    if (eq == std::string::npos) return;
+    const std::string key = line.substr(0, eq);
+    const bool on = line.substr(eq + 1) == "1";
+    if (key == "hold_dash") {
+        g_hold_dash.store(on);
+        return;
+    }
+    if (key == "split_screen") {
+        g_split.store(on);
+        return;
+    }
+    if (key == "coop") {
+        g_coop.store(on);
+        mm_audio_input::set_player2_input(on);
+        return;
+    }
+    if (key == "damage_numbers") {
+        g_damage_numbers.store(on);
+        return;
+    }
+    if (key == "enemy_bars") {
+        g_enemy_bars.store(on);
+        return;
+    }
+    if (key == "rumble") {
+        g_rumble_level.store(std::clamp(std::atoi(line.substr(eq + 1).c_str()), 0, 3));
+        return;
+    }
+    if (key == "gem_compass") {
+        g_gem_compass.store(on);
+        return;
+    }
+    if (key == "gem_hints") {
+        g_gem_hints.store(on);
+        return;
+    }
+    if (key == "rank_timer") {
+        g_rank_timer.store(on);
+        return;
+    }
+    if (key == "throw_objects" || key == "throw_players") {
+        const int value = std::atoi(line.substr(eq + 1).c_str());
+        for (int i = 0; i < kThrowStrengthCount; ++i) {
+            if (kThrowStrengths[i] == value) g_throw_strength[key == "throw_players" ? 1 : 0].store(i);
+        }
+        return;
+    }
+    if (key == "fast_forward_speed") {
+        const int value = std::atoi(line.substr(eq + 1).c_str());
+        for (int speed : kFastForwardSpeeds) {
+            if (speed == value) g_fast_forward_speed.store(value);
+        }
+        return;
+    }
+    for (int i = 0; i < kCheatCount; ++i) {
+        if (key == kCheats[i].key) g_enabled[i].store(on);
+    }
+}
+
+} // namespace
+
 void configure(const std::filesystem::path& folder) {
     g_path = folder / "cheats.cfg";
     std::ifstream f(g_path);
     std::string line;
-    while (std::getline(f, line)) {
-        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();  // CRLF files
-        const size_t eq = line.find('=');
-        if (eq == std::string::npos) continue;
-        const std::string key = line.substr(0, eq);
-        const bool on = line.substr(eq + 1) == "1";
-        if (key == "hold_dash") {
-            g_hold_dash.store(on);
-            continue;
-        }
-        if (key == "split_screen") {
-            g_split.store(on);
-            continue;
-        }
-        if (key == "coop") {
-            g_coop.store(on);
-            mm_audio_input::set_player2_input(on);
-            continue;
-        }
-        if (key == "damage_numbers") {
-            g_damage_numbers.store(on);
-            continue;
-        }
-        if (key == "enemy_bars") {
-            g_enemy_bars.store(on);
-            continue;
-        }
-        if (key == "rumble") {
-            g_rumble_level.store(std::clamp(std::atoi(line.substr(eq + 1).c_str()), 0, 3));
-            continue;
-        }
-        if (key == "gem_compass") {
-            g_gem_compass.store(on);
-            continue;
-        }
-        if (key == "gem_hints") {
-            g_gem_hints.store(on);
-            continue;
-        }
-        if (key == "rank_timer") {
-            g_rank_timer.store(on);
-            continue;
-        }
-        if (key == "throw_objects" || key == "throw_players") {
-            const int value = std::atoi(line.substr(eq + 1).c_str());
-            for (int i = 0; i < kThrowStrengthCount; ++i) {
-                if (kThrowStrengths[i] == value) g_throw_strength[key == "throw_players" ? 1 : 0].store(i);
-            }
-            continue;
-        }
-        if (key == "fast_forward_speed") {
-            const int value = std::atoi(line.substr(eq + 1).c_str());
-            for (int speed : kFastForwardSpeeds) {
-                if (speed == value) g_fast_forward_speed.store(value);
-            }
-            continue;
-        }
-        for (int i = 0; i < kCheatCount; ++i) {
-            if (key == kCheats[i].key) g_enabled[i].store(on);
+    while (std::getline(f, line)) apply_setting(line);
+    // Tests (bot runs share one home): settings on top of the file,
+    // "cat_ride=1,coop=0", never written back (nor are test toggles).
+    if (const char* test = std::getenv("MM_TEST_CHEATS")) {
+        std::string all = test;
+        for (size_t at = 0; at <= all.size();) {
+            const size_t comma = std::min(all.find(',', at), all.size());
+            apply_setting(all.substr(at, comma - at));
+            at = comma + 1;
         }
     }
     for (int i = 0; i < kCheatCount; ++i) {
