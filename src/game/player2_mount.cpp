@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -248,19 +249,27 @@ void dismount(uint8_t* rdram, const Rider& r) {
 }
 
 // The copy's slots that are still the mount's: its controller (the rider's
-// custom type), and parts of its stage's bank (the stage's own objects may
-// have taken some of the run since, as 3-6's do every few seconds: those
-// stay).
-bool mounts_record(uint8_t* rdram, const Rider& r, const Mount& m, int first, int s) {
-    const uint16_t type = MEM_HU(0xD2, slot_addr(s));
+// custom type), and its part sprites: type 0x0021 (the cat's 13 and the
+// bee's 23 alike) and near the controller (they sit within ~20 px of it).
+// The stage's own objects may have taken some of the run since, as 3-6's
+// do every few seconds, and 3-6's many-part creature has 0x0021 parts too:
+// those stay.
+constexpr uint16_t kPartType = 0x0021;
+constexpr int kPartReach = 96;   // px from the controller
+// (cx, cy: the controller's position, taken before any slot is cleared.)
+bool mounts_record(uint8_t* rdram, const Rider& r, int first, int s, int cx, int cy) {
+    const gpr a = slot_addr(s);
+    const uint16_t type = MEM_HU(0xD2, a);
     if (s == first) return type == mm::custom_actors::type_id(r.custom);
-    return MEM_W(0x80, slot_addr(s)) != 0 && (type >> 8) == (m.type >> 8);
+    if (MEM_W(0x80, a) == 0 || type != kPartType) return false;
+    return std::abs(MEM_H(0x88, a) - cx) <= kPartReach && std::abs(MEM_H(0x8C, a) - cy) <= kPartReach;
 }
 
 void remove(uint8_t* rdram, const Rider& r, const Mount& m, int first) {
     let_go(rdram, r);   // (else her missile went on writing player 1's message)
+    const int cx = MEM_H(0x88, slot_addr(first)), cy = MEM_H(0x8C, slot_addr(first));
     for (int i = first; i < first + m.span; ++i) {
-        if (!mounts_record(rdram, r, m, first, i)) continue;
+        if (!mounts_record(rdram, r, first, i, cx, cy)) continue;
         for (uint32_t off = 0x80; off < kStride; off += 4) MEM_W(off, slot_addr(i)) = 0;
     }
     dismount(rdram, r);
