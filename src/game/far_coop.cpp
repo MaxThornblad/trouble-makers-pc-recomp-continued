@@ -15,6 +15,7 @@
 #include "cheats.h"
 #include "netplay.h"
 #include "player2.h"
+#include "savestate.h"
 #ifdef MM_HAS_GRAPHICS
 #include "mm_graphics.h"
 #endif
@@ -23,6 +24,7 @@ extern "C" void YellowGem_GetFlag(uint8_t* rdram, recomp_context* ctx);     // a
 extern "C" void func_80012830(uint8_t* rdram, recomp_context* ctx);          // the camera
 extern "C" void func_8001DE30(uint8_t* rdram, recomp_context* ctx);          // map actor prefetch
 extern "C" void Graphics_Begin_Frame(uint8_t* rdram, recomp_context* ctx);   // a whole frame (a0: buffer)
+extern "C" void func_80022470(uint8_t* rdram, recomp_context* ctx);          // the HUD health bar's frame
 
 namespace mm::faraway {
 namespace {
@@ -108,6 +110,11 @@ void trace_exit(uint8_t* rdram, const char* where, int slot) {
 
 bool g_shadow = false;
 bool g_probing = false;           // a lead probe runs (player2_lead.cpp): also thrown away
+// Player 2's HUD bar in her picture: its shown health (see swap in the
+// shadow frame), anew for a new player 2 or a loaded state.
+struct P2Bar { int slot = -1; uint32_t generation = 0; int16_t shown = 0; };
+P2Bar g_p2_bar;
+constexpr uint32_t kShownHealth = 0x800BE63Cu;   // s16: the HUD bar's shown health (func_80022470)
 bool g_swapped = false;
 bool g_secondary = false;
 bool g_frame_on = false;          // far rules on this frame (set before the camera)
@@ -798,8 +805,21 @@ extern "C" void mm_far_shadow(uint8_t* rdram, recomp_context* ctx, uint32_t task
     g_swapped = true;
     swap_roles(rdram);
     // The HUD's health bar is slot 0's: in this picture, player 2's slot's.
+    // Its shown health (0x800BE63C) follows the real one 5 a frame, the
+    // part between drawn see-through (func_80022470, in the gameplay frame
+    // for slot 0 only): here it was player 1's, so a refill of player 2's
+    // stayed see-through. Hers is kept here (the picture's own, not game
+    // state) and stepped by the bar's own frame.
     if (const int p2 = mm::player2::slot(rdram); p2 > 0) {
-        MEM_H(0xE0, addr(0x800EF510u)) = std::max<int16_t>(0, MEM_H(0xE0, addr(0x800EF510u + static_cast<uint32_t>(p2) * 0x198u)));
+        const int16_t hp = std::max<int16_t>(0, MEM_H(0xE0, addr(0x800EF510u + static_cast<uint32_t>(p2) * 0x198u)));
+        MEM_H(0xE0, addr(0x800EF510u)) = hp;
+        if (g_p2_bar.slot != p2 || g_p2_bar.generation != mm::savestate::load_generation()) {
+            g_p2_bar = {p2, mm::savestate::load_generation(), hp};
+        }
+        MEM_H(0, addr(kShownHealth)) = g_p2_bar.shown;
+        recomp_context bar = *ctx;
+        func_80022470(rdram, &bar);
+        g_p2_bar.shown = MEM_H(0, addr(kShownHealth));
     }
     ctx->r4 = j;
     Graphics_Begin_Frame(rdram, ctx);

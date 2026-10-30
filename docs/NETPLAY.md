@@ -752,6 +752,13 @@ the 100% speed: strength changes how far she flies, not how long she lies.
   (0x638..0x647), so states, rollback and the second machine carry it.
 - **Each view's HUD.** The shadow frame (player 2's picture, and the second
   half in split screen) shows player 2's slot's health in the HUD bar.
+  The bar also has a shown health (s16 0x800BE63C) that follows the real
+  one 5 a frame, the part between drawn see-through, and builds the bar's
+  column colours at 0x802209E0 (func_80022470, in the gameplay frame, slot
+  0 only). Player 2's picture used player 1's: a refill (or a hit) of hers
+  stayed see-through. Her shown health is now kept by far_coop (picture
+  state, not game state; anew for a new player 2 or a loaded state) and
+  func_80022470 runs for her in her picture (2026-10-30).
 
 ## Reconnecting, Steam invites, controllers (2026-10-29)
 
