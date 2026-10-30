@@ -234,8 +234,10 @@ void apply_hold_dash(uint8_t* rdram) {
 // Moon jump re-arms the full-speed rise up to three more times while jump is
 // held and gives back two thirds of the fall gravity so she floats down
 // (measured: a full jump peaks at +174 px instead of +70, hang time 2 s).
-constexpr uint16_t kRiseState = 0x0116u;
-constexpr uint16_t kFallState = 0x0216u;
+// Carrying something the same jump is 0x011A / 0x021A (it only took the
+// plain jump's, so it did nothing while she carried).
+constexpr uint16_t kRiseState = 0x0116u, kCarryRiseState = 0x011Au;
+constexpr uint16_t kFallState = 0x0216u, kCarryFallState = 0x021Au;
 constexpr uint16_t kJumpButton = 0x8000u;      // N64 A
 constexpr uint32_t kRiseRearmAt = 10;          // last full-speed rise tick
 constexpr uint32_t kRiseDuration = 19;
@@ -252,8 +254,9 @@ void apply_moon_jump(uint8_t* rdram, int player) {
     const gpr marina = addr(kMarina);
     const gpr rises = addr(kRisesLeft[player]);
     const uint16_t state = MEM_HU(0xD0, marina);
-    if (state != kRiseState) MEM_W(0, rises) = kExtraRises;
-    if (state == kRiseState) {
+    const bool rising = state == kRiseState || state == kCarryRiseState;
+    if (!rising) MEM_W(0, rises) = kExtraRises;
+    if (rising) {
         const bool held = (MEM_HU(0, addr(kMarinaHold)) & kJumpButton) != 0;
         if (held && MEM_W(0, rises) > 0 &&
             static_cast<uint32_t>(MEM_W(kJetTimer, marina)) == kRiseRearmAt) {
@@ -261,7 +264,7 @@ void apply_moon_jump(uint8_t* rdram, int player) {
             MEM_W(0, rises) = MEM_W(0, rises) - 1;
         }
     }
-    else if (state == kFallState) {
+    else if (state == kFallState || state == kCarryFallState) {
         MEM_W(kVelocityY, marina) = MEM_W(kVelocityY, marina) + kMoonGravityRefund;
     }
 }
