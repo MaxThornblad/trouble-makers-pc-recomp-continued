@@ -648,6 +648,14 @@ void update(uint8_t* rdram, recomp_context* ctx, int slot) {
     });
 }
 
+// A camera-relative y on the rider's own screen (far apart player 2 has a
+// camera of her own).
+int view_y(uint8_t* rdram, const Rider& r, int y) {
+    int32_t dx = 0, dy = 0;
+    if (r.p2 && mm::faraway::active(rdram) && mm::faraway::p2_camera_offset(rdram, dx, dy)) return y - (dy >> 16);
+    return y;
+}
+
 bool riding(uint8_t* rdram) {
     return stage_mount(rdram) != nullptr || MEM_W(0, addr(kP1.mount)) > 0;
 }
@@ -678,7 +686,10 @@ void tick(uint8_t* rdram) {
             // cat fell on for ever with its rider): it goes, and she falls
             // as herself, to whatever the stage does with a fall. A new one
             // when she is back on the screen.
-            if (m != nullptr && MEM_H(0x8C, slot_addr(have)) < kPitY) {
+            // (Only a cat away from 3-12, on its own floor; on her own
+            // screen: far apart player 2's is not the main camera's.)
+            const bool own_floor = m != nullptr && m->type == kCat && !mm::foreign_actors::native(rdram, kCat);
+            if (own_floor && view_y(rdram, *r, MEM_H(0x8C, slot_addr(have))) < kPitY) {
                 remove(rdram, *r, have, m->span);
                 continue;
             }
@@ -696,9 +707,11 @@ void tick(uint8_t* rdram) {
         // a new one was made under her each frame.)
         if (want != nullptr) {
             const gpr c = slot_addr(character_slot(rdram, *r));
-            const bool over_ground = want->type != kCat || mm::foreign_actors::native(rdram, kCat) ||
-                                     ground_under(rdram, MEM_H(0x88, c), MEM_H(0x8C, c), *want) != kNoGround;
-            if (MEM_H(0x8C, c) >= kPitY && over_ground) spawn(rdram, *r, *want);
+            const bool own_floor = want->type == kCat && !mm::foreign_actors::native(rdram, kCat);
+            if (!own_floor ||
+                (view_y(rdram, *r, MEM_H(0x8C, c)) >= kPitY && ground_under(rdram, MEM_H(0x88, c), MEM_H(0x8C, c), *want) != kNoGround)) {
+                spawn(rdram, *r, *want);
+            }
         }
     }
 }
