@@ -77,6 +77,9 @@ constexpr uint16_t kMountButton = 0x2000;
 constexpr uint32_t kMarinaPress = 0x800BE4FCu;      // u16: the buttons slot 0's character presses this frame
 constexpr int kBoardReach = 96;                     // px from the cat to the missile
 constexpr int kBoardFrames = 12;                    // frames the missile is kept from blowing up meanwhile
+constexpr int kSlots = 0xD0;                         // actor slots
+constexpr uint16_t kParticle = 0x0009;               // effect sprites (SpawnParticle_Image_90C0_16)
+constexpr uint16_t kDustImage = 0x01D8;              // the cat's dust cloud (+0x84)
 constexpr int kCallAbove = 24;                      // px over the cat a called missile appears (made at its feet, the cat landed on the ground instead and the missile flew off alone, or blew up on the ground)
 constexpr int kBoardAbove = 8;                      // px: the cat this far above the missile (its test: -4..+19)
 constexpr uint32_t kRiderStruck = 0x2E;             // a rider's +0x98: what a missile touching her sets
@@ -931,7 +934,25 @@ void update(uint8_t* rdram, recomp_context* ctx, int slot) {
             const bool shield = building || boarding;
             const uint32_t hit = static_cast<uint32_t>(MEM_W(0, addr(kRiderHit))) & kRiderHitBits;
             if (shield) MEM_W(0, addr(kRiderHit)) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0, addr(kRiderHit))) & ~kRiderHitBits);
+            // Every 10 frames the cat puffs a dust cloud (picture 0x1D8) at
+            // its feet that drifts forward (func_801A23C4): on 3-12's loop
+            // the scroll sweeps it out behind the cat. Anywhere else it
+            // drifted on ahead of her, a row of "flames" in front of the
+            // ride (the owner's report). Clouds this update makes are taken
+            // away again off the loop.
+            bool was_free[kSlots] = {};
+            if (on_loop) {
+                for (int s = 1; s < kSlots; ++s) was_free[s] = MEM_W(0x80, slot_addr(s)) == 0;
+            }
             func_80016E70(rdram, ctx);
+            if (on_loop) {
+                for (int s = 1; s < kSlots; ++s) {
+                    const gpr d = slot_addr(s);
+                    if (was_free[s] && MEM_W(0x80, d) != 0 && MEM_HU(0xD2, d) == kParticle && MEM_HU(0x84, d) == kDustImage) {
+                        for (uint32_t off = 0x80; off < kStride; off += 4) MEM_W(off, d) = 0;
+                    }
+                }
+            }
             if (shield) MEM_W(0, addr(kRiderHit)) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0, addr(kRiderHit))) | hit);
             ctx->r4 = a0;
             // The cat moves its rider on the screen (func_801A22AC) and
