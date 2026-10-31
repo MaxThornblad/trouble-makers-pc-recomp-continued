@@ -139,6 +139,19 @@ SCENARIOS += [
      dict(expect=["[pet] Cat Clancer jumps at a wall", "[pet] Cat Clancer caught up"])),
     ("block-fire", 64, 200, "10:,20:r,60:,6:B,104:", "200:", 0,
      dict(expect=["[blocks] block 121 knocked out of a hit"])),
+    # Z in the owner's states (test-home slots 60: inside 1-1's block house,
+    # 61: next to the pet): the missile is called and boarded, rides into
+    # the roof and the floor without passing through or blowing up.
+    ("cat-missile-house-up", 60, 450, "30:,4:Z,20:,396:u", "450:", 0,
+     dict(env=CAT, expect=["player 1's cat lands on missile"], absent=["ridden missile"])),
+    ("cat-missile-house-down", 60, 450, "30:,4:Z,20:,396:d", "450:", 0,
+     dict(env=CAT, expect=["player 1's cat lands on missile"], absent=["ridden missile"])),
+    ("cat-missile-61", 61, 300, "40:,4:Z,256:", "300:", 0,
+     dict(env=CAT, expect=["player 1's cat lands on missile"], absent=["ridden missile"])),
+    # On the cat next to 1-1's star teleporter (owner's state, slot 65): B
+    # gets her off the cat, she grabs the star and a shake flies her.
+    ("cat-star", 65, 400, "30:,6:B,10:," + ",".join(["5:u", "5:d"] * 20) + ",154:", "400:", 0,
+     dict(env=CAT, expect=["player 1 gets off the cat for a star"])),
     # Z on the cat with no missile about: it calls one of its own.
     ("cat-missile-call", 1, 420, "60:,4:Z,80:,60:r,40:,4:Z,172:", "420:", 0,
      dict(env=CAT, expect=["player 1's cat calls missile", "player 1's cat boards missile", "player 1's cat lands on missile", "player 1's cat gets off missile"])),

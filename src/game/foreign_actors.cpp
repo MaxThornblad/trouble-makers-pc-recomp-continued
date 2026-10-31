@@ -1,12 +1,16 @@
 #include "foreign_actors.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <vector>
 
 #include "librecomp/game.hpp"
 #include "librecomp/overlays.hpp"
 
+#include "custom_actors.h"
+#include "far_coop.h"
 #include "pet_clancer.h"
 
 extern "C" void func_80016E70(uint8_t* rdram, recomp_context* ctx);   // banked actor update, $a0 = slot
@@ -47,6 +51,7 @@ constexpr uint16_t kCat = 0x0F01;
 constexpr uint16_t kLunarMissile = 0x0F09;
 constexpr uint16_t kCatClancer = 0x2801;
 constexpr uint16_t kMissileRidden = 4;
+constexpr int kMissileFloor = -47;   // its update blows it up below -48 (func_801A1178, after each state)
 constexpr int kGoneX = 640;   // px from the screen's middle
 constexpr uint16_t kMissileImage = 0x025C, kMissileDraw = 0x0101;
 
@@ -261,19 +266,55 @@ bool dispatch(uint8_t* rdram, recomp_context* ctx, int slot) {
     MEM_W(0xEC, a) += p->scroll;
     // Lunar's missile waits on its launcher (slot 53 in 3-12, func_801A1178
     // state 0) until its timer runs out: elsewhere slot 53 is anything, and
-    // the missile sat wherever that was. It waits where it was spawned.
+    // the missile sat wherever that was (it waits where it was spawned:
+    // put back after the update). Worse, the update that launches it puts
+    // it on the launcher first and runs its checks there, one of which
+    // blows up a missile below the screen (y < -48): in a stage whose slot
+    // 53 was low every missile exploded on its first frame (the owner's
+    // "Z, and it just explodes"). The launcher's words it reads (slot 53's
+    // +0xB8 / +0xBC, x + 0x24 and y - its own +0x150, and the word at
+    // 0x800F4BB0, its depth + 2) are set to where it is for that update and
+    // put back after, so it waits and launches where it was made.
     const bool waiting = type == kLunarMissile && MEM_HU(0xD0, a) == 0;
+    constexpr uint32_t kLauncherX = 0x800F4A10u, kLauncherY = 0x800F4A14u, kLauncherZ = 0x800F4BB0u;
+    const int16_t launcher_x = MEM_H(0, addr(kLauncherX)), launcher_y = MEM_H(0, addr(kLauncherY));
+    const int32_t launcher_z = MEM_W(0, addr(kLauncherZ));
+    if (waiting) {
+        MEM_H(0, addr(kLauncherX)) = static_cast<int16_t>(MEM_H(0x88, a) + 0x24);
+        MEM_H(0, addr(kLauncherY)) = static_cast<int16_t>(MEM_H(0x8C, a) - MEM_W(0x150, a));
+        MEM_W(0, addr(kLauncherZ)) = MEM_W(0x90, a) + 0x20000;
+    }
     const bool clancer_built = type == kCatClancer && clancer_skip_intro(rdram, a);
     // Built, he is a pet here: his states are picked for him (pet_clancer.cpp).
     const bool pet = type == kCatClancer && !clancer_built;
     if (pet) mm::pet_clancer::before(rdram, slot);
     const int32_t x = MEM_W(0x88, a), y = MEM_W(0x8C, a);
+    const bool was_ridden = type == kLunarMissile && MEM_HU(0xD0, a) == kMissileRidden;
+    // Ridden, the missile's own code blows it up below y -48 on the screen:
+    // 3-12's screen bottom for a missile, under its scrolling camera. In
+    // another stage the camera sits the rider elsewhere on the screen (a
+    // house floor, lower ground further along is under that line), and the
+    // ride blew up there for nothing (the owner's "explodes when it goes
+    // far right or left"). For that check its update sees it raised by what
+    // it is under the line, put back after.
+    const int lift = was_ridden && MEM_H(0x8C, a) < kMissileFloor ? kMissileFloor - MEM_H(0x8C, a) : 0;
+    if (lift != 0) MEM_W(0x8C, a) += lift << 16;
     const gpr a0 = ctx->r4;
     ctx->r4 = static_cast<gpr>(slot);
     Quiet quiet(rdram, type);
     func_80016E70(rdram, ctx);
     quiet.end();
     ctx->r4 = a0;
+    if (lift != 0 && MEM_HU(0xD2, a) == type) MEM_W(0x8C, a) -= lift << 16;
+    if (waiting) {
+        MEM_H(0, addr(kLauncherX)) = launcher_x;
+        MEM_H(0, addr(kLauncherY)) = launcher_y;
+        MEM_W(0, addr(kLauncherZ)) = launcher_z;
+    }
+    if (was_ridden && !mm::faraway::in_shadow() && (MEM_W(0x80, a) == 0 || MEM_HU(0xD0, a) != kMissileRidden)) {
+        std::fprintf(stderr, "[foreign] ridden missile %d ends: %s at %d,%d (hit bits %08X)\n", slot,
+                     MEM_W(0x80, a) == 0 ? "gone" : "no longer ridden", MEM_H(0x88, a), MEM_H(0x8C, a), static_cast<uint32_t>(MEM_W(0x98, a)));
+    }
     if (MEM_HU(0xD2, a) == type) {
         if (pet) mm::pet_clancer::after(rdram, slot);
         MEM_W(0xEC, a) -= p->scroll;

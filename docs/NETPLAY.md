@@ -671,6 +671,39 @@ too, and to spawn 3-11's Cat Clancer anywhere.
   the skipped intro.
 - Boarding a missile: the rider's health is put back in missile_end, the
   same frame the missile hit her (it showed a dip for one frame before).
+- Missile rides, owner's tests (2026-10-31, func_801A1178 read further):
+  * Every state ends in shared checks: +0x114 below 0 (its life, 240
+    frames flying, refreshed to 60 each frame ridden) clears it; then it
+    explodes if hit (+0x98 bit 1), if its health is gone, or if its screen
+    y is below -48 (3-12's screen bottom).
+  * State 0, on its launcher, puts it on slot 53's +0xB8 / +0xBC (x + 0x24,
+    y - its own +0x150) and launches it there when its timer runs out, and
+    the shared checks run at that place: in a stage whose slot 53 was low,
+    every called or spawned missile exploded on its first frame (the
+    owner's state at the pet: always). foreign_actors::dispatch sets those
+    launcher words (and 0x800F4BB0, the depth) to where the missile is for
+    that one update and puts them back.
+  * Ridden, the y < -48 check blew up rides low on the screen (a house
+    floor, lower ground further along). The ridden missile's update sees
+    itself raised to -47 and is put back after.
+  * The rider hit in the boarding frames (player 2 landing next to her at a
+    session's start, an enemy) made the cat throw her off as it landed, and
+    the missile flew on with no one: the rider-hit bits are kept from the
+    cat's update while boarding (as while it is built).
+  * Ridden, the cat moves by its own speed and the missile is put under it;
+    neither knows terrain (3-12's sky): the ride went through roofs and
+    floors. The cat's speed into terrain, where the missile would be, is
+    cancelled each way (CatOnLoop::leave), so it slides along walls and
+    ceilings; and the ceiling check for jumps no longer runs on a missile
+    (it pushed the ride down into the floor line, and it blew up).
+  * "[foreign] ridden missile N ends: ..." logs a ride's end (the bot
+    scenarios check for it).
+- 1-1's star teleporter (type 0x32: grab, shake, it flies you, Marina's
+  state 0x301) did nothing on the cheat cat: the riding state has no grab.
+  B with a star within 32 px gets her off the cat, her update that frame
+  grabs it, and no cat comes back while she holds a star or it flies her
+  (and for 20 frames after getting off: the riders' afoot words, player 2
+  block 0x6C0 / 0x6C4). Bot scenario cat-star (owner's state, slot 65).
 - Netplay snapshots carry the cartridge save (savestate.cpp, in memory
   only; runtime patch 0019 adds recomp::set_save_data): a rollback puts
   back the save of the frame it returns to. Save-state files do not carry

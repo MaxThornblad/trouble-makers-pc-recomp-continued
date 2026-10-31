@@ -90,7 +90,7 @@ constexpr size_t globals_size() {
 // 0x500 the second camera (far_coop.cpp), 0x600 the lead swap
 // (player2_lead.cpp), 0x610 moon jump rises left per player (cheats.cpp),
 // 0x620 throw charge and 0x628 pending throw strength per character
-// and 0x630 aim per character (throw_cheats.cpp), 0x63C what she shook, 0x638 and 0x640..0x647 and 0x650..0x66F health (player2_health.cpp), 0x648 thrown strength per character (throw_cheats.cpp), 0x670 her cat's globals and 0x678 the missile it rides, 0x680..0x6BF the riders' mount words: player 1's mount slot / type, the cats' lifts, facings, slot range, paces and missile boarding (missile, frames left, health) (player2_mount.cpp),
+// and 0x630 aim per character (throw_cheats.cpp), 0x63C what she shook, 0x638 and 0x640..0x647 and 0x650..0x66F health (player2_health.cpp), 0x648 thrown strength per character (throw_cheats.cpp), 0x670 her cat's globals and 0x678 the missile it rides, 0x680..0x6C7 the riders' mount words: player 1's mount slot / type, the cats' lifts, facings, slot range, paces, missile boarding (missile, frames left, health) and frames afoot for a star (player2_mount.cpp),
 // 0x418 player 2's mount (player2_mount.cpp),
 // 0x1000 display lists, 0x2000 textures, 0x4000 packed frame.
 constexpr uint32_t kP2Globals = 0x807F0000u;

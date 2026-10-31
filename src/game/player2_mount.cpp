@@ -117,11 +117,12 @@ struct Rider {
     uint32_t boarding;     // s32: the missile the mount button put the cat onto (slot), 0 = none
     uint32_t boarding_left;// s32: frames that boarding still waits for the missile's landing
     uint32_t boarding_health; // s32: the rider's health when she pressed (the missile does not hurt her getting on)
+    uint32_t afoot;        // s32: frames she stays off the cat (got off it for a star)
 };
 constexpr Rider kP1{false, kPlayer1CustomIndex, 0x807F0680u, 0x807F0684u, 0, 0, 0x807F0688u, 0x807F0690u, 0x807F0698u,
-                    0x807F06A0u, 0x807F06A8u, 0x807F06B0u, 0x807F06B8u};
+                    0x807F06A0u, 0x807F06A8u, 0x807F06B0u, 0x807F06B8u, 0x807F06C0u};
 constexpr Rider kP2{true, kCustomIndex, 0x807F0418u, 0x807F041Cu, 0x807F0670u, 0x807F0678u, 0x807F068Cu, 0x807F0694u, 0x807F069Cu,
-                    0x807F06A4u, 0x807F06ACu, 0x807F06B4u, 0x807F06BCu};
+                    0x807F06A4u, 0x807F06ACu, 0x807F06B4u, 0x807F06BCu, 0x807F06C4u};
 
 // Outside 3-12 the cat is on ground it does not know: its code keeps it on
 // the loop's flat floor, at a fixed height on the screen (the controller
@@ -195,8 +196,46 @@ bool cheat_on() {
 }
 
 // The mount a rider should have now (nullptr: none).
+int character_slot(uint8_t* rdram, const Rider& r);
+const char* rider_name(const Rider& r);
+
+// 1-1's star teleporter (type 0x32: grab it and shake, and it flies
+// whoever holds it to its partner, Marina's state 0x301). The cat's rider
+// cannot grab (the riding state has no grab), so on the cheat cat the star
+// did nothing. B with a star in reach gets her off; no cat comes back under
+// her while she holds a star or it flies her.
+constexpr uint16_t kStar = 0x0032;
+constexpr uint16_t kStarFlightState = 0x0301;
+constexpr uint32_t kHolding = 0x02000000u;   // +0x80: carrying (the slot at +0xD6)
+constexpr uint16_t kGrabButton = 0x4000;     // B
+constexpr int kStarReach = 32;               // px from the rider's middle
+constexpr int kAfootFrames = 20;             // frames without a cat after that, for the grab to take
+
+bool star_in_reach(uint8_t* rdram, const Rider& r) {
+    const gpr c = slot_addr(character_slot(rdram, r));
+    const int x = MEM_H(0x88, c), y = MEM_H(0x8C, c);
+    for (int s = 1; s < 0x90; ++s) {
+        const gpr o = slot_addr(s);
+        if (MEM_W(0x80, o) == 0 || MEM_HU(0xD2, o) != kStar) continue;
+        const int dx = MEM_H(0x88, o) - x, dy = MEM_H(0x8C, o) - y;
+        if (dx >= -kStarReach && dx <= kStarReach && dy >= -kStarReach - 16 && dy <= kStarReach) return true;
+    }
+    return false;
+}
+
+bool with_star(uint8_t* rdram, const Rider& r) {
+    const gpr c = slot_addr(character_slot(rdram, r));
+    if (MEM_HU(0xD0, c) == kStarFlightState) return true;
+    if ((static_cast<uint32_t>(MEM_W(0x80, c)) & kHolding) == 0) return false;
+    const int held = MEM_HU(0xD6, c);
+    return held > 0 && held < 0xD0 && MEM_HU(0xD2, slot_addr(held)) == kStar;
+}
+
 const Mount* wanted(uint8_t* rdram, const Rider& r) {
     if (!gameplay(rdram)) return nullptr;
+    if (!r.p2 || mm::player2::slot(rdram) > 0) {
+        if (with_star(rdram, r) || MEM_W(0, addr(r.afoot)) > 0) return nullptr;   // (the star flies her: no cat)
+    }
     const Mount* stage = stage_mount(rdram);
     if (r.p2) {
         if (mm::player2::slot(rdram) <= 0 || !mm::cheats::coop_enabled() || mm::player2::health::is_down(rdram)) return nullptr;
@@ -712,12 +751,19 @@ void missile_begin(uint8_t* rdram, int actor) {
 struct CatOnLoop {
     bool shared;   // one screen for both (shared_screen)
     int32_t lift = 0, across = 0, pace = 0;
+    // On a missile: where the missile was before the cat's update (the cat's
+    // code steers it and puts it under itself), to take back a move into
+    // terrain (3-12's sky has none: the ride went through roofs and walls).
+    int missile = 0;
 
     void enter(uint8_t* rdram, const Rider& r, const Mount& m) {
         if (MEM_W(0, addr(r.facing)) != 0) mirror_cat(rdram, m);   // (as its code left it)
         const gpr cat = slot_addr(m.slot);
         const uint16_t state = MEM_HU(0xD0, cat);
         const bool on_missile = state == kCatLanding || state == kCatRiding;   // (the missile carries it, in the same terms)
+        if (on_missile) {
+            missile = nearest_missile(rdram, MEM_H(0x88, cat), MEM_H(0x8C, cat), kMissileRidden);
+        }
         if (!on_missile) {
             const int32_t prev = MEM_W(0, addr(r.lift));
             const int ground = ground_under(rdram, MEM_H(0x88, cat), MEM_H(0x8C, cat) - kCatFeet, m);
@@ -760,7 +806,37 @@ struct CatOnLoop {
         // A ceiling: nothing is ever over 3-12's loop, so the cat's jump
         // knows none, and it rose through a block house's roof with its
         // rider. Rising into one, they stop just under it and come down.
-        if (MEM_W(0xF0, cat) > 0) {
+        // (Not on a missile: the missile carries it, and pushed down each
+        // frame under a low ceiling it fell below the missile's limit and
+        // blew up.)
+        const uint16_t cstate = MEM_HU(0xD0, cat);
+        // On a missile: its move into terrain is taken back, each way on its
+        // own (it slides along a wall or a ceiling), and the cat and rider
+        // with it. (Its box, the landing test's: 12 px each side, 6 up and
+        // down; the rider over it may still put her head in a low roof.)
+        if (missile > 0 && (cstate == kCatLanding || cstate == kCatRiding) && MEM_HU(0xD2, slot_addr(missile)) == kMissile) {
+            const gpr mis = slot_addr(missile);
+            auto blocked = [rdram](int32_t mx, int32_t my) {
+                const int cx = mx >> 16, cy = my >> 16;
+                for (int px : {cx - 12, cx, cx + 12})
+                    for (int py : {cy - 6, cy + 6})
+                        if (terrain_solid(rdram, px, py)) return true;
+                return false;
+            };
+            // The cat moves by its own speed (+0xEC / +0xF0, put on it after
+            // the updates) and the missile is put under it: the cat's speed
+            // into terrain, where the missile would be, is cancelled, each
+            // way on its own (it slides along a wall or a ceiling).
+            const int32_t mx = MEM_W(0x88, mis), my = MEM_W(0x8C, mis);
+            const int32_t vx = MEM_W(0xEC, cat), vy = MEM_W(0xF0, cat);
+            if (!blocked(mx, my)) {
+                if (vx != 0 && blocked(mx + vx, my)) MEM_W(0xEC, cat) = 0;
+                if (vy != 0 && blocked(mx, my + vy)) MEM_W(0xF0, cat) = 0;
+            } else if (vy > 0) {
+                MEM_W(0xF0, cat) = 0;   // (in already: no further up)
+            }
+        }
+        if (MEM_W(0xF0, cat) > 0 && cstate != kCatLanding && cstate != kCatRiding) {
             const int wx = MEM_H(0x88, cat), wfeet = MEM_H(0x8C, cat) - kCatFeet;
             int lowest = 0x7FFFFFFF;
             for (int px : {wx - 8, wx, wx + 8}) {
@@ -846,11 +922,17 @@ void update(uint8_t* rdram, recomp_context* ctx, int slot) {
             // straight to throwing her off, unbuilt, and crashed; a state
             // loaded on such a frame did it). Built first, it sees them next
             // frame.
+            // Nor while it boards a missile (the mount button): the rider hit
+            // by anything in those frames (player 2 landing next to her, the
+            // missile itself, an enemy) and the cat threw her off as it
+            // landed, the missile flying on with no one on it.
             const bool building = m->type == kCat && MEM_HU(0xD0, slot_addr(m->slot)) == 0;
+            const bool boarding = m->type == kCat && MEM_W(0, addr(r->boarding_left)) > 0;
+            const bool shield = building || boarding;
             const uint32_t hit = static_cast<uint32_t>(MEM_W(0, addr(kRiderHit))) & kRiderHitBits;
-            if (building) MEM_W(0, addr(kRiderHit)) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0, addr(kRiderHit))) & ~kRiderHitBits);
+            if (shield) MEM_W(0, addr(kRiderHit)) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0, addr(kRiderHit))) & ~kRiderHitBits);
             func_80016E70(rdram, ctx);
-            if (building) MEM_W(0, addr(kRiderHit)) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0, addr(kRiderHit))) | hit);
+            if (shield) MEM_W(0, addr(kRiderHit)) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0, addr(kRiderHit))) | hit);
             ctx->r4 = a0;
             // The cat moves its rider on the screen (func_801A22AC) and
             // pushes her world position on by the loop's scroll (10 px a
@@ -903,6 +985,7 @@ bool riding(uint8_t* rdram) {
 
 void tick(uint8_t* rdram) {
     for (const Rider* r : kRiders) {
+        if (const int32_t afoot = MEM_W(0, addr(r->afoot)); afoot > 0) MEM_W(0, addr(r->afoot)) = afoot - 1;
         const int have = MEM_W(0, addr(r->mount));
         const Mount* want = wanted(rdram, *r);
         if (have > 0) {
@@ -946,6 +1029,13 @@ void tick(uint8_t* rdram) {
             // 3-12; there the loop brings missiles under the stage's cat).
             boarding_tick(rdram, *r);
             if (own_floor && (rider_press(rdram, *r) & kMountButton) != 0) mount_button(rdram, *r, *m, have);
+            // B with a star teleporter in reach: off the cat, so her update
+            // this frame (after this) grabs it.
+            if (own_floor && m != nullptr && (rider_press(rdram, *r) & kGrabButton) != 0 && star_in_reach(rdram, *r)) {
+                if (!mm::faraway::in_shadow()) std::fprintf(stderr, "[mount] %s gets off the cat for a star\n", rider_name(*r));
+                remove(rdram, *r, *m, have);
+                MEM_W(0, addr(r->afoot)) = kAfootFrames;
+            }
             continue;
         }
         // (Not over nothing: a cat made there fell away again at once, and
