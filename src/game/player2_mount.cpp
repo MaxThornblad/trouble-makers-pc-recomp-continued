@@ -226,6 +226,32 @@ bool star_in_reach(uint8_t* rdram, const Rider& r) {
     return false;
 }
 
+// The other player carrying her (her slot at the carrier's +0xD6).
+bool carried(uint8_t* rdram, const Rider& r) {
+    const int c = character_slot(rdram, r);
+    const int other = r.p2 ? 0 : mm::player2::slot(rdram);
+    if (c < 0 || other < 0 || other == c) return false;
+    const gpr o = slot_addr(other);
+    return (static_cast<uint32_t>(MEM_W(0x80, o)) & kHolding) != 0 && MEM_HU(0xD6, o) == c;
+}
+
+// Picked up by the other player, or thrown by her: off her cat (the cat
+// held its rider on its seat through the carry, out of the carrier's
+// hands, and through a throw: she hung in the throw's flight state on her
+// cat for good, the owner's split-cat-grab). States: 0x2F carried, the
+// 0x31 family thrown (0x031..0x631), 0x2E getting up. (A cheat cat seats
+// her from standing; none of these is one of its own.)
+bool in_carry(uint8_t* rdram, const Rider& r) {
+    const uint8_t st = static_cast<uint8_t>(MEM_HU(0xD0, slot_addr(character_slot(rdram, r))) & 0xFF);
+    return carried(rdram, r) || st == 0x2F || st == 0x31 || st == 0x2E;
+}
+
+// Still on the way down from a carry: her cat comes back once she stands.
+bool settling(uint8_t* rdram, const Rider& r) {
+    const uint8_t st = static_cast<uint8_t>(MEM_HU(0xD0, slot_addr(character_slot(rdram, r))) & 0xFF);
+    return in_carry(rdram, r) || st == 0x16 || st == 0x05;
+}
+
 bool with_star(uint8_t* rdram, const Rider& r) {
     const gpr c = slot_addr(character_slot(rdram, r));
     if (MEM_HU(0xD0, c) == kStarFlightState) return true;
@@ -308,9 +334,11 @@ void let_go(uint8_t* rdram, const Rider& r) {
 // update, func_801A23C4's state 0): with the loop's mark in her player state
 // her own update carried her on with the loop's 10 px a frame, cat or not.
 void dismount(uint8_t* rdram, const Rider& r) {
+    // (What the cat set on her goes whatever her state: carried off it
+    // she kept its "on the loop" bit, and her own update slid her on at
+    // the loop's 10 px a frame until a new cat came.)
     auto get_off = [](uint8_t* rdram) {
-        if ((MEM_HU(0xD0, slot_addr(0)) & 0xFF) != kRideState) return;
-        MEM_H(0xD0, slot_addr(0)) = static_cast<int16_t>(kFallState);
+        if ((MEM_HU(0xD0, slot_addr(0)) & 0xFF) == kRideState) MEM_H(0xD0, slot_addr(0)) = static_cast<int16_t>(kFallState);
         MEM_H(0x94, slot_addr(0)) = static_cast<int16_t>(MEM_HU(0x94, slot_addr(0)) & ~kOnCat);
         MEM_W(0, addr(kPlayerState)) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0, addr(kPlayerState))) & ~kOnLoop);
     };
@@ -1015,7 +1043,10 @@ bool riding(uint8_t* rdram) {
 
 void tick(uint8_t* rdram) {
     for (const Rider* r : kRiders) {
-        if (const int32_t afoot = MEM_W(0, addr(r->afoot)); afoot > 0) MEM_W(0, addr(r->afoot)) = afoot - 1;
+        // (Off her cat for a carry: no new one until she stands again.)
+        if (const int32_t afoot = MEM_W(0, addr(r->afoot)); afoot > 0) {
+            MEM_W(0, addr(r->afoot)) = settling(rdram, *r) && !with_star(rdram, *r) ? kAfootFrames : afoot - 1;
+        }
         const int have = MEM_W(0, addr(r->mount));
         const Mount* want = wanted(rdram, *r);
         if (have > 0) {
@@ -1059,6 +1090,12 @@ void tick(uint8_t* rdram) {
             // 3-12; there the loop brings missiles under the stage's cat).
             boarding_tick(rdram, *r);
             if (own_floor && (rider_press(rdram, *r) & kMountButton) != 0) mount_button(rdram, *r, *m, have);
+            if (own_floor && m != nullptr && in_carry(rdram, *r)) {
+                if (!mm::faraway::in_shadow()) std::fprintf(stderr, "[mount] %s gets off the cat: carried\n", rider_name(*r));
+                remove(rdram, *r, *m, have);
+                MEM_W(0, addr(r->afoot)) = kAfootFrames;
+                continue;
+            }
             // B with a star teleporter in reach: off the cat, so her update
             // this frame (after this) grabs it.
             if (own_floor && m != nullptr && (rider_press(rdram, *r) & kGrabButton) != 0 && star_in_reach(rdram, *r)) {
