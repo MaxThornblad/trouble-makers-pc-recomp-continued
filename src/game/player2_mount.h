@@ -34,6 +34,13 @@ void update(uint8_t* rdram, recomp_context* ctx, int slot);
 // clamp must leave the riders alone, or it pulls them off their mounts).
 bool riding(uint8_t* rdram);
 
+// Around player 2's own update (her record in slot 0, her globals in): on
+// a cat outside 3-12 with far-apart rules, her world position moves only
+// as she moved (the cat's "on the loop" bit pushed it on in her update).
+struct P2Seat { int32_t x, y, world_x, world_y; };
+P2Seat before_p2_update(uint8_t* rdram);
+void after_p2_update(uint8_t* rdram, const P2Seat& before);
+
 // Around each actor's update (player2.cpp held_swap_begin / _end): a
 // missile of 3-12 talks to player 2's cat (see kMissileMessage in the .cpp).
 void missile_begin(uint8_t* rdram, int actor);

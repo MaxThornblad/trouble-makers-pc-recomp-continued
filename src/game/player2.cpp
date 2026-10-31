@@ -875,6 +875,7 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
         MEM_W(0, addr(kCameraPrevX)) = MEM_W(0, addr(kCameraX));
         MEM_W(0, addr(kCameraPrevY)) = MEM_W(0, addr(kCameraY));
     }
+    const mm::player2_mount::P2Seat seat = mm::player2_mount::before_p2_update(rdram);
     g_in_own_call = true;
     g_marina_character = 1;
     func_8004ED10(rdram, ctx);
@@ -902,6 +903,7 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
             g_in_own_call = false;
         }
     }
+    mm::player2_mount::after_p2_update(rdram, seat);
     MEM_W(0, addr(kCameraPrevX)) = prev_x;
     MEM_W(0, addr(kCameraPrevY)) = prev_y;
     ctx->r4 = saved_a0;

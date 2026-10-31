@@ -163,6 +163,7 @@ constexpr int kRiderTop = 44;         // px above the feet: the rider's head (sh
 // its spot on the screen (x 33), as the loop keeps it, and what it moves
 // from there is how far it goes.
 constexpr int32_t kLoopScroll = 10 << 16;
+constexpr uint16_t kRiderSeated = 0x003;              // Marina's riding state (low 12 bits)
 constexpr int32_t kCatSpeed = 6 << 16;
 constexpr int32_t kCatAccel = 1 << 15;
 constexpr uint32_t kHold = 0x800BE4F8u;             // u16: the rider's buttons held (her update's)
@@ -856,12 +857,13 @@ struct CatOnLoop {
                 MEM_W(0xF0, cat) = 0;
             }
         }
-        // Far apart her camera follows her: the cat's "carried by the loop"
-        // bit would have it scroll by the loop's speed, holding her ~135 px
-        // from the other player. On a shared screen the rider's own code
-        // needs the bit (without it she jitters on and off the seat).
-        if (!shared)
-            MEM_W(0, addr(kPlayerState)) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0, addr(kPlayerState))) & ~kOnLoop);
+        // The cat's "carried by the loop" bit stays on its rider, far apart
+        // too: her own riding state needs it (func_8004AB3C; without it she
+        // fell off her seat every frame her cat stood, and it seated her
+        // again: the split screen "blinking" and "standing on the cat"). It
+        // also has her own update push her world position on by the loop's
+        // speed: player 1's is set back after this update (below), player
+        // 2's after her own (after_p2_update).
     }
 
     // The cat, its parts and its rider (16.16 px).
@@ -998,6 +1000,26 @@ int view_y(uint8_t* rdram, const Rider& r, int y) {
     int32_t dx = 0, dy = 0;
     if (r.p2 && mm::faraway::active(rdram) && mm::faraway::p2_camera_offset(rdram, dx, dy)) return y - (dy >> 16);
     return y;
+}
+
+P2Seat before_p2_update(uint8_t* rdram) {
+    return {MEM_W(0x88, slot_addr(0)), MEM_W(0x8C, slot_addr(0)), MEM_W(0, addr(kMarinaWorldX)), MEM_W(0, addr(kMarinaWorldY))};
+}
+
+void after_p2_update(uint8_t* rdram, const P2Seat& before) {
+    if (MEM_W(0, addr(kP2.mount)) <= 0 || shared_screen(rdram)) return;
+    const Mount* m = mount_of_type(static_cast<uint16_t>(MEM_W(0, addr(kP2.type))));
+    if (m == nullptr || m->type != kCat || mm::foreign_actors::native(rdram, m->type)) return;
+    if ((static_cast<uint32_t>(MEM_W(0, addr(kPlayerState))) & kOnLoop) == 0) return;
+    // With the bit her update carries her on by the loop's speed, on the
+    // screen and in the world. Player 1's cat seats him again after (and
+    // his world position is set from his seat); player 2's update runs
+    // in no such pass, so the carry is taken back here: she moved left
+    // and was pulled right, held where the push met her camera's walls.
+    // (Seated: her own update moves her by nothing else; the cat does.)
+    if ((MEM_HU(0xD0, slot_addr(0)) & 0xFFF) != kRiderSeated) return;
+    MEM_W(0x88, slot_addr(0)) = before.x + (MEM_W(0x88, slot_addr(0)) - before.x - kLoopScroll);
+    MEM_W(0, addr(kMarinaWorldX)) -= kLoopScroll;
 }
 
 bool riding(uint8_t* rdram) {
