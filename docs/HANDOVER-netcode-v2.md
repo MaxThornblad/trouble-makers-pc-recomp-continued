@@ -463,6 +463,18 @@ netcode, and the owner decides.
   states: test-home slot 65 (on the cat by the star). A 54-case Z matrix
   (six states x three timings x three directions) was the test; the new
   scenarios cover the failures it found.
+- 2026-10-31 afternoon, branch review-fixes: preview 24 (3999fea), also
+  a Steam Deck AppImage (.github/linux/appimage.sh --steam-deck, built
+  here on glibc 2.39: needs 2.38). Cat dust clouds no longer drift ahead
+  of the ride outside 3-12 (e41b5a1); split screen cat riders stay seated
+  (the loop bit kept, both players rebased between cameras, cf3175d); a
+  carried or thrown rider gets off her cat and gets it back once
+  standing (3999fea). New test kit: tools/tm_tests.py, named owner states
+  in a kit folder (here /tmp/claude-0/kit2: home/, states/, STATES.md),
+  one check per test, tags; 10 tests, all pass, and three fail on the
+  preview 23 build as the bugs did. The old full kit's failures were all
+  pre-existing (same on preview 18); many depend on warp-made states, so
+  tests are rebuilt on named states as work goes on. Open: far-catx-3-3.
 
 ## 5. Open questions for the owner (ask when relevant, not up front)
 
