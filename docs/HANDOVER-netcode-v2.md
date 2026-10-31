@@ -456,6 +456,13 @@ netcode, and the owner decides.
   Open: catx-3-3 / far-catx-3-3 (player 2 carrying player 1 on the
   moving stage: the carry re-run heuristic overcorrects), the
   pre-existing warp-state failures.
+- 2026-10-31 night, branch review-fixes: preview 23 (82c39f6): missile
+  rides (launch in place instead of on 3-12's launcher, no y < -48
+  explosion while ridden, rider shielded while boarding, terrain stops
+  the ride), 1-1's star teleporter on the cat (B gets her off). New owner
+  states: test-home slot 65 (on the cat by the star). A 54-case Z matrix
+  (six states x three timings x three directions) was the test; the new
+  scenarios cover the failures it found.
 
 ## 5. Open questions for the owner (ask when relevant, not up front)
 
