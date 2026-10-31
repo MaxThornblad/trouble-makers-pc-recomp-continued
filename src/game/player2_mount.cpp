@@ -856,12 +856,21 @@ struct CatOnLoop {
                 MEM_W(0xF0, cat) = 0;
             }
         }
-        // Far apart her camera follows her: the cat's "carried by the loop"
-        // bit would have it scroll by the loop's speed, holding her ~135 px
-        // from the other player. On a shared screen the rider's own code
-        // needs the bit (without it she jitters on and off the seat).
-        if (!shared)
-            MEM_W(0, addr(kPlayerState)) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0, addr(kPlayerState))) & ~kOnLoop);
+        // The cat's "carried by the loop" bit stays on its rider, far apart
+        // too: her own riding state needs it (func_8004AB3C; without it she
+        // fell off her seat every frame her cat stood, and it seated her
+        // again: the split screen "blinking" and "standing on the cat"). It
+        // also has her own update carry her on by the loop's speed: the cat
+        // seats her again after, and player 1's world position is set from
+        // his seat (below). (Far apart both are rebased between cameras
+        // whatever their "fixed to the screen" flag, far_coop.cpp rebase.)
+        // The cat sets the bit when it seats her; a ride whose bit went
+        // (a state saved while far apart cleared it each frame, the owner's
+        // split-cat-both) never got it back, and she fell off and was
+        // seated again every frame. Back on while she sits on it.
+        if ((MEM_HU(0x94, slot_addr(0)) & kOnCat) != 0) {
+            MEM_W(0, addr(kPlayerState)) = static_cast<int32_t>(static_cast<uint32_t>(MEM_W(0, addr(kPlayerState))) | kOnLoop);
+        }
     }
 
     // The cat, its parts and its rider (16.16 px).

@@ -173,11 +173,16 @@ void rebase(uint8_t* rdram, int32_t dx, int32_t dy) {
         MEM_W(0x104, h) = MEM_W(0x104, h) - dx;
         MEM_W(0x108, h) = MEM_W(0x108, h) - dy;
     }
+    // (Both players always: a cat's rider carries its "fixed to the
+    // screen" flag 0x8, and player 2 seated on hers stayed put on the
+    // screen while the camera under her changed, drifting by the two
+    // cameras' distance every frame: towed after player 1 in split screen.)
+    const int p2 = mm::player2::slot(rdram);
     for (int s = 0; s < kSlots; ++s) {
         const gpr a = slot_addr(s);
         const uint32_t fl = static_cast<uint32_t>(MEM_W(0x80, a));
         if (fl == 0) continue;
-        if (s != 0 && ((fl & 0x2u) == 0 || (fl & 0x8u) != 0)) continue;
+        if (s != 0 && s != p2 && ((fl & 0x2u) == 0 || (fl & 0x8u) != 0)) continue;
         MEM_W(0x88, a) = MEM_W(0x88, a) - dx;
         MEM_W(0x8C, a) = MEM_W(0x8C, a) - dy;
     }
