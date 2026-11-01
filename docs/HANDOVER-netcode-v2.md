@@ -486,6 +486,17 @@ netcode, and the owner decides.
   submits per frame for BOTH framebuffers (the bad frames were all on
   one). Marina's blink in split-marina-blink not reproduced (only the
   cat's idle hop, same on one screen); asked the owner for a state.
+- 2026-11-01, branch review-fixes: preview 26 (1a03ab4, Windows and Steam
+  Deck). Split-screen sweep (tm_tests --only sweep, 64b22bf): one state
+  per stage (stage-<label>, 49 of 52; 2-4, 4-1, 4-8 would not save),
+  player 2 walks away, every actor dumped every frame, nothing_flips.
+  Found: screen-fixed (flag 0x8) actors run with the nearest camera
+  flipped (type 0x0071 marker, 000D state 0x40 panels): now every 0x8
+  actor but the players runs with the picture's camera (abb5026). 5-3
+  (bee) auto-scrolls and both players were left off screen: second
+  entry in kSharedCameraStages, test split-bee-scroll-carries (1a03ab4).
+  Native flips left out of the check (NATIVE_FLIPS: 0009 effects, 3-3's
+  1C14). Kit 12/12, the six failing sweep stages pass.
 
 ## 5. Open questions for the owner (ask when relevant, not up front)
 
