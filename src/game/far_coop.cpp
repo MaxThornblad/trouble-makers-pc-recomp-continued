@@ -553,6 +553,18 @@ bool wrapping_scenery(uint8_t* rdram, int slot) {
     const uint16_t type = MEM_HU(0xD2, a), state = MEM_HU(0xD0, a);
     return type == 0x181C || (type == 0x000D && state == 0x50);
 }
+
+// Fixed to the screen (flag 0x8: func_80016D94 does not scroll it): its
+// position is a place on the picture, so it too belongs to the picture's
+// camera. The nearest camera means nothing for it (+0x88 is not
+// camera-relative), and one that works its place out from the camera
+// flipped between the two pictures every other frame: a marker following
+// something (type 0x0071), background panels (0x000D state 0x40 in 5-6).
+// The players are not: a cat's rider carries 0x8 too.
+bool screen_fixed(uint8_t* rdram, int slot) {
+    if (slot == 0 || slot == mm::player2::slot(rdram)) return false;
+    return (static_cast<uint32_t>(MEM_W(0x80, slot_addr(slot))) & 0x8u) != 0;
+}
 } // namespace
 
 extern "C" void mm_far_actor(uint8_t* rdram, uint32_t slot) {
@@ -567,7 +579,7 @@ extern "C" void mm_far_actor(uint8_t* rdram, uint32_t slot) {
     const int held = g_frame_on ? holder_set(rdram, s) : -1;
     mm::player2::held_swap_begin(rdram, s);
     if (!g_frame_on) return;
-    if (held < 0 && wrapping_scenery(rdram, s)) {
+    if (held < 0 && (wrapping_scenery(rdram, s) || screen_fixed(rdram, s))) {
         switch_to(rdram, 0);
         return;
     }

@@ -721,7 +721,14 @@ single copy across a 512-pixel period:
 In co-op far mode (two cameras) every actor of these runs with the camera of
 the picture being made (`wrapping_scenery` in `far_coop.cpp`), never the
 camera it is nearest to: placed by one camera, it is nearer to that one next
-frame, so it would swap pictures every frame.
+frame, so it would swap pictures every frame. The same holds for every actor
+fixed to the screen (+0x80 flag `0x8`, not scrolled by `func_80016D94`) other
+than the two players (`screen_fixed`): its +0x88 is a place on the picture,
+not camera-relative, so "nearest" means nothing for it. A split-screen sweep
+of every stage (`tools/tm_tests.py --only sweep`) found two such that
+flipped: a marker following something (type `0x0071`, 2-6, 4-2, 5-4, 5-6) and
+background panels (`0x000D` state `0x40`, 5-6). (3-3's small sprites, type
+`0x1C14`, alternate on every frame on one screen too: two share a slot.)
 
 The controller is approximately:
 
