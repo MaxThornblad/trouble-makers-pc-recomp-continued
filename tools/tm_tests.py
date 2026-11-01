@@ -11,6 +11,10 @@ Each test loads its state into slot 0 of a fresh copy of the home, plays two
 pad scripts (frames:buttons runs, as coop_bots.py) and checks what it is
 about. Tests carry tags; run a tag with --only (e.g. --only cat,split).
 
+States named stage-<label> (one per stage, made from the debug warp with
+MM_TEST_SAVESTATE=save@ready) each get a split-screen sweep test, tag
+"sweep": nothing may swap between the two players' pictures.
+
     python3 tools/tm_tests.py --bin build_headless/src/game/troublemakers \\
         --rom input/troublemakers.us1.z64 --kit /path/to/kit [--only tag,name]
 """
@@ -134,6 +138,45 @@ def scenery_steady(type_hex, min_px):
     return check
 
 
+#: Actor types that jump away and back on their own, on one screen too.
+NATIVE_FLIPS = {
+    "0009",   # effects: 5-3's cycle their places every four frames
+    "1C14",   # 3-3's small sprites: two share a slot, shown on alternate frames
+}
+
+
+def nothing_flips(min_px, min_count):
+    """No actor jumps by min_px or more for one frame and comes straight
+    back, min_count times or more (an actor run with the wrong one of the
+    two cameras in split screen swaps between the pictures like that)."""
+    def check(r):
+        track = {}
+        for d in r.dumps:
+            track.setdefault(int(d[1]), {})[int(d[0])] = (d[2], d[3], d[4], int(d[5]), int(d[6]))
+        problems = []
+        for slot, by_t in sorted(track.items()):
+            ts = sorted(by_t)
+            flips = 0
+            for a, b, c in zip(ts, ts[1:], ts[2:]):
+                if b != a + 1 or c != b + 1:
+                    continue
+                pa, pb, pc = by_t[a], by_t[b], by_t[c]
+                if not (pa[0] == pb[0] == pc[0]):
+                    continue   # another actor in the slot
+                if pa[0] in NATIVE_FLIPS:
+                    continue
+                for k in (3, 4):
+                    # (the cameras may move a little meanwhile)
+                    if abs(pb[k] - pa[k]) >= min_px and abs(pb[k] - pc[k]) >= min_px and abs(pc[k] - pa[k]) <= 4:
+                        flips += 1
+                        break
+            if flips >= min_count:
+                t, st, fl = by_t[ts[-1]][0], by_t[ts[-1]][1], by_t[ts[-1]][2]
+                problems.append("slot %d (type %s state %s flags %s) flips on %d frames" % (slot, t, st, fl, flips))
+        return problems
+    return check
+
+
 def every_frame(first, last):
     return ",".join(str(t) for t in range(first, last + 1))
 
@@ -180,6 +223,23 @@ TESTS = [
      {"MM_TEST_DUMP": every_frame(150, 400), "MM_TEST_CHEATS": "cat_ride=0"},
      [scenery_steady("181C", 4)]),
 ]
+
+# The split-screen sweep: one test per stage state the kit has (states named
+# stage-<label>, one per warp, made with save@ready). Player 2 walks away
+# from player 1 (left, for 400 frames) and stands, so the cameras pass
+# through every distance from together to far apart; nothing may swap
+# between the pictures on the way.
+SWEEP_FRAMES = 560
+
+
+def sweep_tests(kit):
+    states = sorted(Path(kit, "states").glob("stage-*.tmstate"),
+                    key=lambda p: [int(n) for n in re.findall(r"\d+", p.stem)])
+    return [("split-sweep-%s" % p.stem[len("stage-"):], "sweep,split", p.stem, SWEEP_FRAMES,
+             "%d:" % SWEEP_FRAMES, "60:,400:l,100:",
+             {"MM_TEST_DUMP": every_frame(250, 760), "MM_TEST_CHEATS": "cat_ride=0"},
+             [nothing_flips(8, 10)])
+            for p in states]
 
 
 def run(args, test):
@@ -228,7 +288,7 @@ def main():
     args = ap.parse_args()
     want = [w for w in args.only.split(",") if w]
     failed = 0
-    for test in TESTS:
+    for test in TESTS + sweep_tests(args.kit):
         name, tags = test[0], test[1].split(",")
         if want and not any(w == name or w in tags for w in want):
             continue
