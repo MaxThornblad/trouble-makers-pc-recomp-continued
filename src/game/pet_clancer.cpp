@@ -48,7 +48,13 @@ constexpr int kWallAhead = 12;             // px ahead of his middle probed for 
 constexpr int kBodyTop = 14;               // px above his feet the body reaches (box -4..8)
 constexpr int kStepUp = 6;                 // px: this much he steps up without a jump
 constexpr int kJumpMargin = 6;             // px over the obstacle's top the jump aims for
-constexpr int kJumpMax = 56;               // px: the highest he jumps (his own 4.5 px/frame rises 46)
+constexpr int kJumpMax = 120;              // px: the highest he jumps (his own 4.5 px/frame rises 46;
+                                           // 1-1's gem house is a 72 px wall, its roof the way over)
+// Lost: left behind (stuck at a hazard, the wrong side of something he
+// gave up on) or fallen off (a pit): he comes back beside the player.
+constexpr int kLostX = 320;                // px from the player: a screen's width
+constexpr int kLostDown = 200;             // px his feet are below hers: fallen off
+constexpr int kComeBackBehind = 24;        // px behind her he lands
 // His gravity (func_801B0D80: -0.21875 px a frame each frame, 16.16).
 constexpr int32_t kGravity = 0x3800;
 constexpr int kJumpWait = 45;              // frames between jumps
@@ -228,6 +234,25 @@ void before(uint8_t* rdram, int slot) {
     g_frame.dir = dir;
     g_frame.near = std::abs(dx) <= kStopNear;
 
+    // Lost (a screen away, or fallen far below her): back beside her, from
+    // the air so his own code lands him. Only on his feet or falling; held,
+    // thrown, hit or mid-jump is a throw's or a hazard's doing and ends by
+    // itself.
+    const bool falling = state == kFallEnter || state == kFall;
+    if ((on_feet(state) || falling) && (std::abs(dx) > kLostX || dy > kLostDown)) {
+        const int tx = MEM_H(0x88, t) - dir * kComeBackBehind;
+        const int ty = (MEM_H(0x8C, t) + MEM_H(0xB0, t)) - MEM_H(0xB0, a);
+        MEM_W(0x88, a) = tx << 16;
+        MEM_W(0x8C, a) = ty << 16;
+        MEM_W(0xEC, a) = 0;
+        MEM_W(0xF0, a) = 0;
+        MEM_H(kDetour, a) = 0;
+        face(rdram, a, dir);
+        g_frame.want = kWantFall;
+        set_state(rdram, a, kFallEnter);
+        say("comes back to the player");
+        return;
+    }
     if (!on_feet(state)) {
         // In the air, held, thrown, landing: his own code, with his jump
         // carried toward the player.

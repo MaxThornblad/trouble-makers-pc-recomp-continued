@@ -119,6 +119,33 @@ def logged(*texts):
     return check
 
 
+def not_logged(*texts):
+    def check(r):
+        return ["'%s' logged" % t for t in texts if t in r.section]
+    return check
+
+
+def pet_beside(max_dx, max_dy):
+    """The pet Clancer (type 0x2801) within max_dx / max_dy px of Marina
+    (slot 0) in the last dump (both positions are the same camera's)."""
+    def check(r):
+        if not r.dumps:
+            return ["no dumps"]
+        last = r.dumps[-1][0]
+        pos = {d[1].strip(): (int(d[5]), int(d[6])) for d in r.dumps if d[0] == last}
+        pet = [d for d in r.dumps if d[0] == last and d[2] == "2801"]
+        if not pet or "0" not in pos:
+            return ["no pet or no Marina in the last dump"]
+        (px, py), (mx, my) = pos[pet[0][1].strip()], pos["0"]
+        bad = []
+        if abs(px - mx) > max_dx:
+            bad.append("pet %d px from Marina at the end (want <= %d)" % (abs(px - mx), max_dx))
+        if abs(py - my) > max_dy:
+            bad.append("pet %d px above/below Marina at the end (want <= %d)" % (abs(py - my), max_dy))
+        return bad
+    return check
+
+
 def no_dust(after):
     """No cat dust clouds (type 0x0009, picture 0x1D8) in the dumps after a frame."""
     def check(r):
@@ -193,6 +220,12 @@ def every_frame(first, last):
 
 
 #: (name, tags, state, frames, pad 1, pad 2, extra env, checks)
+# Marina through 1-1 from its stage state with the moon jump (the kit's
+# cheats): run, hop, four times, then on to stand past the gem house (x
+# about 1635) at frame 700.
+HOP_PAST_HOUSE = "30:," + "90:r,60:rA," * 4 + "70:r,"
+PET_CHEATS = "split_screen=0,cat_ride=0"
+
 TESTS = [
     # The cat's dust clouds drifted ahead of the ride outside 3-12 ("flames").
     ("cat-no-flames", "cat", "cat-ride-flames", 400, "150:,250:r", "400:", {"MM_TEST_DUMP": "250,300,350"},
@@ -238,6 +271,23 @@ TESTS = [
     # screen (player 1 by 800 px) while it scrolled on.
     ("split-bee-scroll-carries", "split,bee", "stage-5-3", 400, "400:", "60:,300:l,40:", {},
      [both_on_screen(170)]),
+    # The pet Clancer (spawned Cat Clancer, pet_clancer.cpp) in 1-1, one
+    # shared screen. Marina hops through the stage with the moon jump
+    # (HOP_PAST_HOUSE: standing past the gem house at frame 700).
+    # The gem house is a 72 px wall: he jumped at most 56 px and gave up.
+    ("pet-jumps-gem-house", "pet", "stage-1-1", 1100, HOP_PAST_HOUSE + "400:", "1100:",
+     {"MM_TEST_SPAWN": "2801@560@-80@0", "MM_TEST_CHEATS": PET_CHEATS, "MM_TEST_DUMP": "1099"},
+     [logged("[pet] Cat Clancer jumps at a wall"), not_logged("[pet] Cat Clancer comes back"), pet_beside(60, 30)]),
+    # Left a screen behind (the campfire's hits held him), he comes back
+    # beside her.
+    ("pet-comes-back-left-behind", "pet", "stage-1-1", 1100, HOP_PAST_HOUSE + "400:", "1100:",
+     {"MM_TEST_SPAWN": "2801@20@60@0", "MM_TEST_CHEATS": PET_CHEATS, "MM_TEST_DUMP": "1099"},
+     [logged("[pet] Cat Clancer comes back to the player"), pet_beside(60, 30)]),
+    # Fallen far below her (spawned under the floor, falling for ever).
+    # (Spawned after frame 50: the log is read from where the replay starts.)
+    ("pet-fallen-comes-back", "pet", "stage-1-1", 400, "400:", "400:",
+     {"MM_TEST_SPAWN": "2801@70@40@-400", "MM_TEST_CHEATS": PET_CHEATS, "MM_TEST_DUMP": "399"},
+     [logged("[pet] Cat Clancer comes back to the player"), pet_beside(60, 30)]),
 ]
 
 # The split-screen sweep: one test per stage state the kit has (states named
