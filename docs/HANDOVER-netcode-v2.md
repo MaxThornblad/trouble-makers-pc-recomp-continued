@@ -176,6 +176,9 @@ zip of the test kit's save states.
 1. Clone into `/home/claude/trouble-makers-pc-recomp-continued`:
    `git clone -b review-fixes https://github.com/MaxThornblad/trouble-makers-pc-recomp-continued`,
    then `git submodule update --init --recursive`.
+   Commit identity (the repo is public; never the owner's email):
+   `git config user.name MaxThornblad` and
+   `git config user.email 95218019+MaxThornblad@users.noreply.github.com`.
 2. ROM: Mischief Makers (USA) (Rev 1) .z64, SHA-256
    e00ab74c3dee79efaafe8e10f2a6b67784d7327ab588d8ef90ad8945427da627, to
    `input/troublemakers.us1.z64`. Check the hash; never commit it.
