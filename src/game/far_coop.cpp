@@ -55,7 +55,7 @@ constexpr uint32_t kSetCamY = kCamY - 0x800BE544u;
 
 constexpr uint32_t kLockX = 0x800BE62Cu, kLockY = 0x800BE630u;   // scroll locks (func_80012830)
 constexpr int32_t kNearX = 0x140 << 16, kNearY = 0xC0 << 16;         // "in the same arena"
-constexpr uint16_t kSharedCameraStages[] = {35};                      // 3-12 CERBERUS (see active())
+constexpr uint16_t kSharedCameraStages[] = {35, 51};                  // 3-12 CERBERUS, 5-3 the bee (see active())
 
 // The second camera in game memory (player 2's block, player2.cpp layout).
 constexpr uint32_t kStore = 0x807F0500u;          // +0 valid, +4 the set
@@ -238,13 +238,16 @@ bool active(uint8_t* rdram) {
     if (!mm::cheats::coop_enabled()) return false;
     const uint16_t state = MEM_HU(0, addr(kGameState));
     if (state != 6 && state != 10) return false;
-    // Stages where the screen moves on its own (3-12, CERBERUS: a looping
-    // chase that scrolls at 10 px a frame and pushes Marina along, wrapping
-    // its camera back a lap at the loop's end) keep one shared camera: a
-    // second camera would not scroll, and a player left behind the loop's
-    // start is in a part of the world the lap wrap moves out from under
-    // her. On one screen the edge carries both players, as it carries
-    // Marina in the original game.
+    // Stages where the screen moves on its own keep one shared camera: a
+    // second camera would not scroll. 3-12, CERBERUS: a looping chase that
+    // scrolls at 10 px a frame and pushes Marina along, wrapping its camera
+    // back a lap at the loop's end; a player left behind the loop's start
+    // is in a part of the world the lap wrap moves out from under her. 5-3,
+    // the bee ride: the screen flies on at about 1.5 px a frame (5,800 px)
+    // into the boss fight; split, both players were left behind off the
+    // screen (player 1, nearer the still second camera, ran with it and was
+    // never pushed). On one screen the edge carries both players, as it
+    // carries Marina in the original game.
     const uint16_t stage = MEM_HU(0, addr(kCurrentStage));
     for (const uint16_t shared : kSharedCameraStages) {
         if (stage == shared) return false;

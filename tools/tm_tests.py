@@ -102,6 +102,17 @@ def near_at_end(max_px):
     return check
 
 
+def both_on_screen(max_px, skip=30):
+    """Both players within max_px of the game camera's centre on every traced
+    frame after the first `skip` (the screen carries them)."""
+    def check(r):
+        if len(r.frames) <= skip:
+            return ["no traced frames"]
+        bad = [f[0] for f in r.frames[skip:] if abs(f[3]) > max_px or abs(f[4]) > max_px]
+        return ["a player off the screen on %d frames (first %d)" % (len(bad), bad[0])] if bad else []
+    return check
+
+
 def logged(*texts):
     def check(r):
         return ["no '%s'" % t for t in texts if t not in r.section]
@@ -222,6 +233,11 @@ TESTS = [
     ("split-mountains-steady", "split,scenery", "split-mountains", 400, "400:", "400:",
      {"MM_TEST_DUMP": every_frame(150, 400), "MM_TEST_CHEATS": "cat_ride=0"},
      [scenery_steady("181C", 4)]),
+    # Split screen in 5-3 (the bee ride): the stage scrolls on its own, the
+    # second camera did not, and both players were left behind off the
+    # screen (player 1 by 800 px) while it scrolled on.
+    ("split-bee-scroll-carries", "split,bee", "stage-5-3", 400, "400:", "60:,300:l,40:", {},
+     [both_on_screen(170)]),
 ]
 
 # The split-screen sweep: one test per stage state the kit has (states named

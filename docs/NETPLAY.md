@@ -451,7 +451,7 @@ every frame: no position jumps, both on the shared screen, a carrier always
 carries a live object, bounded rejoins; online also identical fingerprints and
 no resync. It prints one line per scenario and ALL OK.
 
-## Stage 3-12 (CERBERUS): one shared camera
+## Stages 3-12 (CERBERUS) and 5-3 (the bee): one shared camera
 
 The owner reported trouble in 3-12 online. The stage is a looping chase:
 the screen scrolls on its own at 10 px a frame and pushes Marina along,
@@ -474,6 +474,14 @@ camera as far and it put player 2 in the wrong place.) Bot scenarios on a state
 at the stage's start (slot 9): apart-9, fuzz-9-1/2, far-apart-9,
 net-fuzz-9; the trace checks learnt about laps and about steps judged
 against a moving camera.
+
+5-3 (the bee ride) scrolls on its own too: the screen flies on at about
+1.5 px a frame for some 5,800 px into the boss fight, carrying Marina at its
+edge. With two cameras (online, split screen) the second stood still and
+both players were left behind off the screen; player 1, nearer that still
+camera, ran with it and was never pushed (the split-screen sweep found it;
+test split-bee-scroll-carries). It is the second entry of
+kSharedCameraStages.
 
 ### Player 2's cat (src/game/player2_mount.cpp)
 
