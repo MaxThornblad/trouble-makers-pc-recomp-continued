@@ -714,8 +714,14 @@ Two shared actor signatures implement repeating landscape by teleporting a
 single copy across a 512-pixel period:
 
 - type `0x181C`, state `2`: foreground trees/grass, sometimes horizontally
-  flipped;
+  flipped; state `3`: distant mountain ranges (two copies 256 px apart,
+  e.g. the desert's);
 - type `0x000D`, state `0x50`: four 128-pixel landscape/floor panels.
+
+In co-op far mode (two cameras) every actor of these runs with the camera of
+the picture being made (`wrapping_scenery` in `far_coop.cpp`), never the
+camera it is nearest to: placed by one camera, it is nearer to that one next
+frame, so it would swap pictures every frame.
 
 The controller is approximately:
 

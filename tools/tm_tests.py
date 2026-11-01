@@ -112,6 +112,32 @@ def no_dust(after):
     return check
 
 
+def scenery_steady(type_hex, min_px):
+    """Repeating scenery of a type keeps its place: no actor of it jumps by
+    min_px or more for a frame and comes back the next (every frame from the
+    dumps; a 1 px camera nudge does not count)."""
+    def check(r):
+        xs = {}
+        for d in r.dumps:
+            if d[2] == type_hex:
+                xs.setdefault(int(d[1]), []).append((int(d[0]), int(d[5])))
+        if not xs:
+            return ["no type %s actors dumped" % type_hex]
+        problems = []
+        for slot, v in sorted(xs.items()):
+            v.sort()
+            flips = sum(1 for i in range(1, len(v) - 1)
+                        if abs(v[i][1] - v[i - 1][1]) >= min_px and v[i + 1][1] == v[i - 1][1])
+            if flips:
+                problems.append("slot %d jumps back and forth on %d of %d frames" % (slot, flips, len(v)))
+        return problems
+    return check
+
+
+def every_frame(first, last):
+    return ",".join(str(t) for t in range(first, last + 1))
+
+
 #: (name, tags, state, frames, pad 1, pad 2, extra env, checks)
 TESTS = [
     # The cat's dust clouds drifted ahead of the ride outside 3-12 ("flames").
@@ -147,6 +173,12 @@ TESTS = [
     # flight state on her cat for good.
     ("grab-stuck-throw-frees", "cat,grab,split", "split-cat-grab", 400, "400:", "400:", {},
      [seated_at_end(2)]),
+    # Split screen: the mountains behind the desert (scenery type 0x181C)
+    # ran with whichever camera was nearer and swapped between the players'
+    # pictures every frame (the top half's background glitched).
+    ("split-mountains-steady", "split,scenery", "split-mountains", 400, "400:", "400:",
+     {"MM_TEST_DUMP": every_frame(150, 400), "MM_TEST_CHEATS": "cat_ride=0"},
+     [scenery_steady("181C", 4)]),
 ]
 
 

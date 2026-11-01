@@ -539,15 +539,19 @@ int holder_set(uint8_t* rdram, int slot) {
 
 namespace {
 // Repeating scenery (docs/README.md 12.1): one copy of a tree, a dune panel,
-// that puts itself within 256 px of the camera every frame. It belongs to
-// whichever picture is being made: the game's camera (player 1's, or in the
-// shadow frame player 2's), never to the camera it happens to be nearest.
-// Run with the nearest, it stayed by player 1 and player 2's picture had no
-// foreground dunes or cacti.
+// a distant mountain range, that puts itself within 256 px of the camera
+// every frame. It belongs to whichever picture is being made: the game's
+// camera (player 1's, or in the shadow frame player 2's), never to the
+// camera it happens to be nearest. Run with the nearest, it stayed by player
+// 1 and player 2's picture had no foreground dunes or cacti; and the
+// mountains behind the desert (type 0x181C in state 3) flipped: placed by
+// player 2's camera, they were nearer to it the next frame, so every other
+// frame player 1's picture showed player 2's mountains. Every state of
+// 0x181C is this controller (widescreen.cpp treats them all as terrain).
 bool wrapping_scenery(uint8_t* rdram, int slot) {
     const gpr a = slot_addr(slot);
     const uint16_t type = MEM_HU(0xD2, a), state = MEM_HU(0xD0, a);
-    return (type == 0x181C && state == 2) || (type == 0x000D && state == 0x50);
+    return type == 0x181C || (type == 0x000D && state == 0x50);
 }
 } // namespace
 
