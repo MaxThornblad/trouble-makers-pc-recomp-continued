@@ -1,5 +1,5 @@
 From 9fcade4d5102f3334b1ba737b97b129e9168ff5d Mon Sep 17 00:00:00 2001
-From: Max Thornblad <max.thornblad@hotmail.com>
+From: MaxThornblad <95218019+MaxThornblad@users.noreply.github.com>
 Date: Sun, 25 Oct 2026 12:19:54 +0100
 Subject: [PATCH] Save files: don't rely on copy_file overwrite_existing
 

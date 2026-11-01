@@ -1,5 +1,5 @@
 From 64b83e84e8dc97196c8842f6bb9060a17c8007c6 Mon Sep 17 00:00:00 2001
-From: Max Thornblad <max.thornblad@hotmail.com>
+From: MaxThornblad <95218019+MaxThornblad@users.noreply.github.com>
 Date: Mon, 26 Oct 2026 18:13:00 +0100
 Subject: [PATCH] Deterministic mode: deliver a VI at any blocking VI-queue
  wait
