@@ -475,6 +475,17 @@ netcode, and the owner decides.
   preview 23 build as the bugs did. The old full kit's failures were all
   pre-existing (same on preview 18); many depend on warp-made states, so
   tests are rebuilt on named states as work goes on. Open: far-catx-3-3.
+- 2026-11-01, branch review-fixes: preview 25 (949eefd, Windows and Steam
+  Deck). The split-screen "top half background glitch" (owner states
+  split-mountains, split-marina-blink) was game state, not RT64: the
+  desert mountains are scenery type 0x181C state 3, which ran with the
+  nearest camera and so swapped between the players' cameras every frame
+  (headless shows it: slots 141/142 flip 249 of 251 frames). All 0x181C
+  now run with the picture's camera. New test split-mountains-steady; kit
+  11/11. Lesson: before suspecting the renderer, diff what the game
+  submits per frame for BOTH framebuffers (the bad frames were all on
+  one). Marina's blink in split-marina-blink not reproduced (only the
+  cat's idle hop, same on one screen); asked the owner for a state.
 
 ## 5. Open questions for the owner (ask when relevant, not up front)
 
