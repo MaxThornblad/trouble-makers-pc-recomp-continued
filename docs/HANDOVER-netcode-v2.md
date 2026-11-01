@@ -243,11 +243,17 @@ zip of the test kit's save states.
    the background. Add a test per fix: before the fix it must fail.
    For a quick look at one state with other settings, import tm_tests and
    call `run()` with your own env (e.g. `MM_FAR=0` for one shared screen).
-10. The older bot suite (`tools/coop_bots.py`, needs a test home with
+10. References (read only, outside the repo): clone
+    `https://github.com/Drahsid/mischief-makers` to
+    `/home/claude/ref/mischief-makers` (last used at 3fa47d2) to look up
+    what a function or address does (e.g. the pet Clancer's match code);
+    nothing from it goes into the repo (Sources). The coop-anything
+    playbook (github.com/cranebeaker/coop-anything) is read on the web.
+11. The older bot suite (`tools/coop_bots.py`, needs a test home with
     fixed save slots and a Steam stand-in from `tools/steam_mock`) is
     described in NETPLAY.md; its owner-made slots are gone, so prefer
     tm_tests and rebuild scenarios on named states as needed.
-11. Packaging preview N:
+12. Packaging preview N:
     - Unzip the owner's latest preview zip as the base (it holds
       `SDL2.dll`, `dxcompiler.dll`, `dxil.dll`, `assets/`,
       `steam_api64.dll`, `steam_appid.txt`, `README-update.txt`), rename the
