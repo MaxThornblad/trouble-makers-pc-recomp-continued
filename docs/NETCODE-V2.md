@@ -30,7 +30,7 @@ the fingerprint at the end of it with the first run's.
 Numbers on the build container (Intel Xeon 2.1 GHz, 2 cores, headless), a
 900-frame replay from the stage 1 save state with both players moving:
 
-| | this container | estimate, owner's 9800X3D |
+| | this container | estimate, a current desktop CPU |
 |---|---|---|
 | snapshot (8.5 MB copy + registers, overlays, deferred events, DMEM, audio clock) | 1.3 ms | ~0.5 ms |
 | restore | 1.3 ms | ~0.5 ms |

@@ -38,7 +38,7 @@ All official installers:
    ```
    TM_ROM_PATH=C:\Games\N64\mischief_makers_us11.z64
    TM_STEAM_DLL=C:\TroubleMakersBuildAssets\steam_api64.dll
-   TM_BUILDS_DIR=C:\Users\Max\TroubleMakersBuilds
+   TM_BUILDS_DIR=C:\Users\<you>\TroubleMakersBuilds
    ```
 
    `TM_STEAM_DLL`: copy `steam_api64.dll` out of a preview zip into a folder of
