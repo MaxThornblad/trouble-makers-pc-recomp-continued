@@ -5,21 +5,28 @@
 namespace mm::state {
 namespace {
 
+// Kept sorted by name. Registrations run at static initialisation, whose
+// order across translation units is the linker's: the Linux and the MinGW
+// build registered the same five modules in opposite orders, so the same
+// bytes hashed differently and a Linux host and a Windows guest resynced
+// every second (fingerprints "drifted" from frame 0). Everything here walks
+// the modules in name order, the same on every build.
 std::vector<Module>& registry() {
-    static std::vector<Module> modules;   // built on first use: registrations run at static init
+    static std::vector<Module> modules;   // built on first use
     return modules;
 }
 
 } // namespace
 
 void register_module(const Module& m) {
-    for (const Module& have : registry()) {
-        if (std::strcmp(have.name, m.name) == 0) {
-            std::fprintf(stderr, "[state] module \"%s\" registered twice\n", m.name);
-            std::abort();
-        }
+    auto& all = registry();
+    auto at = all.begin();
+    while (at != all.end() && std::strcmp(at->name, m.name) < 0) ++at;
+    if (at != all.end() && std::strcmp(at->name, m.name) == 0) {
+        std::fprintf(stderr, "[state] module \"%s\" registered twice\n", m.name);
+        std::abort();
     }
-    registry().push_back(m);
+    all.insert(at, m);
 }
 
 const std::vector<Module>& modules() { return registry(); }

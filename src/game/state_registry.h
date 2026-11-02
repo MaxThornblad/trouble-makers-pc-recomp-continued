@@ -21,7 +21,8 @@
 // file, a module that did not exist), and hashed as part of the fingerprint.
 // Bump the version when the layout changes; an old version is reset, not
 // read. Modules register during static initialisation; the order does not
-// matter (they are matched by name).
+// matter (the registry keeps them by name: matched by name, and hashed in
+// name order, the same on every build and linker).
 #pragma once
 
 #include <cstddef>
@@ -75,9 +76,9 @@ std::vector<Blob> save_all();
 std::vector<std::string> load_all(const std::vector<Blob>& blobs);
 // Folds every module's bytes into a running FNV-1a hash (replay fingerprints).
 uint64_t hash_all(uint64_t h);
-// The same for saved blobs (a snapshot's modules, in registration order).
+// The same for saved blobs (a snapshot's modules), in name order.
 uint64_t hash_blobs(uint64_t h, const std::vector<Blob>& blobs);
-// The registered modules, in registration order (tests, logs).
+// The registered modules, in name order (tests, logs).
 const std::vector<Module>& modules();
 
 } // namespace mm::state

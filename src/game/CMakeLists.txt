@@ -203,4 +203,12 @@ if(BUILD_TESTING)
     target_include_directories(mm_session_log_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(mm_session_log_tests PRIVATE SDL2::SDL2 Threads::Threads)
     add_test(NAME mm_session_log COMMAND mm_session_log_tests)
+
+    # The state registry's fingerprint is the same whatever order the
+    # modules registered in (the linker's order differs per build).
+    add_executable(mm_state_registry_tests tests/state_registry_test.cpp state_registry.cpp)
+    target_include_directories(mm_state_registry_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(NAME mm_state_registry_order
+             COMMAND ${CMAKE_COMMAND} -DPROGRAM=$<TARGET_FILE:mm_state_registry_tests> -DENV_VAR=STATE_TEST_REVERSED
+                     -P ${CMAKE_SOURCE_DIR}/cmake/SameOutput.cmake)
 endif()
