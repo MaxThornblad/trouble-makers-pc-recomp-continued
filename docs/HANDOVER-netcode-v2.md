@@ -147,9 +147,10 @@ Things a reader may take for bugs that are deliberate; don't "fix" them:
 
 - Online saves go to a sandbox (`netplay.cpp`, `begin_save_sandbox`), never
   the real save file, and a save is written from game memory, so a frame
-  run again after a rollback normally writes the same bytes. EEPROM is not
-  part of a snapshot; a write on a frame that is then rolled back is a
-  real but low-priority gap.
+  run again after a rollback normally writes the same bytes. Since preview
+  22 (runtime patch 0019) a netplay snapshot carries the save and a
+  rollback puts it back (savestate.cpp, `s.eeprom`), so a write on a
+  rolled-back frame is undone too.
 - Online always runs under the far rules (a camera each), so the bots'
   shared-screen check is meaningless online. Lockstep plus the fingerprint
   comparison means the guest's trace equals the host's: the netplay
