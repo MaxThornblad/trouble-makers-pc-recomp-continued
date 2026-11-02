@@ -587,6 +587,27 @@ struct HeldSwap {
     uint8_t pad0[6];
 };
 HeldSwap g_held;
+
+// The stage's people (the Clancers of a stage's own object bank, types
+// 0x18xx with the grabbable bit: 1-1's villagers, the three kids to catch
+// in the kids' stage) react to Marina by her position: a kid runs when she
+// comes within 70 px, and ran straight through player 2 standing on him
+// (the owner's state kids-flee). Such an actor updates with the nearer
+// player as Marina (the same swap as a held object): whoever is closer is
+// the one he flees, talks to or follows. Scenery of the bank (0x181C, the
+// mountains) has no grabbable bit and is left alone. Other kinds of actor
+// (enemies, bosses, platforms) keep seeing player 1: widening this is a
+// design change to propose, not a fix.
+constexpr uint32_t kGrabbableFlag = 0x10000u;
+bool nearer_to_p2(uint8_t* rdram, int actor, int p2) {
+    const gpr a = addr(kActors + static_cast<uint32_t>(actor) * kStride);
+    if ((MEM_HU(0xD2, a) & 0xFF00u) != 0x1800u || (static_cast<uint32_t>(MEM_W(0x80, a)) & kGrabbableFlag) == 0) return false;
+    const gpr m = addr(kActors), b = addr(kActors + static_cast<uint32_t>(p2) * kStride);
+    const int ax = MEM_H(0x88, a), ay = MEM_H(0x8C, a);
+    const int d1 = std::max(std::abs(MEM_H(0x88, m) - ax), std::abs(MEM_H(0x8C, m) - ay));
+    const int d2 = std::max(std::abs(MEM_H(0x88, b) - ax), std::abs(MEM_H(0x8C, b) - ay));
+    return d2 < d1;
+}
 }
 
 void held_swap_end(uint8_t* rdram) {
@@ -624,7 +645,8 @@ void held_swap_begin(uint8_t* rdram, int actor) {
     const int p2 = slot(rdram);
     if (p2 <= 0 || actor == p2 || actor == 0) return;
     const gpr b = addr(kActors + static_cast<uint32_t>(p2) * kStride);
-    if ((static_cast<uint32_t>(MEM_W(0x80, b)) & kHoldingFlag) == 0 || MEM_HU(0xD6, b) != actor) return;
+    const bool held = (static_cast<uint32_t>(MEM_W(0x80, b)) & kHoldingFlag) != 0 && MEM_HU(0xD6, b) == actor;
+    if (!held && !nearer_to_p2(rdram, actor, p2)) return;
     g_held.on = true;
     g_held.p2 = p2;
     std::memcpy(g_held.p1_record.data(), slot_ptr(rdram, 0), kStride);

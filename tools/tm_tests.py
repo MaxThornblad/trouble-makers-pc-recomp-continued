@@ -219,6 +219,30 @@ def every_frame(first, last):
     return ",".join(str(t) for t in range(first, last + 1))
 
 
+def actor_travels(slot, min_px):
+    """The actor in `slot` moves: its x over the dumps spans at least min_px
+    (relative to Marina's, so a camera move does not count)."""
+    def check(r):
+        marina = {d[0]: int(d[5]) for d in r.dumps if d[1].strip() == "0"}
+        xs = [int(d[5]) - marina[d[0]] for d in r.dumps if int(d[1]) == slot and d[0] in marina]
+        if not xs:
+            return ["slot %d not dumped" % slot]
+        span = max(xs) - min(xs)
+        return [] if span >= min_px else ["slot %d moved only %d px (want %d)" % (slot, span, min_px)]
+    return check
+
+
+def actor_stays(slot, max_px):
+    def check(r):
+        marina = {d[0]: int(d[5]) for d in r.dumps if d[1].strip() == "0"}
+        xs = [int(d[5]) - marina[d[0]] for d in r.dumps if int(d[1]) == slot and d[0] in marina]
+        if not xs:
+            return ["slot %d not dumped" % slot]
+        span = max(xs) - min(xs)
+        return [] if span <= max_px else ["slot %d moved %d px (want <= %d)" % (slot, span, max_px)]
+    return check
+
+
 #: (name, tags, state, frames, pad 1, pad 2, extra env, checks)
 # Marina through 1-1 from its stage state with the moon jump (the kit's
 # cheats): run, hop, four times, then on to stand past the gem house (x
@@ -283,6 +307,17 @@ TESTS = [
     ("pet-comes-back-left-behind", "pet", "stage-1-1", 1100, HOP_PAST_HOUSE + "400:", "1100:",
      {"MM_TEST_SPAWN": "2801@20@60@0", "MM_TEST_CHEATS": PET_CHEATS, "MM_TEST_DUMP": "1099"},
      [logged("[pet] Cat Clancer comes back to the player"), pet_beside(60, 30)]),
+    # The kids' stage (owner state kids-flee): a kid (slot 64) runs from
+    # Marina within 70 px; player 2 standing on him did not count, so he
+    # stayed put. The stage's people now see the nearer player as Marina.
+    ("kid-flees-player-2", "coop,npc", "kids-flee", 300, "300:", "300:",
+     {"MM_TEST_DUMP": every_frame(150, 300), "MM_TEST_CHEATS": PET_CHEATS},
+     [actor_travels(64, 40)]),
+    # ... and still from player 1: player 2 walks off right at once (he
+    # runs from her and comes back home), player 1 walks up to him later.
+    ("kid-flees-player-1", "coop,npc", "kids-flee", 360, "180:,120:r,60:", "30:,330:r",
+     {"MM_TEST_DUMP": every_frame(180, 360), "MM_TEST_CHEATS": PET_CHEATS},
+     [actor_travels(64, 40)]),
     # Fallen far below her (spawned under the floor, falling for ever).
     # (Spawned after frame 50: the log is read from where the replay starts.)
     ("pet-fallen-comes-back", "pet", "stage-1-1", 400, "400:", "400:",
