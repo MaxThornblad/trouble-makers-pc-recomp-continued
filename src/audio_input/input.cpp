@@ -178,14 +178,20 @@ float binding_strength(InputBinding binding, SDL_GameController* controller) {
     return 0.0f;
 }
 
+std::atomic_bool g_keyboard_only_without_controller{false};
+
 // player 0: the keyboard and the first controller; player 1: the keyboard
-// and the second controller, each through that player's bindings.
+// and the second controller, each through that player's bindings. (On the
+// Steam Deck the keyboard counts only while the player has no controller:
+// set_keyboard_only_without_controller.)
 float input_strength(N64Input input, int player = 0) {
     SDL_GameController* const controller = player == 0 ? g_controller : g_controller2;
     float result = 0.0f;
     constexpr std::array devices{
         ControlDevice::Keyboard, ControlDevice::Controller};
+    const bool skip_keyboard = controller != nullptr && g_keyboard_only_without_controller.load(std::memory_order_relaxed);
     for (ControlDevice device : devices) {
+        if (skip_keyboard && device == ControlDevice::Keyboard) continue;
         for (size_t slot = 0; slot < kBindingsPerInput; ++slot) {
             result = std::max(result, binding_strength(get_binding(device, input, slot, player), controller));
         }
@@ -365,6 +371,10 @@ bool sample_local_input(int controller, uint16_t* buttons, float* x, float* y) {
 
 void set_input_filter(InputFilter filter) {
     g_input_filter.store(filter, std::memory_order_release);
+}
+
+void set_keyboard_only_without_controller(bool on) {
+    g_keyboard_only_without_controller.store(on, std::memory_order_relaxed);
 }
 
 void set_input_blocked(bool blocked) {

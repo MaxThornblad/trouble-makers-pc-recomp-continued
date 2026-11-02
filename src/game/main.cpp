@@ -703,6 +703,9 @@ int main(int argc, char** argv) {
     }
 
     mm_audio_input::load_control_config(config_dir);
+    // The Deck's desktop controller layout sends keys too (A also Enter =
+    // Start): there only the controller counts once one is connected.
+    mm_audio_input::set_keyboard_only_without_controller(g_steam_deck_mode);
 
     // Display options: config file first, CLI overrides, then persist the
     // resolved values so flags "stick" for the next flagless run.

@@ -180,6 +180,13 @@ ultramodern::input::callbacks_t input_callbacks();
 // callbacks run on different runtime threads.
 void set_input_blocked(bool blocked);
 
+// Keyboard bindings ignored while that player has a controller (Steam Deck).
+// Steam's desktop controller layout on the Deck sends keys as well as the
+// pad's own buttons (A also sends Enter, which the keyboard defaults bind to
+// Start): pressing A pressed A and Start. The Deck has no keyboard of its
+// own, so there the controller alone counts once one is connected.
+void set_keyboard_only_without_controller(bool on);
+
 // The game's save type. The US 1.1 ROM uses 4Kbit EEPROM — see
 // docs/README.md for the evidence (osEepromProbe/LongRead/LongWrite calls
 // in RecompiledFuncs, max block address 0x2C < 64-block 4K limit). Set this
