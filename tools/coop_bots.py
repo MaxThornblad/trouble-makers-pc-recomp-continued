@@ -297,6 +297,11 @@ NETPLAY = [
     # restarts both from its game, and the session goes on (no resync counted).
     ("net-reconnect", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r",
      dict(env={"MM_NET_TEST_DROP": "400"}, host_re=[r"reconnected from the host's game"], guest=["] reconnected (epoch 2"])),
+    # The guest's game dies 12 s in (killed) and a fresh one joins the same
+    # host: the host notices the dead peer (ENet times it out in 10 to 30 s),
+    # waits, and takes the new guest into the running game.
+    ("net-guest-crash", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r",
+     dict(guest_killed_after=12, host_re=[r"reconnected from the host's game"], guest=["[bots] guest killed", "] resynced (epoch 2"])),
     # Lockstep stays as a fallback (without lag; net-lag is lockstep with lag).
     ("net-lockstep", 1, 900, "60:,400:r,440:l", "60:,400:l,440:r", dict(env={"MM_NET_LOCKSTEP": "1"})),
     ("net-far", 1, 1500, "60:,1440:r", "60:,1440:l"),
@@ -684,7 +689,21 @@ def run_netplay(args, name, slot, frames, pad1, pad2, port, extra=None):
         host = subprocess.Popen([args.bin, args.rom], env=henv, cwd=game_cwd(henv), stdout=hfile,
                                 stderr=subprocess.STDOUT)
         time.sleep(1)
-        gout = run_game(args, genv, timeout, guest=True)
+        if "guest_killed_after" in extra:
+            # The guest's process dies (a crash, a closed window) that many
+            # seconds in, and the player starts the game again and joins the
+            # same host: the host must take them back into the running game.
+            gcmd, gcwd = guest_command(args, genv)
+            gfile = open(Path(tmp) / "guest1.log", "wb")
+            guest = subprocess.Popen(gcmd, env=genv, cwd=gcwd, stdout=gfile, stderr=subprocess.STDOUT)
+            time.sleep(extra["guest_killed_after"])
+            guest.kill()
+            guest.wait()
+            gfile.close()
+            gout = (Path(tmp) / "guest1.log").read_bytes().decode(errors="replace") + "\n[bots] guest killed; started again\n"
+            gout += run_game(args, genv, timeout, guest=True)
+        else:
+            gout = run_game(args, genv, timeout, guest=True)
         try:
             host.wait(timeout=20)
         except subprocess.TimeoutExpired:
