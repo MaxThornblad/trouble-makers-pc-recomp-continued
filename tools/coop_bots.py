@@ -348,10 +348,25 @@ def game_cwd(env):
     return str(d)
 
 
-def run_game(args, env, timeout):
+def guest_command(args, env):
+    """The guest's command and working directory: --guest-bin when given
+    (a .exe runs under Wine in portable mode, so a Windows build plays a
+    Linux host: the Steam Deck against the owner's PC), else --bin."""
+    gbin = getattr(args, "guest_bin", "") or args.bin
+    if gbin.lower().endswith(".exe") and os.name != "nt":
+        d = Path(env["HOME"]) / ".config" / "troublemakers-recomp"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "portable.txt").touch()
+        env.setdefault("WINEDEBUG", "-all")
+        return ["wine", gbin, args.rom], str(d)
+    return [gbin, args.rom], game_cwd(env)
+
+
+def run_game(args, env, timeout, guest=False):
     """The game once with env, to the end or timeout: its output."""
+    cmd, cwd = guest_command(args, env) if guest else ([args.bin, args.rom], game_cwd(env))
     try:
-        return subprocess.run([args.bin, args.rom], env=env, cwd=game_cwd(env), stdout=subprocess.PIPE,
+        return subprocess.run(cmd, env=env, cwd=cwd, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, timeout=timeout).stdout.decode(errors="replace")
     except subprocess.TimeoutExpired as e:
         return (e.stdout or b"").decode(errors="replace")
@@ -669,7 +684,7 @@ def run_netplay(args, name, slot, frames, pad1, pad2, port, extra=None):
         host = subprocess.Popen([args.bin, args.rom], env=henv, cwd=game_cwd(henv), stdout=hfile,
                                 stderr=subprocess.STDOUT)
         time.sleep(1)
-        gout = run_game(args, genv, timeout)
+        gout = run_game(args, genv, timeout, guest=True)
         try:
             host.wait(timeout=20)
         except subprocess.TimeoutExpired:
@@ -765,12 +780,16 @@ def main():
     ap.add_argument("--steam-mock", default="", help="the Steam stand-in library (cc -shared -fPIC "
                     "-o libsteam_api.so tools/steam_mock/mock_steam.c); without it net-steam is skipped")
     ap.add_argument("--port", type=int, default=7900, help="first port for the netplay scenarios")
+    ap.add_argument("--guest-bin", default="", help="the netplay guest's build when not --bin "
+                    "(a .exe runs under Wine: a Windows guest against a Linux host)")
     ap.add_argument("--keep", default="", metavar="DIR", help="keep each scenario's logs under DIR/<name>/")
     ap.add_argument("--make-boss-states", action="store_true",
                     help="make the boss stages' save states (slots 10-26) in --home from warps, then exit")
     args = ap.parse_args()
     # Absolute: on Windows each run starts in the test home's config folder.
     args.bin, args.rom, args.home = (str(Path(p).resolve()) for p in (args.bin, args.rom, args.home))
+    if args.guest_bin:
+        args.guest_bin = str(Path(args.guest_bin).resolve())
     if args.make_boss_states:
         return make_boss_states(args)
     failed = 0
