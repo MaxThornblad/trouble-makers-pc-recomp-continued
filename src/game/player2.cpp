@@ -784,6 +784,53 @@ void clamp_x(uint8_t* rdram, int32_t centre, int32_t half_width) {
 bool g_in_own_call = false;   // inside a func_8004ED10 call made here
 int g_marina_character = 0;   // whose update func_8004ED10 runs: 0 slot 0's character, 1 player 2's slot's
 
+// Marina's effects are hers by slot number. Her dash (down + jump: the
+// slide) spawns flame particles (type 9, func_8005ACB0) with their parent
+// at +0x130 (a float: the spawner's slot) and the parent's type at +0x14C;
+// each frame a particle puts itself on its parent, or dies when the slot
+// holds another type. Her afterimages (type 0x2E, Marina_SpawnAfterImage)
+// take +0x14C = the spawner's slot too. Player 2's update runs with her in
+// slot 0, so what she spawned said "slot 0": the slide's flames trailed
+// player 1 from then on. After her update, effects that appeared during it
+// (slots 0x10..0x2D, where effects of a player go) are made hers: the
+// parent slot hers, the parent type her type (0x7F02). Her afterimages are
+// marked the same way, for player2_draw.cpp to draw them with her frames.
+constexpr int kEffectFirst = 0x10, kEffectEnd = 0x2E;
+constexpr int kEffectSlots = kEffectEnd - kEffectFirst;
+constexpr uint16_t kParticleType = 0x0009, kAfterimageType = 0x002E;
+
+void effects_active(uint8_t* rdram, std::array<uint8_t, kEffectSlots>& out) {
+    for (int s = kEffectFirst; s < kEffectEnd; ++s) {
+        out[static_cast<size_t>(s - kEffectFirst)] = MEM_W(0x80, addr(kActors + static_cast<uint32_t>(s) * kStride)) != 0;
+    }
+}
+
+void adopt_effects(uint8_t* rdram, int slot, const std::array<uint8_t, kEffectSlots>& before) {
+    const float mine = static_cast<float>(slot);
+    const float my_type = static_cast<float>(mm::custom_actors::type_id(kCustomIndex));
+    for (int s = kEffectFirst; s < kEffectEnd; ++s) {
+        if (before[static_cast<size_t>(s - kEffectFirst)]) continue;
+        const gpr a = addr(kActors + static_cast<uint32_t>(s) * kStride);
+        if (MEM_W(0x80, a) == 0) continue;
+        const uint16_t type = MEM_HU(0xD2, a);
+        float parent, parent_type;
+        const int32_t w130 = MEM_W(0x130, a), w14c = MEM_W(0x14C, a);
+        std::memcpy(&parent, &w130, 4);
+        std::memcpy(&parent_type, &w14c, 4);
+        if (type == kParticleType && parent == 0.0f && parent_type == static_cast<float>(kMarinaType)) {
+            int32_t v;
+            std::memcpy(&v, &mine, 4);
+            MEM_W(0x130, a) = v;
+            std::memcpy(&v, &my_type, 4);
+            MEM_W(0x14C, a) = v;
+        } else if (type == kAfterimageType && parent_type == 0.0f) {
+            int32_t v;
+            std::memcpy(&v, &mine, 4);
+            MEM_W(0x14C, a) = v;
+        }
+    }
+}
+
 void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
     g.slot = slot;
     if (MEM_HU(0, addr(kMarinaPaused)) != 0) return;   // the game is not running Marina either
@@ -870,6 +917,8 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
     // Marina's update, as func_80020024 calls it.
     const gpr saved_a0 = ctx->r4;
     const uint16_t state_before = MEM_HU(0xD0, addr(kActors));
+    std::array<uint8_t, kEffectSlots> effects_before;
+    effects_active(rdram, effects_before);
     ctx->r4 = 0;
     const int32_t x_before = MEM_W(0x88, addr(kActors));
     static std::vector<uint8_t> snapshot;
@@ -977,6 +1026,8 @@ void update_core(uint8_t* rdram, recomp_context* ctx, int slot) {
                             (static_cast<uint32_t>(MEM_W(0x98, addr(kActors + static_cast<uint32_t>(held) * kStride))) & kShakenBit) != 0;
         MEM_W(0, addr(kP2Shaken)) = shaken ? held + 1 : 0;
     }
+
+    adopt_effects(rdram, slot, effects_before);
 
     // Player 2 out, player 1 back.
     std::memcpy(slot_ptr(rdram, slot), slot_ptr(rdram, 0), kStride);

@@ -45,11 +45,38 @@ constexpr uint32_t kP2Loaded = 0x807F0410u;       // frame unpacked in each of h
 constexpr uint32_t kFrameTable = 0x004A0918u;     // ROM: frame offsets (func_800821B0)
 constexpr uint32_t kFrameData = 0x0040AC80u - 0x05000000u;
 
-bool g_draw_swapped = false;
+bool g_draw_swapped = false;      // her own draw: slot 0's record is hers
+bool g_draw_afterimage = false;   // one of her afterimages: only the lists
 std::array<uint8_t, 0x198> g_draw_p1;
 std::array<uint8_t, 8> g_draw_slot_images;
-uint32_t g_draw_lists[2];
+uint32_t g_draw_lists[4];         // the game's lists for images 2..5 while hers stand in
 int g_draw_k = -1;
+
+uint32_t copy_list(uint8_t* rdram, uint32_t src, uint32_t dst);
+
+// Images 2..5 (the four Marina display lists: buffer k, flipped f) point at
+// her copies (made when needed) instead of the game's.
+void lists_to_hers(uint8_t* rdram, int only_k) {
+    const gpr table = static_cast<gpr>(MEM_W(0, static_cast<gpr>(static_cast<int32_t>(kDlTable))));
+    for (int k = 0; k < 2; ++k) {
+        if (only_k >= 0 && k != only_k) continue;
+        for (int f = 0; f < 2; ++f) {
+            const int id = 2 + 2 * k + f;
+            const uint32_t game_list = static_cast<uint32_t>(MEM_W(id * 4, table));
+            g_draw_lists[k * 2 + f] = game_list;
+            MEM_W(id * 4, table) = static_cast<int32_t>(
+                copy_list(rdram, game_list, kP2Lists + static_cast<uint32_t>(k * 2 + f) * 0x100u));
+        }
+    }
+}
+
+void lists_back(uint8_t* rdram, int only_k) {
+    const gpr table = static_cast<gpr>(MEM_W(0, static_cast<gpr>(static_cast<int32_t>(kDlTable))));
+    for (int k = 0; k < 2; ++k) {
+        if (only_k >= 0 && k != only_k) continue;
+        for (int f = 0; f < 2; ++f) MEM_W((2 + 2 * k + f) * 4, table) = static_cast<int32_t>(g_draw_lists[k * 2 + f]);
+    }
+}
 
 void unpack_frame(uint8_t* rdram, recomp_context* ctx, uint16_t image, uint32_t dst) {
     const uint32_t idx = static_cast<uint32_t>(image & 0x7FF) % 0x322u;
@@ -88,7 +115,7 @@ uint32_t copy_list(uint8_t* rdram, uint32_t src, uint32_t dst) {
 
 extern "C" void mm_p2_draw_begin(uint8_t* rdram, recomp_context* ctx) {
     using namespace mm::player2;
-    if (g_draw_swapped) return;
+    if (g_draw_swapped || g_draw_afterimage) return;
     const int p2 = slot(rdram);
     if (p2 < 0) return;
     const uint32_t rec = 0x800EF510u + static_cast<uint32_t>(p2) * 0x198u;
@@ -102,7 +129,10 @@ extern "C" void mm_p2_draw_begin(uint8_t* rdram, recomp_context* ctx) {
     g_draw_swapped = true;
     g_draw_k = -1;
 
-    const int k = MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kStreamIndex))) +
+    // (The stream index carries a flag in bit 0x8000 while Marina dashes:
+    // the game masks it; unmasked, k was out of range and she was drawn
+    // with player 1's frame, his slide pose, while he slid.)
+    const int k = (MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kStreamIndex))) & 0x7FFF) +
                   MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kStreamParity)));
     const uint16_t image = MEM_HU(0x84, static_cast<gpr>(static_cast<int32_t>(rec)));
     if (k < 0 || k > 1 || (image & 0xF800) != 0x5800) return;
@@ -111,25 +141,52 @@ extern "C" void mm_p2_draw_begin(uint8_t* rdram, recomp_context* ctx) {
         unpack_frame(rdram, ctx, image, kP2Texture + static_cast<uint32_t>(k) * 0x1000u);
         MEM_H(0, loaded) = static_cast<int16_t>(image);
     }
-    const gpr table = static_cast<gpr>(MEM_W(0, static_cast<gpr>(static_cast<int32_t>(kDlTable))));
-    for (int f = 0; f < 2; ++f) {
-        const int id = 2 + 2 * k + f;
-        const uint32_t game_list = static_cast<uint32_t>(MEM_W(id * 4, table));
-        g_draw_lists[f] = game_list;
-        MEM_W(id * 4, table) = static_cast<int32_t>(
-            copy_list(rdram, game_list, kP2Lists + static_cast<uint32_t>(k * 2 + f) * 0x100u));
-    }
+    lists_to_hers(rdram, k);
     g_draw_k = k;
 }
 
+// Every actor's entry in the draw builder, its record in $s4. One of her
+// afterimages (type 0x2E, +0x14C = her slot as a float, player2.cpp
+// adopt_effects) draws image 2 + 2k (+1 flipped): the Marina frame in
+// buffer k through the game's lists, which sample the game's buffers
+// (player 1's frame), with the palette the game picks by slot 0's frame
+// (gPlayerActor.graphicIndex, three palettes by frame range): with player
+// 1's palette on whatever frame, dark garbage trailed her slide. For its
+// entry her record stands in slot 0 (the palette) and her lists stand in
+// for the game's (her buffers, her frame). Her own entry is handled in
+// mm_p2_draw_begin, in the Marina-frame branch.
+extern "C" void mm_p2_draw_actor_begin(uint8_t* rdram, recomp_context* ctx) {
+    using namespace mm::player2;
+    if (g_draw_swapped || g_draw_afterimage) return;
+    const int p2 = slot(rdram);
+    if (p2 < 0) return;
+    const gpr a = static_cast<gpr>(static_cast<int32_t>(static_cast<uint32_t>(ctx->r20)));
+    if (MEM_HU(0xD2, a) != 0x002E) return;
+    float parent;
+    const int32_t w = MEM_W(0x14C, a);
+    std::memcpy(&parent, &w, 4);
+    if (parent != static_cast<float>(p2)) return;
+    uint8_t* const p1 = rdram + (0x800EF510u - 0x80000000u);
+    std::memcpy(g_draw_p1.data(), p1, 0x198);
+    std::memcpy(p1, rdram + (0x800EF510u + static_cast<uint32_t>(p2) * 0x198u - 0x80000000u), 0x198);
+    MEM_H(0xD2, static_cast<gpr>(static_cast<int32_t>(0x800EF510u))) = 0x0016;
+    lists_to_hers(rdram, -1);
+    g_draw_afterimage = true;
+}
+
 extern "C" void mm_p2_draw_end(uint8_t* rdram, recomp_context*) {
+    if (g_draw_afterimage) {
+        g_draw_afterimage = false;
+        std::memcpy(rdram + (0x800EF510u - 0x80000000u), g_draw_p1.data(), 0x198);
+        lists_back(rdram, -1);
+        return;
+    }
     if (!g_draw_swapped) return;
     g_draw_swapped = false;
     std::memcpy(rdram + (0x800EF510u - 0x80000000u), g_draw_p1.data(), 0x198);
     std::memcpy(rdram + (kSlotImages - 0x80000000u), g_draw_slot_images.data(), 8);
     if (g_draw_k >= 0) {
-        const gpr table = static_cast<gpr>(MEM_W(0, static_cast<gpr>(static_cast<int32_t>(kDlTable))));
-        for (int f = 0; f < 2; ++f) MEM_W((2 + 2 * g_draw_k + f) * 4, table) = static_cast<int32_t>(g_draw_lists[f]);
+        lists_back(rdram, g_draw_k);
         g_draw_k = -1;
     }
 }

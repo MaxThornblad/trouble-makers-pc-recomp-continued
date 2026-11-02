@@ -232,6 +232,35 @@ def actor_travels(slot, min_px):
     return check
 
 
+def effects_follow(images, near_slot, far_slot, min_frames=10):
+    """Effect actors (type 0x0009) with one of these pictures stay nearer
+    to near_slot than to far_slot in every dump that has any; at least
+    min_frames dumps must have some."""
+    def check(r):
+        frames = {}
+        for d in r.dumps:
+            frames.setdefault(d[0], []).append(d)
+        seen = 0
+        bad = []
+        for t, ds in sorted(frames.items(), key=lambda kv: int(kv[0])):
+            pos = {int(d[1]): (int(d[5]), int(d[6])) for d in ds}
+            if near_slot not in pos or far_slot not in pos:
+                continue
+            fx = [(int(d[5]), int(d[6])) for d in ds if d[2] == "0009" and d[8] in images]
+            if not fx:
+                continue
+            seen += 1
+            (nx, ny), (ox, oy) = pos[near_slot], pos[far_slot]
+            dist = lambda x, y, ax, ay: (x - ax) ** 2 + (y - ay) ** 2
+            wrong = [p for p in fx if dist(*p, ox, oy) < dist(*p, nx, ny)]
+            if wrong:
+                bad.append(int(t))
+        if seen < min_frames:
+            return ["effects seen on only %d dumped frames (want %d)" % (seen, min_frames)]
+        return ["effects nearer slot %d than slot %d on %d frames (first %d)" % (far_slot, near_slot, len(bad), bad[0])] if bad else []
+    return check
+
+
 def actor_stays(slot, max_px):
     def check(r):
         marina = {d[0]: int(d[5]) for d in r.dumps if d[1].strip() == "0"}
@@ -307,6 +336,17 @@ TESTS = [
     ("pet-comes-back-left-behind", "pet", "stage-1-1", 1100, HOP_PAST_HOUSE + "400:", "1100:",
      {"MM_TEST_SPAWN": "2801@20@60@0", "MM_TEST_CHEATS": PET_CHEATS, "MM_TEST_DUMP": "1099"},
      [logged("[pet] Cat Clancer comes back to the player"), pet_beside(60, 30)]),
+    # Player 2's slide (down + jump): its flame trail (particles 0x1B2 /
+    # 0x1B4, parent slot 0 = her during her update) trailed player 1 from
+    # the next frame on. They are hers now (adopt_effects). Player 1 walks
+    # off right first (150 px); she slides right after him.
+    ("p2-slide-flames-follow-p2", "coop,effects", "stage-1-1", 240, "60:,90:r,90:", "180:,10:d,12:dA,38:",
+     {"MM_TEST_DUMP": every_frame(192, 230), "MM_TEST_CHEATS": PET_CHEATS},
+     [effects_follow(("01B2", "01B4"), 121, 0)]),
+    # ... and player 1's trail stays his (she walks off left first).
+    ("p1-slide-flames-follow-p1", "coop,effects", "stage-1-1", 240, "180:,10:d,12:dA,38:", "60:,90:l,90:",
+     {"MM_TEST_DUMP": every_frame(192, 230), "MM_TEST_CHEATS": PET_CHEATS},
+     [effects_follow(("01B2", "01B4"), 0, 121)]),
     # The kids' stage (owner state kids-flee): a kid (slot 64) runs from
     # Marina within 70 px; player 2 standing on him did not count, so he
     # stayed put. The stage's people now see the nearer player as Marina.
