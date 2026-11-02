@@ -200,7 +200,9 @@ if(BUILD_TESTING)
         tests/session_log_test.cpp
         session_log.cpp
     )
-    target_include_directories(mm_session_log_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_include_directories(mm_session_log_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${MM_BUILD_STAMP_DIR})
+    add_dependencies(mm_session_log_tests mm_build_stamp)
+    target_compile_definitions(mm_session_log_tests PRIVATE MM_BUILD_TYPE="$<CONFIG>")
     target_link_libraries(mm_session_log_tests PRIVATE SDL2::SDL2 Threads::Threads)
     add_test(NAME mm_session_log COMMAND mm_session_log_tests)
 
