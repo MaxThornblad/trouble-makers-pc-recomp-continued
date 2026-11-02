@@ -166,9 +166,14 @@ Things a reader may take for bugs that are deliberate; don't "fix" them:
   dev harness the bot suite depends on, not leftovers.
 - `foreign_actors.cpp`'s `Swap` runs once per foreign actor update, not
   once per part slot.
-- Whether a Linux machine may play online against a Windows one is not
-  decided; byte-exact registered state across compilers (the padding
-  assert in `state_registry.h`) matters only if it is allowed.
+- A Linux machine (the Steam Deck AppImage) plays online against a
+  Windows one: allowed and checked (2026-11-02, `coop_bots.py --guest-bin
+  build_win_headless/.../troublemakers.exe`, the Windows build under Wine
+  as the guest: net-apart, net-lockstep, net-rollback with identical
+  fingerprints and no resync). So the registered state must stay
+  byte-exact across compilers (the padding assert in `state_registry.h`)
+  and hashed in an order no linker decides (name order, ef1bcef). Run the
+  cross build check after changes to registered state or the fingerprint.
 - Every `*_end` return hook in the toml sits on its function's only
   `jr ra` (checked against the generated code), and `func_800554AC`'s two
   velocity stores both precede its hook (the delay slot is a nop).
@@ -591,6 +596,20 @@ netcode, and the owner decides.
   0x800BE658/5C/60 (col mask, row mask, row shift) and 0x8010CDF0, item
   list 0x800D2978 (6-byte records: kind, x, y). Open to tune with the owner:
   320 px (he also teleports when merely outrun) and the 120 px jump.
+- 2026-11-02, online robustness pass (owner: "make online play robust
+  before adding features"). Baseline: the seven core net-* scenarios pass
+  on a net test home made from the kit (kit home + stage-1-1 as slot 1,
+  stage-3-12 as slot 9, cat_ride=0, split_screen=0; /tmp/claude-0/nethome).
+  Found and fixed: (1) the build stamp was configure-time, so a rebuild
+  after a commit kept the old commit; now build-time (cmake/BuildStamp.cmake,
+  PREVIEW file, "+" for an uncommitted tree), and the refusal names the
+  preview (9a54d43). (2) Linux host vs Windows guest resynced every second:
+  the registered modules were hashed in link order, reversed between GCC and
+  MinGW; sorted by name now (ef1bcef, test mm_state_registry_order). The
+  EEPROM-on-rollback note was stale (closed by patch 0019). New bot tooling:
+  --guest-bin (a .exe runs under Wine), scenario net-guest-crash (guest
+  killed, a fresh one rejoins). Under Wine the guest is slow on 2 cores, so
+  net-rollback's wait-count assertion fails there; its fingerprints pass.
 
 ## 5. Open questions for the owner (ask when relevant, not up front)
 
