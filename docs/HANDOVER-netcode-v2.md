@@ -9,7 +9,7 @@ how to work here, how to rebuild the working environment, and what is open.
 
 - Work branch: **`review-fixes`** (its head is the latest preview). Commit
   and push there; never commit to `netcode-v2` or `save-states` directly.
-- Latest build handed to the owner: **preview 27** (game code bbbcad3;
+- Latest build handed to the owner: **preview 28** (game code 7984035;
   Windows zip plus a Steam Deck AppImage). Its `README-update.txt` lists
   every change by preview ("New in preview N", older ones under "Older
   notes").
@@ -28,6 +28,10 @@ how to work here, how to rebuild the working environment, and what is open.
     save; ride/race stages).
   - 3-3: player 2 carrying player 1 while the stage moves them flickers
     (bot scenarios catx-3-3 / far-catx-3-3).
+  - Kit additions this session: owner state kids-flee (his slot 0 from
+    C:\TroubleMakersTest\game\savestates; he plays from that portable
+    folder, not AppData). Copy each preview's exe and README-update.txt
+    into C:\TroubleMakersTest\game (expectedMtimeMs).
   - The owner mentioned a map editor (tweak stages / new stages); not
     started. Ask him: tweak existing stages or make new ones; for himself
     or for others too; fixes first or the editor first.
@@ -610,6 +614,15 @@ netcode, and the owner decides.
   --guest-bin (a .exe runs under Wine), scenario net-guest-crash (guest
   killed, a fresh one rejoins). Under Wine the guest is slow on 2 cores, so
   net-rollback's wait-count assertion fails there; its fingerprints pass.
+- 2026-11-02, preview 28 (7984035, Windows and Steam Deck; copied into
+  his test folder). Kids (and every grabbable 0x18xx stage Clancer) update
+  with the nearer player as Marina (bbe99e0, tests tag npc). Slides: player
+  2's effects re-parented after her update, the stream index's dash flag
+  masked in player2_draw, her afterimages drawn with her record and lists
+  via a new toml hook at func_80009BE8 0x80009DF8 (7ed293e, tests tag
+  effects; checked visually under Xvfb with lavapipe: record headless,
+  play back on the graphics build, `import -window root` every 80 ms,
+  map shots to frames with MM_TEST_CLOCK). Plus the online pass above.
 
 ## 5. Open questions for the owner (ask when relevant, not up front)
 
