@@ -297,6 +297,10 @@ NETPLAY = [
     # restarts both from its game, and the session goes on (no resync counted).
     ("net-reconnect", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r",
      dict(env={"MM_NET_TEST_DROP": "400"}, host_re=[r"reconnected from the host's game"], guest=["] reconnected (epoch 2"])),
+    # A bad link: 150 +-50 ms each way (300 ms round trip, 18 frames) and 5%
+    # loss. The game may wait, but both sides must stay identical with no
+    # resync, and the session must run to its end.
+    ("net-bad-link", 1, 1200, "60:,600:r,540:l", "60:,600:l,540:r", dict(env={"MM_NET_LAG": "150,50,5"})),
     # The guest's game dies 12 s in (killed) and a fresh one joins the same
     # host: the host notices the dead peer (ENet times it out in 10 to 30 s),
     # waits, and takes the new guest into the running game.
