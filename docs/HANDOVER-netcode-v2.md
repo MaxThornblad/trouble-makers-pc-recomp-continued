@@ -9,11 +9,13 @@ how to work here, how to rebuild the working environment, and what is open.
 
 - Work branch: **`review-fixes`** (its head is the latest preview). Commit
   and push there; never commit to `netcode-v2` or `save-states` directly.
-- Latest build handed to the owner: **preview 26** (game code 1a03ab4;
+- Latest build handed to the owner: **preview 27** (game code bbbcad3;
   Windows zip plus a Steam Deck AppImage). Its `README-update.txt` lists
   every change by preview ("New in preview N", older ones under "Older
   notes").
-- Last work (see the 4b log's last lines): split-screen fixes. Actors run
+- Last work (see the 4b log's last lines): the pet Clancer (the spawned
+  Cat Clancer) jumps up to 120 px and teleports back when left behind;
+  before that split-screen fixes. Actors run
   with one of two camera sets in far mode (online and split screen); the
   rules for which one live in `far_coop.cpp` (`mm_far_actor`). A sweep
   over all stages (`tools/tm_tests.py --only sweep`) finds objects that
@@ -567,6 +569,23 @@ netcode, and the owner decides.
   entry in kSharedCameraStages, test split-bee-scroll-carries (1a03ab4).
   Native flips left out of the check (NATIVE_FLIPS: 0009 effects, 3-3's
   1C14). Kit 12/12, the six failing sweep stages pass.
+- 2026-11-02, branch review-fixes: preview 27 (bbbcad3, Windows and Steam
+  Deck). Owner's ask: the spawned Cat Clancer (pet_clancer.cpp) could not
+  follow past 1-1's gem house (a 72 px wall; he jumped at most 56) and
+  was lost for good at the campfire (its hits knocked him back for ever).
+  His sized jump now goes up to 120 px (kJumpMax), and lost (a screen,
+  320 px, from the player, or his feet 200 px below hers) he is put 24 px
+  behind her and falls to the ground; only on his feet or falling. New
+  tests, tag pet, on stage-1-1 (one shared screen, moon-jump pad script
+  HOP_PAST_HOUSE): pet-jumps-gem-house, pet-comes-back-left-behind,
+  pet-fallen-comes-back; all fail on 1a03ab4. Scratch tools used:
+  tm_tests.run() with MM_TEST_SPAWN=2801@dx@dy@0 and MM_TEST_TRACE on the
+  pet's slot; a stage's terrain map and item records can be read straight
+  from a .tmstate (zlib payload; RDRAM region at offset 12 after the 4-byte
+  region count and the 4-byte vaddr) with the words at 0x800BE648 (height),
+  0x800BE658/5C/60 (col mask, row mask, row shift) and 0x8010CDF0, item
+  list 0x800D2978 (6-byte records: kind, x, y). Open to tune with the owner:
+  320 px (he also teleports when merely outrun) and the 120 px jump.
 
 ## 5. Open questions for the owner (ask when relevant, not up front)
 
