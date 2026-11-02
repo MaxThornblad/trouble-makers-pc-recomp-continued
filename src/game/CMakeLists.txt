@@ -63,20 +63,21 @@ add_executable(troublemakers
     widescreen.cpp
 )
 
-find_package(Git QUIET)
-if(GIT_FOUND)
-    execute_process(
-        COMMAND ${GIT_EXECUTABLE} rev-parse --short=12 HEAD
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        OUTPUT_VARIABLE MM_GIT_COMMIT
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_QUIET)
-endif()
-if(NOT MM_GIT_COMMIT)
-    set(MM_GIT_COMMIT "unknown")
-endif()
+# The build stamp (MM_GIT_COMMIT, MM_PREVIEW) is a header written at build
+# time by cmake/BuildStamp.cmake: netplay refuses a partner with another
+# stamp, so it must say what was built, not what was configured.
+set(MM_BUILD_STAMP_DIR ${CMAKE_CURRENT_BINARY_DIR}/build_stamp)
+file(MAKE_DIRECTORY ${MM_BUILD_STAMP_DIR})
+add_custom_target(mm_build_stamp ALL
+    COMMAND ${CMAKE_COMMAND} -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -DOUTPUT=${MM_BUILD_STAMP_DIR}/mm_build_stamp.h
+            -P ${CMAKE_SOURCE_DIR}/cmake/BuildStamp.cmake
+    BYPRODUCTS ${MM_BUILD_STAMP_DIR}/mm_build_stamp.h
+    COMMENT "Build stamp (git commit, preview)"
+    VERBATIM)
+add_dependencies(troublemakers mm_build_stamp)
+target_include_directories(troublemakers PRIVATE ${MM_BUILD_STAMP_DIR})
 target_compile_definitions(troublemakers PRIVATE
-    MM_GIT_COMMIT="${MM_GIT_COMMIT}"
     MM_BUILD_TYPE="$<CONFIG>"
     MM_PROJECT_VERSION="${MM_PROJECT_VERSION}")
 

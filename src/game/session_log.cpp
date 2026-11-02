@@ -26,9 +26,7 @@
 #include <unistd.h>
 #endif
 
-#ifndef MM_GIT_COMMIT
-#define MM_GIT_COMMIT "unknown"
-#endif
+#include "mm_build_stamp.h"
 #ifndef MM_BUILD_TYPE
 #define MM_BUILD_TYPE "unknown"
 #endif

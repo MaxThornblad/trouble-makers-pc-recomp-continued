@@ -79,7 +79,10 @@ how to work here, how to rebuild the working environment, and what is open.
   e61fb75). Branch `netcode-v2`: the rework, log in docs/NETCODE-V2.md.
   `upstream` = ThiagoLira/trouble-makers-pc-recomp. Do not push to upstream.
 - Released to the owner: preview 26 (section 0). Online play needs the
-  same build on both machines (the hello carries the git commit).
+  same build on both machines (the hello carries the git commit and the
+  PREVIEW number; the stamp is written at build time by
+  cmake/BuildStamp.cmake, "+" after the commit for an uncommitted tree;
+  tools/test_build_stamp.sh). Bump PREVIEW when packaging a preview.
 
 ### Co-op architecture today (one deterministic simulation, lockstep)
 
@@ -272,7 +275,8 @@ zip of the test kit's save states.
       `/mnt/user-data/outputs/pN` and send them with SendUserFile. If his
       PC is linked, also copy the exe and README-update.txt into the test
       folder he names (with `expectedMtimeMs`).
-    - No debug leftovers in the code; commit, push, and add a progress
+    - Set `PREVIEW` to N before building (the netplay version check names
+      it). No debug leftovers in the code; commit, push, and add a progress
       line to 4b.
 
 Gotchas from this project:

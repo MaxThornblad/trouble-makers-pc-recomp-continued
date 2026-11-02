@@ -36,9 +36,7 @@
 #include <stdlib.h>   // _putenv_s
 #endif
 
-#ifndef MM_GIT_COMMIT
-#define MM_GIT_COMMIT "unknown"
-#endif
+#include "mm_build_stamp.h"
 
 extern "C" void mm_virtual_audio_clock(bool on);
 
@@ -504,6 +502,23 @@ void resync(uint8_t* rdram, recomp_context* ctx, const char* why) {
 
 // ------------------------------------------------------------------ events
 
+// Why a guest's build cannot play with ours, in the owner's terms: the
+// preview number when both have one, the commit always (a rebuilt or
+// uncommitted build of the same preview is a different build; its commit
+// ends in "+" when it was built from uncommitted changes).
+std::string version_mismatch(const std::string& their_commit, const std::string& their_preview) {
+    const std::string mine = MM_PREVIEW;
+    auto name = [](const std::string& preview, const std::string& commit) {
+        if (preview.empty()) return "a build with no preview number (" + commit + ")";
+        return "preview " + preview + " (" + commit + ")";
+    };
+    std::string why = "different game version: host has " + name(mine, MM_GIT_COMMIT) + ", you have " +
+                      name(their_preview, their_commit) + ".";
+    if (!mine.empty() && mine == their_preview) why += " Same preview number but different code: one of you runs a rebuilt or changed build.";
+    why += " Both players need the same build.";
+    return why;
+}
+
 void on_packet(uint8_t* rdram, recomp_context* ctx, const uint8_t* data, size_t size) {
     Reader r{data, size};
     uint8_t type;
@@ -512,15 +527,16 @@ void on_packet(uint8_t* rdram, recomp_context* ctx, const uint8_t* data, size_t 
         case kHello: {
             if (!g_is_host) return;
             uint32_t magic = 0, protocol = 0;
-            std::vector<uint8_t> build;
+            std::vector<uint8_t> build, preview;
             r.get(magic);
             r.get(protocol);
             r.bytes(build);
-            const std::string theirs(build.begin(), build.end());
+            r.bytes(preview);   // (since preview 28; an older hello ends before it)
+            const std::string theirs(build.begin(), build.end()), their_preview(preview.begin(), preview.end());
             if (magic != kMagic || protocol != kProtocol || theirs != MM_GIT_COMMIT) {
                 Writer w;
                 w.put<uint8_t>(kRefuse);
-                const std::string why = "different game version (host " MM_GIT_COMMIT ", you " + theirs + ")";
+                const std::string why = version_mismatch(theirs, their_preview);
                 w.bytes(why.data(), why.size());
                 send(0, w);
                 flush();
@@ -607,8 +623,9 @@ void send_hello() {
     w.put<uint8_t>(kHello);
     w.put<uint32_t>(kMagic);
     w.put<uint32_t>(kProtocol);
-    const std::string build = MM_GIT_COMMIT;
+    const std::string build = MM_GIT_COMMIT, preview = MM_PREVIEW;
     w.bytes(build.data(), build.size());
+    w.bytes(preview.data(), preview.size());
     send(0, w);
     flush();
     g_peer_ok = true;

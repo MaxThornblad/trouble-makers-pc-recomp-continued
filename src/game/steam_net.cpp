@@ -2,6 +2,7 @@
 
 #include "net_transport.h"
 #include "netplay.h"
+#include "mm_build_stamp.h"
 
 #include <algorithm>
 #include <atomic>
